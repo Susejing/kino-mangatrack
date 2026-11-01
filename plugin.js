@@ -48,9 +48,9 @@ function homeCards(html, max) {
   const reA = /<a[^>]+href="([^"]*[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/])"[^>]*>([\s\S]{0,600}?)<[/]a>/gi;
   let m;
   while ((m = reA.exec(html)) !== null) {
-      const url = m[1].replace(/^https?:[/]/?leercapitulo[.]co/i, "");
+    const url = m[1].replace(/^https?:[/][/](?:www[.])?leercapitulo[.]co/i, "");
     if (seen[url]) continue;
-      const url = mb[2].replace(/^https?:[/]/?leercapitulo[.]co/i, "");
+    const inner = m[2];
     let poster = "";
     let title = "";
     const im = inner.match(/<img\b[^>]*>/i);
@@ -76,7 +76,7 @@ function homeCards(html, max) {
     const reB = /<img\b[^>]*\b(?:data-src|data-lazy-src|src)="([^"]+)"[^>]*>[\s\S]{0,300}?href="([^"]*[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/])"/gi;
     let mb;
     while ((mb = reB.exec(html)) !== null) {
-      const url = mb[2].replace(/^https?:[/]/?leercapitulo[.]co/i, "");
+      const url = mb[2].replace(/^https?:[/][/](?:www[.])?leercapitulo[.]co/i, "");
       if (seen[url]) continue;
       seen[url] = 1;
       out.push({ url: url, title: url.split("/").filter(Boolean).pop() || url, poster: absoluta(mb[1]) });
@@ -92,7 +92,7 @@ function seriesMeta(html) {
   const pick = (re) => { const m = html.match(re); return m ? clean(m[1]) : ""; };
   return {
     title: pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) || pick(/property="og:title"[^>]*content="([^"]+)"/),
-        poster: absoluta(pick(/property="og:image"[^>]*content="([^"]+)"/)),
+    poster: absoluta(pick(/property="og:image"[^>]*content="([^"]+)"/)),
     overview: pick(/property="og:description"[^>]*content="([^"]+)"/),
   };
 }
@@ -100,7 +100,7 @@ function seriesMeta(html) {
 // Capítulos de una serie: enlaces /leer/<id>/<slug>/<número>/
 function chapterList(html) {
   const map = new Map();
-  const re = /href="([^"]*[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+/[/])"/gi;
+  const re = /href="([^"]*[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+[/]([0-9]+(?:[.][0-9]+)?)[/])"/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
     if (!map.has(m[2])) map.set(m[2], { url: m[1], num: m[2] });
@@ -114,7 +114,7 @@ function chapterList(html) {
 // Imágenes de un capítulo: varios métodos con registro de cada intento.
 function readerImages(html) {
   let imgs = [];
-  const mj = html.match(/ts_reader[.]run([)];/);
+  const mj = html.match(/ts_reader[.]run[(]([\s\S]*?)[)];/);
   if (mj) {
     try {
       const j = JSON.parse(mj[1]);
@@ -140,11 +140,11 @@ function imgsDe(zona) {
   let m;
   while ((m = re.exec(zona)) !== null) {
     const tag = m[0];
-        const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
+    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
     if (!p) continue;
     const src = absoluta(p[1]);
     if (!src || src.indexOf("data:") === 0) continue;
-    if (!/.([?]|#|$)/i.test(src)) continue;
+    if (!/[.](jpe?g|png|webp|gif)([?]|#|$)/i.test(src)) continue;
     if (/logo|banner|icon|avatar|placeholder|ads?[-_/]|loader|spinner/i.test(src)) continue;
     if (seen[src]) continue;
     seen[src] = 1;
@@ -185,7 +185,7 @@ function twoLines(t) {
 function posterCard(it, prefix, rail) {
   const img = {
     type: "Image", url: it.poster || "", aspect: "2:3",
-        alt: it.title, altEn: it.title,
+    alt: it.title, altEn: it.title,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] },
   };
@@ -232,7 +232,7 @@ function detailTree(state) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "Icon", name: "error", color: "muted" },
       { type: "Text", text: "No se encontraron capítulos para esta serie.",
-               textEn: "No chapters found for this series.", color: "muted" },
+        textEn: "No chapters found for this series.", color: "muted" },
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Volver", labelTextEn: "Back",
         onPressed: { event: "popBack" } },
     ] };
@@ -317,7 +317,7 @@ function readerTree(state) {
       { type: "Icon", name: "error", color: "muted" },
       { type: "Text", text: "Este capítulo no tiene páginas cargadas.",
         textEn: "This chapter has no pages loaded.", color: "muted" },
-            { type: "ElevatedButton", icon: "arrow_back", labelText: "Volver", labelTextEn: "Back",
+      { type: "ElevatedButton", icon: "arrow_back", labelText: "Volver", labelTextEn: "Back",
         onPressed: { event: "popBack" } },
     ] };
   }
@@ -356,7 +356,7 @@ function searchTree(state) {
   const results = Array.isArray(state.results) ? state.results : null;
   return {
     type: "Scaffold",
-        appBar: { title: "Buscar manga", titleEn: "Search manga", actions: [] },
+    appBar: { title: "Buscar manga", titleEn: "Search manga", actions: [] },
     body: { type: "SingleChildScrollView", key: "searchBody", children: [{
       type: "Column", children: [
         { type: "Form", key: "search", onSubmitted: "search", gap: 8, padding: 16, children: [
@@ -401,7 +401,7 @@ export async function screen(ev) {
   return {
     type: "Scaffold",
     appBar: { title: "MangaTrack",
-                   actions: [
+      actions: [
         { type: "IconButton", icon: "search", key: "goSearch",
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },
       ] },
@@ -448,7 +448,7 @@ export async function screenEvent(ev) {
         return { toast: "No se pudieron leer las páginas de este capítulo." };
       }
       log("capítulo " + ch.num + " listo: " + images.length + " páginas");
-            const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
+      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
       if (name === "read") resp.route = { push: "read" };
       return resp;
     }
@@ -480,4 +480,3 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
-  
