@@ -1,11 +1,11 @@
-// MangaTrack v0.1.6 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.7 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.6";
+const VERSION = "0.1.7";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -476,6 +476,7 @@ function readerTree(state) {
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
+      { type: "Text", text: "v" + VERSION, style: "caption", color: "muted" },
     ] },
   ];
   return {
