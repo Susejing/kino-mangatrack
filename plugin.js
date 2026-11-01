@@ -1,11 +1,11 @@
-// MangaTrack v0.1.12 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.13 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.12";
+const VERSION = "0.1.13";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -199,6 +199,48 @@ function syncPullFavs() {
   }
   if (local.length > 100) local.length = 100;
   if (changed) { setJson("favs", local); syncPushFavs(); }
+}
+
+// Historial de lectura: el último capítulo abierto de cada serie,
+// guardado en el aparato y sincronizado entre los vinculados (como
+// los favoritos). Con él la portada muestra "Seguir leyendo", el
+// detalle marca con ✓ los capítulos leídos y el botón "Continuar"
+// vuelve al capítulo donde quedó la persona.
+function hist() { return getJson("hist", {}); }
+
+function histValido(v) {
+  return !!v && typeof v === "object" && typeof v.url === "string" &&
+    /^[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+[/][0-9]+(?:[.][0-9]+)?[/]$/i.test(v.url);
+}
+
+function syncPushHist() {
+  try { if (typeof kino.shared === "object" && kino.shared) kino.shared.set("hist", hist()); }
+  catch (e) { log("sync hist: " + e); }
+}
+function syncPullHist() {
+  let sh = null;
+  try { if (typeof kino.shared === "object" && kino.shared) sh = kino.shared.get("hist"); }
+  catch (e) { log("sync hist: " + e); }
+  if (!sh || typeof sh !== "object") return;
+  const local = hist();
+  let changed = false;
+  const sk = Object.keys(sh).slice(0, 200);
+  for (let i = 0; i < sk.length; i++) {
+    const k = sk[i];
+    if (!/^[/]manga[/][a-z0-9]{4,}[/]/i.test(k)) continue;
+    const v = sh[k];
+    if (!histValido(v) || typeof v.idx !== "number" || !(v.idx >= 0)) continue;
+    const l = local[k];
+    if (l && (l.ts || 0) >= (v.ts || 0)) continue;
+    local[k] = { url: v.url, num: String(v.num || "").slice(0, 12), idx: v.idx, ts: v.ts || 0,
+      title: String(v.title || "").slice(0, 200),
+      poster: typeof v.poster === "string" ? v.poster.slice(0, 500) : "" };
+    changed = true;
+  }
+  const lk = Object.keys(local);
+  if (lk.length > 100) { lk.sort((a, b) => (local[b].ts || 0) - (local[a].ts || 0));
+    for (let i = 100; i < lk.length; i++) delete local[lk[i]]; }
+  if (changed) { setJson("hist", local); syncPushHist(); }
 }
 
 // Capítulos de una serie: enlaces /leer/<id>/<slug>/<número>/
@@ -467,11 +509,21 @@ async function homeTree() {
       children: [{ type: "Row", gap: 8,
         children: mf.slice(0, 40).map((it) => posterCard(it, "f-", true)) }] },
   ] : [];
+  const hh = hist();
+  const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
+      poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
+    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 15);
+  const railHist = hItems.length ? [
+    { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: hItems.map((it) => posterCard(it, "h-", true)) }] },
+  ] : [];
   return { type: "SingleChildScrollView", key: "home", children: [
     { type: "Text", text: "Series de " + FUENTE, textEn: FUENTE + " series",
       style: "h3", padding: 16 },
     gridOf(items, VACIO_SERIES),
-  ].concat(railFavs) };
+  ].concat(railHist).concat(railFavs) };
 }
 
 function detailTree(state) {
@@ -479,6 +531,8 @@ function detailTree(state) {
   if (!d) return loadingTree("Cargando serie…");
   const meta = d.meta || {};
   const chapters = Array.isArray(d.chapters) ? d.chapters : [];
+  const hInfo = hist()[d.url];
+  const hIdx = hInfo && hInfo.idx >= 0 && hInfo.idx < chapters.length ? hInfo.idx : -1;
   if (!chapters.length) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "Icon", name: "error", color: "muted" },
@@ -509,6 +563,11 @@ function detailTree(state) {
             { type: "ElevatedButton", key: "latest", icon: "expand_more",
               labelText: "Leer lo último", labelTextEn: "Read latest",
               onPressed: { event: "read", arg: String(chapters.length - 1) } },
+            { type: "ElevatedButton", key: "continuar", icon: "play_arrow",
+              labelText: hIdx >= 0 ? "Continuar: cap. " + chapters[hIdx].num : "Continuar",
+              labelTextEn: hIdx >= 0 ? "Continue: ch. " + chapters[hIdx].num : "Continue",
+              onPressed: { event: "read", arg: String(hIdx) },
+              enabled: hIdx >= 0, hidden: hIdx < 0 },
             { type: "ElevatedButton", key: "fav", icon: isFav(d.url) ? "heart" : "star",
               labelText: isFav(d.url) ? "Quitar de favoritos" : "Añadir a favoritos",
               labelTextEn: isFav(d.url) ? "Remove favourite" : "Add favourite",
@@ -531,7 +590,7 @@ function detailTree(state) {
   for (let i = 0; i < chapters.length; i++) {
     items.push({
       type: "ListTile", key: "cap" + i, dense: true,
-      title: "Capítulo " + chapters[i].num,
+      title: "Capítulo " + chapters[i].num + (hIdx >= 0 && i <= hIdx ? " ✓" : ""),
       onTap: { event: "read", arg: String(i) },
     });
   }
@@ -676,11 +735,15 @@ function readerTree(state) {
     { type: "Row", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
+      { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
+        value: String(idx), onChanged: "jumpChap",
+        options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-      { type: "Text", text: "v" + VERSION + " · " + medidas.length + " pág · mediana "
-          + (Math.round(ratioGuia * 100) / 100) + " · " + (llena ? "ancho completo" : "cajas exactas"),
+      { type: "Text", text: "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
+          + medidas.length + " pág · mediana " + (Math.round(ratioGuia * 100) / 100)
+          + " · " + (llena ? "ancho completo" : "cajas exactas"),
         style: "caption", color: "muted" },
     ] },
   ];
@@ -760,6 +823,7 @@ export async function screenEvent(ev) {
   try {
     if (name === "open") {
       syncPullFavs();
+      syncPullHist();
       const r = ev.route || {};
       if (r.name === "detail") {
         const url = routeUrl(r);
@@ -777,12 +841,15 @@ export async function screenEvent(ev) {
       if (!/^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(url)) return null;
       return await cargarSerie(url, true);
     }
-    if (name === "read" || name === "nextChap" || name === "prevChap") {
+    if (name === "read" || name === "nextChap" || name === "prevChap" || name === "jumpChap") {
       const d = state.detail;
       if (!d || !Array.isArray(d.chapters) || !d.chapters.length) return null;
       let idx;
       if (name === "read") {
         idx = parseInt(String(ev.arg || "0"), 10) || 0;
+      } else if (name === "jumpChap") {
+        idx = parseInt(String(ev.value || ""), 10);
+        if (!(idx >= 0) || idx >= d.chapters.length) return null;
       } else {
         idx = ((state.reader && state.reader.idx) || 0) + (name === "nextChap" ? 1 : -1);
       }
@@ -797,6 +864,16 @@ export async function screenEvent(ev) {
       await medirImagenes(images, 9000);
       const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
       log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+      // Historial: el último capítulo abierto de la serie (para
+      // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
+      const h = hist();
+      h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(),
+        title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
+      const hk = Object.keys(h);
+      if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
+        for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
+      setJson("hist", h);
+      syncPushHist();
       const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
       if (name === "read") resp.route = { push: "read" };
       return resp;
