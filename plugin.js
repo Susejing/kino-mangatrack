@@ -1,11 +1,11 @@
-// MangaTrack v0.1.3 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.4 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.3";
+const VERSION = "0.1.4";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -88,40 +88,71 @@ function homeCards(html, max) {
 }
 
 // Metadatos de la página de una serie (etiquetas og: de WordPress)
+// Portada de la serie: en las páginas de LeerCapitulo la portada es una
+// imagen /covers/… (con ruta RELATIVA y a veces con ?v= de caché tras la
+// extensión) cuyo alt dice "Portada de <título de la serie>", y vive junto
+// al título. Antes del título vienen las portadas de la barra lateral
+// ("Populares"), cada una con el alt de SU serie. Orden de búsqueda:
+// og:image; la imagen cuyo alt calza con el título; la última portada
+// antes del <h1>; la primera después; la primera de la página.
+function posterDe(html, titulo) {
+  const norm = (s) => clean(s).toLowerCase()
+    .replace(/[áàäâã]/g, "a").replace(/[éèëê]/g, "e").replace(/[íìïî]/g, "i")
+    .replace(/[óòöôõ]/g, "o").replace(/[úùüû]/g, "u")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+  const og = (html.match(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || [])[1] ||
+    (html.match(/content=["']([^"']+)["'][^>]*property=["']og:image["']/i) || [])[1];
+  if (og) return absoluta(og);
+  const urlDe = (tag) => {
+    const attrs = tag.match(/[a-z-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi) || [];
+    for (const a of attrs) {
+      const v = a.slice(a.indexOf("=") + 1).replace(/^["']|["']$/g, "");
+      const u = v.match(/(?:https?:)?(?:\/\/)?[^"'\s]*[/](?:covers|wp-content[/]uploads)[/][^\s"']*[.](?:jpe?g|png|webp)/i);
+      if (u) return u[0];
+    }
+    return "";
+  };
+  const h1 = html.search(/<h1[^>]*>/i);
+  const t = titulo ? norm(titulo).slice(0, 18) : "";
+  let porAlt = "", ultimoAntes = "", primeroDespues = "", primeroTodo = "";
+  let m;
+  const reImg = /<img\b[^>]*>/gi;
+  while ((m = reImg.exec(html)) !== null) {
+    const url = urlDe(m[0]);
+    if (!url) continue;
+    if (!primeroTodo) primeroTodo = url;
+    if (h1 >= 0 && m.index < h1 && h1 - m.index <= 3000) ultimoAntes = url;
+    else if (h1 >= 0 && m.index >= h1 && m.index - h1 <= 8000 && !primeroDespues) primeroDespues = url;
+    if (!porAlt && t) {
+      const alt = (m[0].match(/\balt\s*=\s*(["'])(.*?)\1/i) || [])[2] || "";
+      if (norm(alt.replace(/portada de/i, "")).slice(0, 18) === t) porAlt = url;
+    }
+  }
+  return absoluta(porAlt || ultimoAntes || primeroDespues || primeroTodo || "");
+}
+
 function seriesMeta(html) {
   const pick = (re) => { const m = html.match(re); return m ? clean(m[1]) : ""; };
-  // Portada: este tema no siempre declara og:image; la portada de la serie
-  // es una imagen /covers/… del bloque del título (a veces con ?v= de
-  // caché tras la extensión). Antes del <h1> vienen las portadas de la
-  // barra lateral ("Populares"), así que se busca primero DESDE el <h1>
-  // hacia adelante y solo al final en toda la página.
-  const h1 = html.search(/<h1[^>]*>/i);
-  const zona = h1 >= 0 ? html.slice(h1, h1 + 8000) : html;
-  const imgCovers = /(?:data-src|data-lazy-src|src)=["'](https?:[^"'\s>]*[/]covers[/][^"'\s>]*[.](?:jpe?g|png|webp))[^"'\s>]*["']/i;
-  const imgUploads = /(?:data-src|data-lazy-src|src)=["'](https?:[^"'\s>]*[/]wp-content[/]uploads[/][^"'\s>]*[.](?:jpe?g|png|webp))[^"'\s>]*["']/i;
-  const poster = absoluta(
-    pick(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
-    pick(/content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
-    (zona.match(imgCovers) || [])[1] ||
-    (html.match(imgCovers) || [])[1] ||
-    (zona.match(imgUploads) || [])[1] ||
-    (html.match(imgUploads) || [])[1] || ""
-  );
+  const titulo = pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) ||
+    pick(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
+    pick(/content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
+  const poster = posterDe(html, titulo);
   // Descripción: la sinopsis de verdad vive en su propia sección; las
-  // metas de la página son solo el respaldo.
+  // metas de la página son solo el respaldo. La sinopsis de algunas series
+  // arrastra al final enlaces oficiales de traducción ("--- - [Official
+  // … Translation](url)"): se corta ahí y se limpian enlaces y URLs.
   const sm = html.match(/<h[1-6][^>]*>\s*(?:Sinopsis|Synopsis|Descripci[oó]n|Resumen)[^<]{0,40}<[/]h[1-6]>([\s\S]{10,4000}?)<h[1-6]/i);
-  const sinopsis = sm ? clean(sm[1].replace(/<[^>]*>/g, " ").replace(/\s+([,.;:!?])/g, "$1")).slice(0, 600) : "";
+  const sinopsis = sm ? clean(sm[1]
+    .replace(/<[^>]*>/g, " ")
+    .split(/\s*[-—–]{3,}\s*/)[0]
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, " ")
+    .replace(/https?:\/\/\S+/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")).slice(0, 600) : "";
   const overview = sinopsis ||
     pick(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
     pick(/content=["']([^"']+)["'][^>]*property=["']og:description["']/i) ||
     pick(/name=["']description["'][^>]*content=["']([^"']+)["']/i);
-  return {
-    title: pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) ||
-      pick(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
-      pick(/content=["']([^"']+)["'][^>]*property=["']og:title["']/i),
-    poster: poster,
-    overview: overview,
-  };
+  return { title: titulo, poster: poster, overview: overview };
 }
 
 // ------------------------------------------------ favoritos (kino.storage)
@@ -402,13 +433,11 @@ function pageNodes(p, i) {
   const url = typeof p === "string" ? p : p.url;
   // Sin height ni aspect la caja toma la forma de la propia página: Kino
   // no la rellena recortando y los globos de texto se ven enteros. Sin
-  // width en compact, la columna del lector (stretch) estira la página al
-  // ancho justo de la pantalla. En TV y celular horizontal un ancho fijo
-  // grande lee mejor que llenar toda la pantalla.
+  // width en ningún tamaño, la columna del lector (stretch) estira cada
+  // página al ancho justo de la pantalla, en el teléfono o en la TV.
   return [{
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
-    width: { medium: 480, expanded: 640 },
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
   }];
