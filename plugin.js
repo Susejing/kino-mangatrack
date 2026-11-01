@@ -1,11 +1,11 @@
-// MangaTrack v0.1.7 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.8 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.7";
+const VERSION = "0.1.8";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -431,16 +431,16 @@ function pageBox(ratio, wCap, hCap) {
 
 function pageNodes(p, i) {
   const url = typeof p === "string" ? p : p.url;
-  // span: 12 — el patrón de la galería oficial de Kino: dentro de una
-  // fila de doce columnas (pageCol), cada página ocupa las 12 columnas,
-  // o sea TODO el ancho de la línea (la pantalla justa, en el teléfono
-  // y en la TV; fill en la versión anterior no ensanchaba la imagen).
-  // Sin height ni aspect la caja toma la proporción de la propia
-  // imagen: Kino no la rellena recortando y los globos de texto se ven
-  // enteros. Con gap 0 las rebanadas del webtoon quedan pegadas como en
-  // la web del propio sitio.
+  // Sin width, height, aspect ni span: Kino dibuja cada página con su
+  // tamaño natural (el ancho de la rebanada del propio sitio) y con la
+  // proporción EXACTA de la imagen: nada queda recortado. Con span: 12
+  // (v0.1.7) Kino llenaba el ancho pero mantenía la altura fija y
+  // "cubría" la caja recortando arriba y abajo de cada rebanada: por eso
+  // se cortaban las palabras en las uniones. Las rebanadas van pegadas
+  // (gap 0 en readerTree): un globo que cruce la unión se lee continuo,
+  // como en la web del propio sitio.
   return [{
-    type: "Image", key: "p" + i, url: url, span: 12,
+    type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
@@ -466,7 +466,7 @@ function readerTree(state) {
   const hasPrev = idx > 0;
   const chKey = ch ? String(ch.num).replace(/[^a-z0-9]/gi, "") : String(idx);
   const scrollKey = "pages-" + idx + "-" + chKey + "-" + (r.tk || 0);
-  const pageCol = { type: "Row", wrap: true, gap: 0,
+  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
     children: r.images.flatMap((p, i) => pageNodes(p, i)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
