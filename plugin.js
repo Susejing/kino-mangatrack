@@ -1,11 +1,11 @@
-// MangaTrack v0.1.8 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.9 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.8";
+const VERSION = "0.1.9";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -259,6 +259,146 @@ function imgsDe(zona) {
   return out;
 }
 
+// --------------------------------------- dimensiones de las páginas
+// El Image de Kino no tiene modo «ajustar»: SIEMPRE rellena su caja
+// recortando lo que sobre (cover), con o sin width/height (la 0.1.8
+// dejaba las páginas sin caja y Kino ponía una por defecto: por eso se
+// seguían cortando las palabras en las uniones). Una página solo se ve
+// entera si su caja tiene la MISMA proporción que la imagen. Las
+// rebanadas del sitio no traen dimensiones en el HTML: se leen de los
+// primeros bytes de cada imagen (SOF del JPEG, IHDR del PNG, VP8 del
+// WebP, la cabecera del GIF) con kino.fetch + maxBytes, y se guardan en
+// kino.storage para no volver a medirlas. Kino acepta 60 peticiones por
+// llamada: se miden 50 por evento y las que falten las mide un
+// temporizador (dimsTick) mientras se lee. Patrón del lector de
+// Yuri Online, que funciona en este mismo teléfono.
+
+const DIMS_BATCH = 50;
+const DIMS_TOPE = 600;
+
+function deB64(s) {
+  const ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const out = [];
+  let acc = 0, bits = 0;
+  for (let i = 0; i < s.length; i++) {
+    const v = ABC.indexOf(s.charAt(i));
+    if (v < 0) continue;
+    acc = (acc * 64) + v;
+    bits += 6;
+    if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xFF); acc = acc % Math.pow(2, bits); }
+  }
+  return out;
+}
+
+function dimsDeBytes(b) {
+  if (!Array.isArray(b) || b.length < 12) return null;
+  if (b[0] === 0xFF && b[1] === 0xD8) {
+    let i = 2;
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xFF) { i++; continue; }
+      const m = b[i + 1];
+      if (m === 0x01 || (m >= 0xD0 && m <= 0xD9)) { i += 2; continue; }
+      const len = (b[i + 2] << 8) | b[i + 3];
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+        return { w: (b[i + 7] << 8) | b[i + 8], h: (b[i + 5] << 8) | b[i + 6] };
+      }
+      if (m === 0xDA) break;
+      i += 2 + len;
+    }
+    return null;
+  }
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) {
+    return { w: (b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19],
+      h: (b[20] << 24) | (b[21] << 16) | (b[22] << 8) | b[23] };
+  }
+  if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) {
+    return { w: b[6] | (b[7] << 8), h: b[8] | (b[9] << 8) };
+  }
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+      b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) {
+    const tag = String.fromCharCode(b[12], b[13], b[14], b[15]);
+    if (tag === "VP8X" && b.length > 29) {
+      return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)),
+        h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+    }
+    if (tag === "VP8 " && b.length > 29 && b[23] === 0x9D && b[24] === 0x01 && b[25] === 0x2A) {
+      return { w: b[26] | (b[27] << 8), h: b[28] | (b[29] << 8) };
+    }
+    if (tag === "VP8L" && b.length > 25 && b[20] === 0x2F) {
+      const v = b[21] | (b[22] << 8) | (b[23] << 16) | (b[24] << 24);
+      return { w: 1 + (v & 0x3FFF), h: 1 + ((v >>> 14) & 0x3FFF) };
+    }
+    return null;
+  }
+  return null;
+}
+
+function hashUrl(u) {
+  let h = 5381;
+  for (let i = 0; i < u.length; i++) h = ((h * 33) + u.charCodeAt(i)) >>> 0;
+  return ("0000000" + h.toString(16)).slice(-8);
+}
+
+function dimsTodas() { return getJson("dims", {}); }
+
+function dimPut(nuevos) {
+  try {
+    const all = dimsTodas();
+    for (let i = 0; i < nuevos.length; i++) all[nuevos[i][0]] = nuevos[i][1];
+    const ks = Object.keys(all);
+    if (ks.length > DIMS_TOPE) {
+      for (let i = 0; i < ks.length - DIMS_TOPE; i++) delete all[ks[i]];
+    }
+    setJson("dims", all);
+  } catch (e) { log("dims: " + e); }
+}
+
+async function dimsDeImagen(url) {
+  try {
+    const r = await kino.fetch(url, { maxBytes: 16384, timeoutMs: 5000 });
+    if (!r.ok) return null;
+    const d = dimsDeBytes(deB64(r.base64()));
+    return d && d.w > 0 && d.h > 0 ? d : null;
+  } catch (e) { return null; }
+}
+
+// Mide hasta DIMS_BATCH páginas sin dimensiones (el caché primero) y
+// guarda las nuevas. Devuelve cuántas quedan medidas en total.
+async function medirImagenes(images, presupuesto) {
+  const t0 = Date.now();
+  const cache = dimsTodas();
+  const pend = [];
+  let listas = 0;
+  for (let i = 0; i < images.length; i++) {
+    const im = images[i];
+    if (im.w > 0 && im.h > 0) { listas++; continue; }
+    const c = cache[hashUrl(im.url)];
+    if (Array.isArray(c) && c[0] > 0 && c[1] > 0) { im.w = c[0]; im.h = c[1]; listas++; continue; }
+    pend.push(im);
+  }
+  const nuevas = [];
+  let hechas = 0;
+  for (let i = 0; i < pend.length && hechas < DIMS_BATCH; i += 12) {
+    if (Date.now() - t0 > (presupuesto || 9000)) break;
+    const fin = Math.min(pend.length, i + 12, i + DIMS_BATCH - hechas);
+    const lote = pend.slice(i, fin);
+    hechas += lote.length;
+    const rs = await Promise.all(lote.map((im) => dimsDeImagen(im.url).catch(() => null)));
+    for (let j = 0; j < lote.length; j++) {
+      const d = rs[j];
+      if (d) {
+        lote[j].w = d.w;
+        lote[j].h = d.h;
+        listas++;
+        nuevas.push([hashUrl(lote[j].url), [d.w, d.h]]);
+      }
+    }
+  }
+  if (nuevas.length) dimPut(nuevas);
+  log("dims: " + listas + " de " + images.length + " medidas");
+  return listas;
+}
+
 // ------------------------------------------------------------- interfaz
 
 function loadingTree(msg) {
@@ -429,22 +569,55 @@ function pageBox(ratio, wCap, hCap) {
   return null;
 }
 
+// Caja grande para ventanas medianas/anchas (celular horizontal, TV):
+// prioriza el área (página grande) aceptando una tolerancia de proporción
+// algo mayor, como el lector de Yuri Online.
+function pageBig(r) {
+  if (!isFinite(r) || r <= 0) return null;
+  let best = null;
+  for (const w of SIZE_SCALE) {
+    if (w < 240 || w > 640) continue;
+    for (const h of SIZE_SCALE) {
+      if (h < 320 || h > 640) continue;
+      const err = Math.abs(h / w - r) / r;
+      if (err > 0.12) continue;
+      const a = w * h;
+      if (!best || a > best.a) best = { w: w, h: h, a: a };
+    }
+  }
+  return best ? { width: best.w, height: best.h } : null;
+}
+
 function pageNodes(p, i) {
   const url = typeof p === "string" ? p : p.url;
-  // Sin width, height, aspect ni span: Kino dibuja cada página con su
-  // tamaño natural (el ancho de la rebanada del propio sitio) y con la
-  // proporción EXACTA de la imagen: nada queda recortado. Con span: 12
-  // (v0.1.7) Kino llenaba el ancho pero mantenía la altura fija y
-  // "cubría" la caja recortando arriba y abajo de cada rebanada: por eso
-  // se cortaban las palabras en las uniones. Las rebanadas van pegadas
-  // (gap 0 en readerTree): un globo que cruce la unión se lee continuo,
-  // como en la web del propio sitio.
-  return [{
+  const w = (p && p.w) || 0, h = (p && p.h) || 0;
+  const ratio = w > 0 && h > 0 ? h / w : 0;
+  // El Image de Kino siempre rellena su caja recortando (cover): la caja
+  // debe calzar con la proporción real de la página (dimensiones medidas
+  // de sus bytes; sin ellas todavía, caja típica mientras llega dimsTick).
+  const node = {
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
-  }];
+  };
+  if (ratio > 0) {
+    const small = pageBox(ratio, 400, 640);
+    const big = pageBig(ratio) || pageBox(ratio, 640, 640);
+    if (small && big) {
+      node.width = { compact: small.width, medium: big.width, expanded: big.width };
+      node.height = { compact: small.height, medium: big.height, expanded: big.height };
+      return [node];
+    }
+    if (small || big) {
+      const caja = small || big;
+      node.width = caja.width; node.height = caja.height;
+      return [node];
+    }
+  }
+  node.width = { compact: 400, medium: 400, expanded: 480 };
+  node.height = { compact: 560, medium: 560, expanded: 640 };
+  return [node];
 }
 
 function readerTree(state) {
@@ -479,14 +652,16 @@ function readerTree(state) {
       { type: "Text", text: "v" + VERSION, style: "caption", color: "muted" },
     ] },
   ];
-  return {
+  const raiz = {
     type: "Scaffold",
+    every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
     appBar: { title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "Column", children: body },
   };
+  return raiz;
 }
 
 function searchTree(state) {
@@ -582,12 +757,15 @@ export async function screenEvent(ev) {
       if (idx < 0 || idx >= d.chapters.length) return null;
       const ch = d.chapters[idx];
       const html = await getHtml(ch.url);
-      const images = readerImages(html);
+      let images = readerImages(html);
       if (!images.length) {
         return { toast: "No se pudieron leer las páginas de este capítulo." };
       }
-      log("capítulo " + ch.num + " listo: " + images.length + " páginas");
-      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now() } } };
+      images = images.map((x) => (typeof x === "string" ? { url: x } : x));
+      await medirImagenes(images, 9000);
+      const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
+      log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
       if (name === "read") resp.route = { push: "read" };
       return resp;
     }
@@ -598,6 +776,19 @@ export async function screenEvent(ev) {
       const results = homeCards(html, 30);
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
+    }
+    if (name === "dimsTick") {
+      const r = state.reader;
+      if (!r || !Array.isArray(r.images) || !r.images.length || !(r.pend > 0)) return null;
+      const imgs = r.images.map((im) => ({ url: im.url, w: im.w || 0, h: im.h || 0 }));
+      const antes = imgs.filter((im) => im.w > 0 && im.h > 0).length;
+      await medirImagenes(imgs, 11000);
+      const despues = imgs.filter((im) => im.w > 0 && im.h > 0).length;
+      let pend = imgs.filter((im) => !(im.w > 0 && im.h > 0)).length;
+      const fallos = despues > antes ? 0 : (r.fallos || 0) + 1;
+      if (fallos >= 3) pend = 0;
+      log("dimsTick: " + pend + " pendientes, fallos " + fallos);
+      return { state: { reader: { images: imgs, idx: r.idx, tk: r.tk, pend: pend, fallos: fallos } } };
     }
     if (name === "fav") {
       const d = state.detail;
