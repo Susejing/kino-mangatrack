@@ -1,11 +1,11 @@
-// MangaTrack v0.1.2 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.3 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -90,21 +90,37 @@ function homeCards(html, max) {
 // Metadatos de la página de una serie (etiquetas og: de WordPress)
 function seriesMeta(html) {
   const pick = (re) => { const m = html.match(re); return m ? clean(m[1]) : ""; };
-  // og:image puede traer los atributos en cualquier orden (y a veces ni
-  // viene: entonces se toma la primera imagen de /wp-content/uploads/ de
-  // la propia página, que en este tema es la portada de la serie).
+  // Portada: este tema no siempre declara og:image; la portada de la serie
+  // es una imagen /covers/… del bloque del título (a veces con ?v= de
+  // caché tras la extensión). Antes del <h1> vienen las portadas de la
+  // barra lateral ("Populares"), así que se busca primero DESDE el <h1>
+  // hacia adelante y solo al final en toda la página.
+  const h1 = html.search(/<h1[^>]*>/i);
+  const zona = h1 >= 0 ? html.slice(h1, h1 + 8000) : html;
+  const imgCovers = /(?:data-src|data-lazy-src|src)=["'](https?:[^"'\s>]*[/]covers[/][^"'\s>]*[.](?:jpe?g|png|webp))[^"'\s>]*["']/i;
+  const imgUploads = /(?:data-src|data-lazy-src|src)=["'](https?:[^"'\s>]*[/]wp-content[/]uploads[/][^"'\s>]*[.](?:jpe?g|png|webp))[^"'\s>]*["']/i;
   const poster = absoluta(
-    pick(/property="og:image"[^>]*content="([^"]+)"/) ||
-    pick(/content="([^"]+)"[^>]*property="og:image"/) ||
-    pick(/<img[^>]+(?:data-src|src)="(https?:[^"]*[/]wp-content[/]uploads[/][^"]*[.](?:jpe?g|png|webp))"/i)
+    pick(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i) ||
+    pick(/content=["']([^"']+)["'][^>]*property=["']og:image["']/i) ||
+    (zona.match(imgCovers) || [])[1] ||
+    (html.match(imgCovers) || [])[1] ||
+    (zona.match(imgUploads) || [])[1] ||
+    (html.match(imgUploads) || [])[1] || ""
   );
+  // Descripción: la sinopsis de verdad vive en su propia sección; las
+  // metas de la página son solo el respaldo.
+  const sm = html.match(/<h[1-6][^>]*>\s*(?:Sinopsis|Synopsis|Descripci[oó]n|Resumen)[^<]{0,40}<[/]h[1-6]>([\s\S]{10,4000}?)<h[1-6]/i);
+  const sinopsis = sm ? clean(sm[1].replace(/<[^>]*>/g, " ").replace(/\s+([,.;:!?])/g, "$1")).slice(0, 600) : "";
+  const overview = sinopsis ||
+    pick(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
+    pick(/content=["']([^"']+)["'][^>]*property=["']og:description["']/i) ||
+    pick(/name=["']description["'][^>]*content=["']([^"']+)["']/i);
   return {
     title: pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) ||
-      pick(/property="og:title"[^>]*content="([^"]+)"/) ||
-      pick(/content="([^"]+)"[^>]*property="og:title"/),
+      pick(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
+      pick(/content=["']([^"']+)["'][^>]*property=["']og:title["']/i),
     poster: poster,
-    overview: pick(/property="og:description"[^>]*content="([^"]+)"/) ||
-      pick(/content="([^"]+)"[^>]*property="og:description"/),
+    overview: overview,
   };
 }
 
@@ -384,35 +400,18 @@ function pageBox(ratio, wCap, hCap) {
 
 function pageNodes(p, i) {
   const url = typeof p === "string" ? p : p.url;
-  const img = {
+  // Sin height ni aspect la caja toma la forma de la propia página: Kino
+  // no la rellena recortando y los globos de texto se ven enteros. Sin
+  // width en compact, la columna del lector (stretch) estira la página al
+  // ancho justo de la pantalla. En TV y celular horizontal un ancho fijo
+  // grande lee mejor que llenar toda la pantalla.
+  return [{
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
+    width: { medium: 480, expanded: 640 },
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
-  };
-  const w = (p && p.w) || 0;
-  const h = (p && p.h) || 0;
-  const ratio = w > 0 && h > 0 ? h / w : 0;
-  if (ratio >= 1.05 && ratio <= 1.8) {
-    const small = pageBox(ratio, 320, 640) || { width: 320, height: 480 };
-    const compacto = Object.assign({}, img, { key: "pc" + i, sizes: ["compact"],
-      width: small.width, height: small.height });
-    const grande = Object.assign({}, img, { key: "pe" + i, sizes: ["medium", "expanded"],
-      width: 640, aspect: "2:3" });
-    return [compacto, grande];
-  }
-  if (ratio > 0) {
-    const small = pageBox(ratio, 320, 640);
-    const big = pageBox(ratio, 640, 640);
-    if (small && big) {
-      img.width = { compact: small.width, medium: big.width, expanded: big.width };
-      img.height = { compact: small.height, medium: big.height, expanded: big.height };
-      return [img];
-    }
-  }
-  img.width = { compact: 320, medium: 400, expanded: 480 };
-  img.height = { compact: 480, medium: 560, expanded: 640 };
-  return [img];
+  }];
 }
 
 function readerTree(state) {
@@ -434,7 +433,7 @@ function readerTree(state) {
   const hasPrev = idx > 0;
   const chKey = ch ? String(ch.num).replace(/[^a-z0-9]/gi, "") : String(idx);
   const scrollKey = "pages-" + idx + "-" + chKey + "-" + (r.tk || 0);
-  const pageCol = { type: "Column", gap: 4, crossAxisAlignment: "center",
+  const pageCol = { type: "Column", gap: 4, crossAxisAlignment: "stretch",
     children: r.images.flatMap((p, i) => pageNodes(p, i)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
