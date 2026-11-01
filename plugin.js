@@ -1,11 +1,11 @@
-// MangaTrack v0.1.11 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.12 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.11";
+const VERSION = "0.1.12";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -658,12 +658,17 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // Capítulo de páginas uniformes (manga tradicional, no webtoon):
-  // se detecta por la dispersión de proporciones medidas (ordenadas):
-  // si casi no varían y la mediana es de página normal, las páginas
-  // van a ANCHO COMPLETO; si varían (webtoon), cajas exactas para no
-  // partir palabras en las costuras.
-  const llena = medidas.length >= 3 && (medidas[medidas.length - 1] - medidas[0]) <= 0.3 && ratioGuia <= 1.62;
+  // Capítulo de páginas normales (manga tradicional, no webtoon): la
+  // MEDIANA debe ser de página común (0.5 a 1.7) y el 80% de las
+  // proporciones medidas debe caer a ±0.25 de esa mediana, para que
+  // una portada o doble página rara NO desactive el ancho completo
+  // (la regla anterior usaba el rango entero min-max y una sola página
+  // distinta bastaba). Los webtoones cortan sus tiras a alturas muy
+  // variadas (2.0-3.5) y no pasan la regla: siguen con cajas exactas
+  // para no partir palabras en las costuras.
+  const alrededor = medidas.filter((x) => Math.abs(x - ratioGuia) <= 0.25).length;
+  const llena = medidas.length >= 3 && ratioGuia >= 0.5 && ratioGuia <= 1.7 &&
+    alrededor >= medidas.length * 0.8;
   const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
     children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia, llena)) };
   const body = [
@@ -674,7 +679,9 @@ function readerTree(state) {
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-      { type: "Text", text: "v" + VERSION, style: "caption", color: "muted" },
+      { type: "Text", text: "v" + VERSION + " · " + medidas.length + " pág · mediana "
+          + (Math.round(ratioGuia * 100) / 100) + " · " + (llena ? "ancho completo" : "cajas exactas"),
+        style: "caption", color: "muted" },
     ] },
   ];
   const raiz = {
