@@ -1,11 +1,11 @@
-// MangaTrack v0.1.10 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.11 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.10";
+const VERSION = "0.1.11";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -578,7 +578,28 @@ function pageCaja(ratio, wMin, wMax, hMin, hMax) {
   return mejor ? { width: mejor.w, height: mejor.h, err: mejor.err } : null;
 }
 
-function pageNodes(p, i, ratioGuia) {
+// Caja a ANCHO COMPLETO para páginas de manga tradicional: la más
+// ancha de la escala cuya altura más cercana dé un error de
+// proporción de 8% o menos. En páginas tradicionales ese recorte
+// pequeño solo toca el margen blanco del papel (invisible); en un
+// webtoon partiría palabras, y por eso pageNodes solo la usa cuando
+// el capítulo se detectó de páginas uniformes.
+function pageLlena(ratio, wCap) {
+  if (!isFinite(ratio) || ratio <= 0) return null;
+  const ws = SIZE_SCALE.filter((x) => x <= wCap).sort((a, b) => b - a);
+  for (let wi = 0; wi < ws.length; wi++) {
+    const w = ws[wi];
+    let mejorH = 0, mejorErr = 0;
+    for (const h of SIZE_SCALE) {
+      const err = Math.abs(h / w - ratio) / ratio;
+      if (mejorH === 0 || err < mejorErr) { mejorH = h; mejorErr = err; }
+    }
+    if (mejorErr <= 0.08) return { width: w, height: mejorH, err: mejorErr };
+  }
+  return null;
+}
+
+function pageNodes(p, i, ratioGuia, llena) {
   const url = typeof p === "string" ? p : p.url;
   const w = (p && p.w) || 0, h = (p && p.h) || 0;
   // Sin dimensiones propias usa la mediana del capítulo (las rebanadas
@@ -592,10 +613,18 @@ function pageNodes(p, i, ratioGuia) {
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
   };
   if (ratio > 0) {
-    const small = pageCaja(ratio, 80, 400, 96, 640);
+    let small = pageCaja(ratio, 80, 400, 96, 640);
     let big = pageCaja(ratio, 240, 640, 320, 640);
     const alt = pageCaja(ratio, 120, 640, 200, 640);
     if (alt && big && alt.err < big.err - 0.005) big = alt;
+    // Capítulo de páginas uniformes: a ancho completo; el recorte
+    // pequeño solo toca el margen blanco del papel.
+    if (llena) {
+      const sL = pageLlena(ratio, 400);
+      const bL = pageLlena(ratio, 640);
+      if (sL) small = sL;
+      if (bL) big = bL;
+    }
     if (small && big) {
       node.width = { compact: small.width, medium: big.width, expanded: big.width };
       node.height = { compact: small.height, medium: big.height, expanded: big.height };
@@ -629,8 +658,14 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
+  // Capítulo de páginas uniformes (manga tradicional, no webtoon):
+  // se detecta por la dispersión de proporciones medidas (ordenadas):
+  // si casi no varían y la mediana es de página normal, las páginas
+  // van a ANCHO COMPLETO; si varían (webtoon), cajas exactas para no
+  // partir palabras en las costuras.
+  const llena = medidas.length >= 3 && (medidas[medidas.length - 1] - medidas[0]) <= 0.3 && ratioGuia <= 1.62;
   const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
-    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
+    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia, llena)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
     { type: "Row", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
