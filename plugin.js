@@ -1,4 +1,4 @@
-// MangaTrack v0.1.0 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.1 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
@@ -8,7 +8,7 @@
 const VERSION = "0.1.0";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
-const MAX_CAPS = 500;
+const MAX_CAPS = 490;
 
 // ------------------------------------------------------------------ red
 
@@ -249,35 +249,69 @@ function detailTree(state) {
         { type: "Text", text: meta.title || d.url, style: "h2" },
         { type: "Text", text: chapters.length + " capítulos",
           textEn: chapters.length + " chapters", color: "muted", style: "caption" },
-        meta.overview ? { type: "Text", text: meta.overview, style: "p", color: "muted" } : null,
+        meta.overview ? { type: "Text", text: meta.overview.slice(0, 1500), style: "p", color: "muted" } : null,
+        {
+          type: "Row", gap: 8, wrap: true, children: [
+            { type: "ElevatedButton", key: "start", icon: "play",
+              labelText: "Empezar a leer", labelTextEn: "Start reading",
+              onPressed: { event: "read", arg: "0" } },
+            { type: "ElevatedButton", key: "latest", icon: "expand_more",
+              labelText: "Leer lo último", labelTextEn: "Read latest",
+              onPressed: { event: "read", arg: String(chapters.length - 1) } },
+          ],
+        },
       ].filter(Boolean) },
     ],
   };
-  const caps = chapters.slice(0, MAX_CAPS).map((c, i) => ({
-    type: "Card", key: "cap" + i, flush: true,
-    onTap: { event: "read", arg: i },
-    children: [{ type: "Text", text: "Capítulo " + c.num, textEn: "Chapter " + c.num, padding: 12 }],
-  }));
-  const body = [
-    head,
-    { type: "ListView", key: "caps", flex: 1, items: caps },
-  ];
+  // Lista única estilo Yuri Online: un ListView con head + contador + un
+  // ListTile por capítulo (1 nodo por capítulo). La lista vieja usaba
+  // Card+Text (2 nodos por capítulo): con series largas superaba los 600
+  // nodos que Kino admite por pantalla y la descartaba entera (pantalla negra).
+  const items = [head];
+  const totalTxt = meta.totalCaps > chapters.length
+    ? chapters.length + " capítulos (de " + meta.totalCaps + " — los más recientes)"
+    : chapters.length + " capítulos";
+  items.push({ type: "Text", text: totalTxt,
+    textEn: chapters.length + " chapters", style: "h3", padding: 16 });
+  for (let i = 0; i < chapters.length; i++) {
+    items.push({
+      type: "ListTile", key: "cap" + i, dense: true,
+      title: "Capítulo " + chapters[i].num,
+      onTap: { event: "read", arg: String(i) },
+    });
+  }
   return {
     type: "Scaffold",
     appBar: { title: String(meta.title || "Serie").slice(0, 30),
       leading: { type: "IconButton", key: "backFromDetail", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
-    body: { type: "Column", children: body },
+    body: { type: "ListView", key: "detailBody", items: items },
   };
 }
 
-// Caja con el aspecto de una página (ratio = alto/ancho) que quepa en max.
-function pageBox(ratio, maxW, maxH) {
-  let w = maxW;
-  let h = w * ratio;
-  if (h > maxH) { h = maxH; w = h / ratio; }
-  return { width: Math.round(w), height: Math.round(h) };
+// Escala de tamaños de Kino: un width/height fuera de esta escala se
+// descarta, ¡y con él el nodo entero! La caja se ajusta a la proporción
+// real de la página buscando el par de la escala más cercano.
+const SIZE_SCALE = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
+function pageBox(ratio, wCap, hCap) {
+  if (!isFinite(ratio) || ratio <= 0) return null;
+  for (const tol of [0.02, 0.05, 0.12, 0.25]) {
+    let best = null;
+    for (const w of SIZE_SCALE) {
+      if (w > wCap || w < 80) continue;
+      for (const h of SIZE_SCALE) {
+        if (h > hCap || h < 96) continue;
+        const err = Math.abs(h / w - ratio) / ratio;
+        if (err <= tol) {
+          const a = w * h;
+          if (!best || a > best.a || (a === best.a && err < best.err)) best = { w: w, h: h, a: a, err: err };
+        }
+      }
+    }
+    if (best) return { width: best.w, height: best.h };
+  }
+  return null;
 }
 
 function pageNodes(p, i) {
@@ -292,7 +326,7 @@ function pageNodes(p, i) {
   const h = (p && p.h) || 0;
   const ratio = w > 0 && h > 0 ? h / w : 0;
   if (ratio >= 1.05 && ratio <= 1.8) {
-    const small = pageBox(ratio, 400, 640);
+    const small = pageBox(ratio, 400, 640) || { width: 400, height: 560 };
     const compacto = Object.assign({}, img, { key: "pc" + i, sizes: ["compact"],
       width: small.width, height: small.height });
     const grande = Object.assign({}, img, { key: "pe" + i, sizes: ["medium", "expanded"],
@@ -302,11 +336,14 @@ function pageNodes(p, i) {
   if (ratio > 0) {
     const small = pageBox(ratio, 400, 640);
     const big = pageBox(ratio, 640, 640);
-    img.width = { compact: small.width, medium: big.width, expanded: big.width };
-    img.height = { compact: small.height, medium: big.height, expanded: big.height };
-    return [img];
+    if (small && big) {
+      img.width = { compact: small.width, medium: big.width, expanded: big.width };
+      img.height = { compact: small.height, medium: big.height, expanded: big.height };
+      return [img];
+    }
   }
-  img.width = { compact: 360, medium: 640, expanded: 720 };
+  img.width = { compact: 400, medium: 400, expanded: 480 };
+  img.height = { compact: 560, medium: 560, expanded: 640 };
   return [img];
 }
 
@@ -473,7 +510,9 @@ export async function screenEvent(ev) {
 async function cargarSerie(url, conRuta) {
   const html = await getHtml(url);
   const meta = seriesMeta(html);
-  const chapters = chapterList(html).slice(0, MAX_CAPS);
+  const allCaps = chapterList(html);
+  meta.totalCaps = allCaps.length;
+  const chapters = allCaps.slice(0, MAX_CAPS).slice().reverse();
   log("serie lista: " + meta.title + " / " + chapters.length + " capítulos");
   if (!chapters.length) return { toast: "No se encontraron capítulos." };
   const resp = { state: { detail: { url: url, meta: meta, chapters: chapters } } };
