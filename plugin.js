@@ -50,7 +50,7 @@ function homeCards(html, max) {
   while ((m = reA.exec(html)) !== null) {
       const url = m[1].replace(/^https?:[/]/?leercapitulo[.]co/i, "");
     if (seen[url]) continue;
-    const inner = m[2];
+      const url = mb[2].replace(/^https?:[/]/?leercapitulo[.]co/i, "");
     let poster = "";
     let title = "";
     const im = inner.match(/<img\b[^>]*>/i);
