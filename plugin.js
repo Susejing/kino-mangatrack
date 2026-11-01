@@ -1,11 +1,11 @@
-// MangaTrack v0.1.9 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.10 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.9";
+const VERSION = "0.1.10";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -549,52 +549,42 @@ function detailTree(state) {
 // descarta, ¡y con él el nodo entero! La caja se ajusta a la proporción
 // real de la página buscando el par de la escala más cercano.
 const SIZE_SCALE = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
-function pageBox(ratio, wCap, hCap) {
+// La caja de una página: el par (w, h) de la escala con MENOR error de
+// proporción; entre las casi exactas (diferencia menor a 0.01) prefiere
+// la de mayor área. El Image de Kino SIEMPRE rellena su caja recortando
+// (cover): cuanto más cerca esté la caja de la proporción real, menos
+// borde se pierde. En un webtoon las rebanadas son cortes de una tira
+// continua y un globo puede cruzar la unión: cada píxel recortado de
+// más en la costura parte palabras. La escala es dispersa: algunas
+// proporciones no tienen par exacto (ej. 900×1300 → 400×560, recorte
+// de ~3%), muchas otras sí (900×1800 → 320×640, 800×2560 → 200×640,
+// exactas). La versión anterior usaba escalones de tolerancia y
+// prefería área: para algunas proporciones elegía cajas con más error
+// del necesario (hasta 12% en TV).
+function pageCaja(ratio, wMin, wMax, hMin, hMax) {
   if (!isFinite(ratio) || ratio <= 0) return null;
-  for (const tol of [0.02, 0.05, 0.12, 0.25]) {
-    let best = null;
-    for (const w of SIZE_SCALE) {
-      if (w > wCap || w < 80) continue;
-      for (const h of SIZE_SCALE) {
-        if (h > hCap || h < 96) continue;
-        const err = Math.abs(h / w - ratio) / ratio;
-        if (err <= tol) {
-          const a = w * h;
-          if (!best || a > best.a || (a === best.a && err < best.err)) best = { w: w, h: h, a: a, err: err };
-        }
+  let mejor = null;
+  for (const w of SIZE_SCALE) {
+    if (w > wMax || w < wMin) continue;
+    for (const h of SIZE_SCALE) {
+      if (h > hMax || h < hMin) continue;
+      const err = Math.abs(h / w - ratio) / ratio;
+      if (!mejor || err < mejor.err - 0.01 ||
+          (err < mejor.err + 0.01 && w * h > mejor.a)) {
+        mejor = { w: w, h: h, a: w * h, err: err };
       }
     }
-    if (best) return { width: best.w, height: best.h };
   }
-  return null;
+  return mejor ? { width: mejor.w, height: mejor.h, err: mejor.err } : null;
 }
 
-// Caja grande para ventanas medianas/anchas (celular horizontal, TV):
-// prioriza el área (página grande) aceptando una tolerancia de proporción
-// algo mayor, como el lector de Yuri Online.
-function pageBig(r) {
-  if (!isFinite(r) || r <= 0) return null;
-  let best = null;
-  for (const w of SIZE_SCALE) {
-    if (w < 240 || w > 640) continue;
-    for (const h of SIZE_SCALE) {
-      if (h < 320 || h > 640) continue;
-      const err = Math.abs(h / w - r) / r;
-      if (err > 0.12) continue;
-      const a = w * h;
-      if (!best || a > best.a) best = { w: w, h: h, a: a };
-    }
-  }
-  return best ? { width: best.w, height: best.h } : null;
-}
-
-function pageNodes(p, i) {
+function pageNodes(p, i, ratioGuia) {
   const url = typeof p === "string" ? p : p.url;
   const w = (p && p.w) || 0, h = (p && p.h) || 0;
-  const ratio = w > 0 && h > 0 ? h / w : 0;
-  // El Image de Kino siempre rellena su caja recortando (cover): la caja
-  // debe calzar con la proporción real de la página (dimensiones medidas
-  // de sus bytes; sin ellas todavía, caja típica mientras llega dimsTick).
+  // Sin dimensiones propias usa la mediana del capítulo (las rebanadas
+  // de un webtoon comparten ancho): caja provisional cercana mientras
+  // dimsTick mide esta página, en vez de la caja plana por defecto.
+  const ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 0);
   const node = {
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
@@ -602,16 +592,13 @@ function pageNodes(p, i) {
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
   };
   if (ratio > 0) {
-    const small = pageBox(ratio, 400, 640);
-    const big = pageBig(ratio) || pageBox(ratio, 640, 640);
+    const small = pageCaja(ratio, 80, 400, 96, 640);
+    let big = pageCaja(ratio, 240, 640, 320, 640);
+    const alt = pageCaja(ratio, 120, 640, 200, 640);
+    if (alt && big && alt.err < big.err - 0.005) big = alt;
     if (small && big) {
       node.width = { compact: small.width, medium: big.width, expanded: big.width };
       node.height = { compact: small.height, medium: big.height, expanded: big.height };
-      return [node];
-    }
-    if (small || big) {
-      const caja = small || big;
-      node.width = caja.width; node.height = caja.height;
       return [node];
     }
   }
@@ -639,8 +626,11 @@ function readerTree(state) {
   const hasPrev = idx > 0;
   const chKey = ch ? String(ch.num).replace(/[^a-z0-9]/gi, "") : String(idx);
   const scrollKey = "pages-" + idx + "-" + chKey + "-" + (r.tk || 0);
+  const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
+  medidas.sort((a, b) => a - b);
+  const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
   const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
-    children: r.images.flatMap((p, i) => pageNodes(p, i)) };
+    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
     { type: "Row", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
