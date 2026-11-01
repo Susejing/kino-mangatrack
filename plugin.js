@@ -1,11 +1,11 @@
-// MangaTrack v0.1.1 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.2 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -90,11 +90,68 @@ function homeCards(html, max) {
 // Metadatos de la página de una serie (etiquetas og: de WordPress)
 function seriesMeta(html) {
   const pick = (re) => { const m = html.match(re); return m ? clean(m[1]) : ""; };
+  // og:image puede traer los atributos en cualquier orden (y a veces ni
+  // viene: entonces se toma la primera imagen de /wp-content/uploads/ de
+  // la propia página, que en este tema es la portada de la serie).
+  const poster = absoluta(
+    pick(/property="og:image"[^>]*content="([^"]+)"/) ||
+    pick(/content="([^"]+)"[^>]*property="og:image"/) ||
+    pick(/<img[^>]+(?:data-src|src)="(https?:[^"]*[/]wp-content[/]uploads[/][^"]*[.](?:jpe?g|png|webp))"/i)
+  );
   return {
-    title: pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) || pick(/property="og:title"[^>]*content="([^"]+)"/),
-    poster: absoluta(pick(/property="og:image"[^>]*content="([^"]+)"/)),
-    overview: pick(/property="og:description"[^>]*content="([^"]+)"/),
+    title: pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) ||
+      pick(/property="og:title"[^>]*content="([^"]+)"/) ||
+      pick(/content="([^"]+)"[^>]*property="og:title"/),
+    poster: poster,
+    overview: pick(/property="og:description"[^>]*content="([^"]+)"/) ||
+      pick(/content="([^"]+)"[^>]*property="og:description"/),
   };
+}
+
+// ------------------------------------------------ favoritos (kino.storage)
+// La lista vive en el aparato y, con la capacidad "shared" del manifiesto,
+// viaja entre los aparatos vinculados: los favoritos marcados en el
+// teléfono se ven también en la TV. Los valores que llegan de shared NO
+// son de confianza (los escribió otro aparato): se valida cada campo.
+
+function getJson(key, fallback) {
+  try {
+    const v = (typeof kino.storage === "object" && kino.storage) ? kino.storage.get(key) : null;
+    return v ? JSON.parse(v) : fallback;
+  } catch (e) { return fallback; }
+}
+function setJson(key, val) {
+  try { kino.storage.set(key, JSON.stringify(val)); } catch (e) { log("storage: " + e); }
+}
+function favs() { return getJson("favs", []); }
+function isFav(url) { return favs().some((f) => f.url === url); }
+
+function favValido(f) {
+  return !!f && typeof f === "object" && typeof f.url === "string" &&
+    /^[/]manga[/][a-z0-9]{4,}[/]/i.test(f.url);
+}
+
+function syncPushFavs() {
+  try { if (typeof kino.shared === "object" && kino.shared) kino.shared.set("favs", favs()); }
+  catch (e) { log("sync: " + e); }
+}
+function syncPullFavs() {
+  let sf = null;
+  try { if (typeof kino.shared === "object" && kino.shared) sf = kino.shared.get("favs"); }
+  catch (e) { log("sync: " + e); }
+  if (!Array.isArray(sf)) return;
+  const local = favs();
+  const have = new Set(local.map((f) => f.url));
+  let changed = false;
+  for (const f of sf.slice(0, 200)) {
+    if (!favValido(f) || have.has(f.url)) continue;
+    local.push({ url: f.url, title: String(f.title || "").slice(0, 200),
+      poster: typeof f.poster === "string" ? f.poster.slice(0, 500) : "" });
+    have.add(f.url);
+    changed = true;
+  }
+  if (local.length > 100) local.length = 100;
+  if (changed) { setJson("favs", local); syncPushFavs(); }
 }
 
 // Capítulos de una serie: enlaces /leer/<id>/<slug>/<número>/
@@ -216,11 +273,18 @@ async function homeTree() {
   const html = await getHtml("/");
   const items = homeCards(html, 40);
   if (!items.length) return VACIO_SERIES;
+  const mf = favs();
+  const railFavs = mf.length ? [
+    { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: "railFavs", direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: mf.slice(0, 40).map((it) => posterCard(it, "f-", true)) }] },
+  ] : [];
   return { type: "SingleChildScrollView", key: "home", children: [
     { type: "Text", text: "Series de " + FUENTE, textEn: FUENTE + " series",
       style: "h3", padding: 16 },
     gridOf(items, VACIO_SERIES),
-  ] };
+  ].concat(railFavs) };
 }
 
 function detailTree(state) {
@@ -258,6 +322,10 @@ function detailTree(state) {
             { type: "ElevatedButton", key: "latest", icon: "expand_more",
               labelText: "Leer lo último", labelTextEn: "Read latest",
               onPressed: { event: "read", arg: String(chapters.length - 1) } },
+            { type: "ElevatedButton", key: "fav", icon: isFav(d.url) ? "heart" : "star",
+              labelText: isFav(d.url) ? "Quitar de favoritos" : "Añadir a favoritos",
+              labelTextEn: isFav(d.url) ? "Remove favourite" : "Add favourite",
+              onPressed: "fav" },
           ],
         },
       ].filter(Boolean) },
@@ -326,7 +394,7 @@ function pageNodes(p, i) {
   const h = (p && p.h) || 0;
   const ratio = w > 0 && h > 0 ? h / w : 0;
   if (ratio >= 1.05 && ratio <= 1.8) {
-    const small = pageBox(ratio, 400, 640) || { width: 400, height: 560 };
+    const small = pageBox(ratio, 320, 640) || { width: 320, height: 480 };
     const compacto = Object.assign({}, img, { key: "pc" + i, sizes: ["compact"],
       width: small.width, height: small.height });
     const grande = Object.assign({}, img, { key: "pe" + i, sizes: ["medium", "expanded"],
@@ -334,7 +402,7 @@ function pageNodes(p, i) {
     return [compacto, grande];
   }
   if (ratio > 0) {
-    const small = pageBox(ratio, 400, 640);
+    const small = pageBox(ratio, 320, 640);
     const big = pageBox(ratio, 640, 640);
     if (small && big) {
       img.width = { compact: small.width, medium: big.width, expanded: big.width };
@@ -342,8 +410,8 @@ function pageNodes(p, i) {
       return [img];
     }
   }
-  img.width = { compact: 400, medium: 400, expanded: 480 };
-  img.height = { compact: 560, medium: 560, expanded: 640 };
+  img.width = { compact: 320, medium: 400, expanded: 480 };
+  img.height = { compact: 480, medium: 560, expanded: 640 };
   return [img];
 }
 
@@ -451,6 +519,7 @@ export async function screenEvent(ev) {
   const state = ev.state || {};
   try {
     if (name === "open") {
+      syncPullFavs();
       const r = ev.route || {};
       if (r.name === "detail") {
         const url = routeUrl(r);
@@ -496,6 +565,24 @@ export async function screenEvent(ev) {
       const results = homeCards(html, 30);
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
+    }
+    if (name === "fav") {
+      const d = state.detail;
+      if (!d) return null;
+      const f = favs();
+      const i = f.findIndex((x) => x.url === d.url);
+      let added = false;
+      if (i >= 0) f.splice(i, 1);
+      else {
+        f.unshift({ url: d.url, title: (d.meta && d.meta.title) || "",
+          poster: (d.meta && d.meta.poster) || "" });
+        added = true;
+      }
+      if (f.length > 100) f.length = 100;
+      setJson("favs", f);
+      syncPushFavs();
+      return { state: { favTk: Date.now() },
+        toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
     }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
