@@ -1,5 +1,5 @@
 // MangaTrack v0.3.4 — lector de mangas para Kino con pantalla propia.
-// Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
+// Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
@@ -1501,7 +1501,6 @@ async function homeTree() {
           ? fuenteCard(x.nombre, "Activa", "fuenteActual", x.nombre)
           : fuenteCard(x.nombre, "Toca para cambiar", "cambiarFuente", x.id)
       ).concat([
-        fuenteCard("MangaOni", "Bloqueada (Cloudflare)", "fuentePronto", "MangaOni"),
         fuenteCard("Mangas.in", "Bloqueada (firewall)", "fuentePronto", "Mangas.in"),
       ]) }] },
   ];
