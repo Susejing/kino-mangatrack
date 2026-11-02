@@ -1,11 +1,11 @@
-// MangaTrack v0.3.8 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.9 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.8";
+const VERSION = "0.3.9";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1239,15 +1239,11 @@ function moImages(html) {
 }
 
 // --------------------------------------- dimensiones de las páginas
-// El Image de Kino admite fit: "width" (aditivo, sin apiVersion nuevo;
-// un Kino más antiguo lo lee como cover): la imagen toma el ANCHO de
-// su caja y SU PROPIA altura — una página o una tira larga nunca se
-// recorta, y no hace falta adivinar una caja con la proporción exacta.
-// Historia: antes de conocer fit, el Image siempre rellenaba su caja
-// recortando (cover) y la única defensa era elegir cajas con la
-// proporción de cada página medida — de ahí todo el sistema de medir
-// dimensiones leyendo los primeros bytes de cada imagen (SOF del
-// JPEG, IHDR del PNG, VP8 del
+// El contrato del Image (kino.d.ts de la galería oficial) solo admite
+// width/height de una escala fija de tamaños, y el Image SIEMPRE
+// rellena su caja recortando lo que sobre (cover): una página solo se
+// ve entera si su caja tiene la proporción de la imagen. Las páginas
+// del sitio no traen dimensiones en el HTML: se leen de los
 // WebP, la cabecera del GIF) con kino.fetch + maxBytes, y se guardan en
 // kino.storage para no volver a medirlas. Kino acepta 60 peticiones por
 // llamada: se miden 50 por evento y las que falten las mide un
@@ -1719,25 +1715,51 @@ function detailTree(state) {
 }
 
 // Escala de tamaños de Kino: un width/height fuera de esta escala se
-// descarta, ¡y con él el nodo entero! La caja se ajusta a la proporción
-// real de la página buscando el par de la escala más cercano.
-// Cada página: Image con fit "width" dentro de una columna "stretch"
-// (tan ancha como la pantalla): la página se dibuja al ancho completo
-// y con su altura real, sin recortes y sin miniaturas, con dimensiones
-// o sin ellas. El "aspect" solo reserva el hueco con la proporción
-// conocida (propia o la mediana del capítulo) hasta que la imagen
-// carga; Kino acepta cualquier "w:h" entre 0,2 y 5.
+// descarta, ¡y con él el nodo entero! El Image rellena su caja con
+// recorte (cover), así que la caja debe PARECÉRSELE a la página: se
+// busca la caja más ANCHA posible (página grande) cuya mejor altura
+// de la escala quede a un error pequeño. En tiras de webtoon
+// (proporción > 1.8) se exige todavía menos error: cualquier recorte
+// parte palabras y globos en las costuras. Si nada cumple el tope,
+// gana la caja con MENOR error (nunca una caja fija por defecto).
+// El fit: "width" de la docs nueva se envía igual: un Kino que no lo
+// conozca lo descarta y sigue con cover; uno que sí, dibuja la página
+// a ancho completo con su altura real y el recorte desaparece.
+const PAG_ESCALA = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
+
+function pageCaja(ratio, wMax, errTope) {
+  if (!isFinite(ratio) || ratio <= 0) return null;
+  const ws = PAG_ESCALA.filter((x) => x <= wMax).sort((a, b) => b - a);
+  let mejor = null;
+  for (let i = 0; i < ws.length; i++) {
+    const w = ws[i];
+    let mh = 0, me = 9;
+    for (let j = 0; j < PAG_ESCALA.length; j++) {
+      const h = PAG_ESCALA[j];
+      const err = Math.abs(h / w - ratio) / ratio;
+      if (mh === 0 || err < me) { mh = h; me = err; }
+    }
+    if (me <= errTope) return { width: w, height: mh, err: me };
+    if (!mejor || me < mejor.err - 0.001) mejor = { width: w, height: mh, err: me };
+  }
+  return mejor;
+}
+
 function pageNodes(p, i, ratioGuia) {
   const url = typeof p === "string" ? p : p.url;
   const w = (p && p.w) || 0, h = (p && p.h) || 0;
   let ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 1.4);
   if (!(ratio >= 0.2)) ratio = 0.2;
   if (ratio > 5) ratio = 5;
+  const tope = ratio > 1.8 ? 0.07 : 0.12;
+  const small = pageCaja(ratio, 400, tope) || { width: 400, height: 560 };
+  const big = pageCaja(ratio, 640, tope) || { width: 480, height: 640 };
   return [{
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
     fit: "width",
-    aspect: "1:" + (Math.round(ratio * 100) / 100),
+    width: { compact: small.width, medium: big.width, expanded: big.width },
+    height: { compact: small.height, medium: big.height, expanded: big.height },
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
   }];
@@ -1765,11 +1787,10 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // Páginas a ANCHO COMPLETO con fit "width": la columna stretch hace
-  // cada caja tan ancha como la pantalla y la imagen aporta su altura
-  // real — sin recortes ni miniaturas, sean páginas normales o tiras
-  // de webtoon.
-  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "stretch",
+  // Páginas en cajas GRANDES ajustadas a la proporción medida: la
+  // caja más ancha posible con recorte mínimo, y fit "width" como
+  // aperitivo para un Kino futuro que sí lo conozca.
+  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
     children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
