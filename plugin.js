@@ -1,3 +1,4 @@
+// MangaTrack v0.3.2 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
@@ -498,7 +499,6 @@ function capsLX(html) {
     if (!num || !tipo || !slug) continue;
     let url = "/" + tipo + "/" + slug + "/leer/" + num;
     if (c.groupId !== null && c.groupId !== undefined && c.groupId !== "") url += "?g=" + c.groupId;
-
     if (!map.has(num)) map.set(num, { url: url, num: num });
   }
   const arr = [...map.values()];
@@ -999,7 +999,6 @@ function dimsDeBytes(b) {
       if (m === 0x01 || (m >= 0xD0 && m <= 0xD9)) { i += 2; continue; }
       const len = (b[i + 2] << 8) | b[i + 3];
       if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
-
         return { w: (b[i + 7] << 8) | b[i + 8], h: (b[i + 5] << 8) | b[i + 6] };
       }
       if (m === 0xDA) break;
@@ -1500,7 +1499,6 @@ function readerTree(state) {
   const r = state.reader;
   if (!r || !Array.isArray(r.images) || !r.images.length) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
-
       { type: "Icon", name: "error", color: "muted" },
       { type: "Text", text: "Este capítulo no tiene páginas cargadas.",
         textEn: "This chapter has no pages loaded.", color: "muted" },
@@ -1994,5 +1992,3 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
-
-
