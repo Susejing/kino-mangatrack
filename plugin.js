@@ -1,11 +1,11 @@
-// MangaTrack v0.3.4 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.5 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.4";
+const VERSION = "0.3.5";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -995,13 +995,12 @@ async function mwCatalog(page1) {
 // KageView, que la lee con estas mismas cabeceras). Las series viven en
 // /<tipo>/<slug>/ y los capítulos en /lector/<slug>/<id>/; las páginas
 // de un capítulo vienen escondidas en un bloque base64 «var unicap»
-// con la forma <dir>||<página1>,<página2>,…||<siguiente>. Sus URL se
+// con la forma <dir>||["pág1","pág2",…]||<siguiente>. Sus URL se
 // guardan con el prefijo /oni para no chocar con las de LectorXd, que
 // también usa /manga/<slug>/.
 
 const MAX_CAPS_MO = 300;
 const MO_BASE = "https://manga-oni.com";
-
 // Decodificador base64 (Kino no trae atob en el sandbox del plugin).
 function b64dec(s) {
   const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1037,48 +1036,75 @@ function moAbs(u) {
   return MO_BASE + "/" + u;
 }
 
-// Tarjetas del directorio de MangaOni: cada serie es un <a itemprop="url">
-// con la portada en un <img> (data-src o src; el default.gif es la
-// silueta) y las +18 marcadas con <b id="in" class="c1">.
+// Tarjetas del directorio de MangaOni: cada serie es un <a> con
+// itemprop="url" (el orden de href e itemprop es libre en el HTML real),
+// la portada en un <img> (data-src o src; el default.gif es la
+// silueta) y las +18 marcadas con <b id="in" class="c1">. Si el
+// itemprop cambiara o desapareciera, hay un respaldo con anclas
+// genéricas; y si no sale NADA, el log muestra el inicio del HTML
+// recibido para distinguir un bloqueo de un cambio de estructura.
+function moCardDe(href, inner) {
+  if (!/[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/]/i.test(href)) return null;
+  // +18: fuera (Kino es un salón familiar).
+  if (/<b\b[^>]*(?:id="in"[^>]*class="[^"]*c1|class="[^"]*c1[^>]*id="in")/i.test(inner)) return null;
+  let poster = "";
+  let title = "";
+  const im = inner.match(/<img\b[^>]*>/i);
+  if (im) {
+    const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
+    // La silueta default.gif marca entradas sin portada (a menudo
+    // contenido oculto): fuera del directorio, como hace KageView.
+    if (p && /default[.]gif/i.test(p[1])) return null;
+    if (p) poster = moAbs(p[1]);
+    const a = im[0].match(/\balt="([^"]*)"/i);
+    if (a && a[1]) title = clean(a[1]);
+  }
+  const h = inner.match(/<h[23456][^>]*>([\s\S]{2,150}?)<\/h[23456]>/i);
+  if (h) {
+    const t = clean(h[1].replace(/<[^>]*>/g, " "));
+    if (t) title = t;
+  }
+  let path = href.replace(/^https?:[/][/][^/]+/i, "");
+  if (!/\/$/.test(path)) path += "/";
+  if (!title) {
+    const seg = path.split("/").filter(Boolean);
+    title = seg[1] ? seg[1].replace(/-/g, " ") : "Sin título";
+  }
+  return { url: "/oni" + path, title: title, poster: poster };
+}
+
 function moCards(html, max) {
   const out = [];
-  const re = /<a\b[^>]*itemprop="url"[^>]*href="([^"]+)"[^>]*>/gi;
-  let m;
-  while ((m = re.exec(html)) !== null && out.length < max) {
-    const href = m[1];
-    if (!/[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/]/i.test(href)) continue;
-    const start = m.index + m[0].length;
-    let inner = html.slice(start, start + 2000);
+  const seen = {};
+  const add = (href, inner) => {
+    const c = moCardDe(href, inner);
+    if (!c || seen[c.url]) return;
+    seen[c.url] = 1;
+    out.push(c);
+  };
+  const innerDesde = (idx) => {
+    let inner = html.slice(idx, idx + 2000);
     const corte = inner.search(/<a\b/i);
     if (corte > 0) inner = inner.slice(0, corte);
-    // +18: fuera (Kino es un salón familiar).
-    if (/<b\b[^>]*(?:id="in"[^>]*class="[^"]*c1|class="[^"]*c1[^>]*id="in")/i.test(inner)) continue;
-    let poster = "";
-    let title = "";
-    const im = inner.match(/<img\b[^>]*>/i);
-    if (im) {
-      const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
-      // La silueta default.gif marca entradas sin portada (a menudo
-      // contenido oculto): fuera del directorio, como hace KageView.
-      if (p && /default[.]gif/i.test(p[1])) continue;
-      if (p) poster = moAbs(p[1]);
-      const a = im[0].match(/\balt="([^"]*)"/i);
-      if (a && a[1]) title = clean(a[1]);
+    return inner;
+  };
+  const re = /<a\b[^>]*itemprop="url"[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < max) {
+    const h = m[0].match(/\bhref="([^"]+)"/i);
+    if (!h) continue;
+    add(h[1], innerDesde(m.index + m[0].length));
+  }
+  if (!out.length) {
+    // Respaldo: anclas genéricas a serie con su contenido pegado.
+    const re2 = /<a\b[^>]*\bhref="([^"]*[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/][a-z0-9-]+[/]?)"[^>]*>/gi;
+    let m2;
+    while ((m2 = re2.exec(html)) !== null && out.length < max) {
+      add(m2[1], innerDesde(m2.index + m2[0].length));
     }
-    const h = inner.match(/<h[23456][^>]*>([\s\S]{2,150}?)<\/h[23456]>/i);
-    if (h) {
-      const t = clean(h[1].replace(/<[^>]*>/g, " "));
-      if (t) title = t;
-    }
-    let path = href.replace(/^https?:[/][/][^/]+/i, "");
-    if (!/\/$/.test(path)) path += "/";
-    if (!title) {
-      const seg = path.split("/").filter(Boolean);
-      title = seg[1] ? seg[1].replace(/-/g, " ") : "Sin título";
-    }
-    out.push({ url: "/oni" + path, title: title, poster: poster });
   }
   log("MO tarjetas: " + out.length);
+  if (!out.length && html) log("MO 0 tarjetas — html " + html.length + ": " + clean(html.slice(0, 140)));
   return out;
 }
 
@@ -1096,10 +1122,10 @@ async function moBuscar(q) {
 }
 
 // La página de una serie: título (h1), sinopsis (meta description) y
-// capítulos de #c_list. Cada entrada es un <a> a /lector/<slug>/<id>/
-// con el número en un .timeago (data-num) y los ids de sus páginas en
-// <img data-num>: la página del lector se pide con el slug y el primer
-// id (receta de KageView).
+// capítulos de #c_list. Cada entrada es un <a> a /lector/<slug>/<id>/ —
+// el id del PROPIO enlace es el id del capítulo (receta exacta de
+// KageView: se sigue tal cual, sin inventarlo de las imágenes) — con
+// el número en un .timeago (data-num).
 async function moSerie(url) {
   const f = fuentePorId("mangaoni");
   const html = await getHtmlDe(f, moPath(url));
@@ -1131,9 +1157,11 @@ async function moSerie(url) {
     if (seg.length < 3 || seg[0] !== "lector") continue;
     const slug = seg[1];
     const start = m.index + m[0].length;
-    let inner = html.slice(start, start + 2500);
-    const corte = inner.search(/<a\b/i);
-    if (corte > 0) inner = inner.slice(0, corte);
+    // Hasta el ENLACE del siguiente capítulo (no cualquier <a>: el
+    // HTML real trae anclas anidadas dentro de cada entrada).
+    const resto = html.slice(start, start + 3000);
+    const nxt = resto.search(/href="[^"]*[/]lector[/]/);
+    const inner = nxt > 0 ? resto.slice(0, nxt) : resto;
     let num = "";
     const tn = inner.match(/class="[^"]*timeago[^"]*"[^>]*data-num="([0-9]+(?:[.][0-9]+)?)"/i) ||
                inner.match(/data-num="([0-9]+(?:[.][0-9]+)?)"[^>]*class="[^"]*timeago[^"]*"/i);
@@ -1142,10 +1170,8 @@ async function moSerie(url) {
       const ct = inner.match(/cap[ií]tulo\s*(?: nº?)?\s*([0-9]+(?:[.][0-9]+)?)/i);
       if (ct) num = ct[1];
     }
-    let pageId = "";
-    const pn = inner.match(/<img\b[^>]*data-num="([0-9]+)"/i);
-    if (pn) pageId = pn[1];
-    const chUrl = "/oni/lector/" + slug + "/" + (pageId || seg[2]) + "/";
+    // KageView sigue la propia ruta del enlace: /lector/<slug>/<id>/.
+    const chUrl = "/oni/lector/" + slug + "/" + seg[2] + "/";
     if (seen[chUrl]) continue;
     seen[chUrl] = 1;
     if (!num) num = String(caps.length + 1);
@@ -1154,11 +1180,14 @@ async function moSerie(url) {
   // Del más nuevo al más viejo, como en las demás fuentes.
   caps.sort((a, b) => (parseFloat(b.num) || 0) - (parseFloat(a.num) || 0) ||
     String(b.num).localeCompare(String(a.num)));
+  if (!caps.length) log("MO 0 capítulos — html " + html.length + (html.indexOf("c_list") >= 0 ? ", c_list presente" : ", SIN c_list"));
   log("MO capítulos: " + caps.length);
   return { meta: meta, chapters: caps };
 }
 
-// Las páginas del capítulo vienen en el bloque base64 «var unicap».
+// Las páginas del capítulo vienen en el bloque base64 «var unicap»,
+// con el formato REAL de KageView: <dir>||["1.webp","2.webp",…]||<sig>
+// — una lista con corchetes y comillas (a veces escritas &quot;).
 function moImages(html) {
   const m = html.match(/var\s+unicap\s*=\s*'([^']+)'/);
   if (!m) {
@@ -1168,8 +1197,13 @@ function moImages(html) {
   const dec = b64dec(m[1]);
   const parts = dec.split("||");
   const dir = (parts[0] || "").trim();
-  const pags = (parts[1] || "").split(",").map((x) => x.trim()).filter(Boolean);
-  const out = pags.map((p) => dir + p);
+  let raw = (parts[1] || "").replace(/&quot;/g, '"').trim();
+  // Lista ["a","b",…] → sin corchetes y partir por ","; si viniera
+  // en el formato simple antiguo (a,b,c), se parte por comas normales.
+  if (/^\[/.test(raw) && /\]$/.test(raw)) raw = raw.slice(1, -1);
+  const pags = raw.indexOf('","') >= 0 ? raw.split('","') : raw.split(",");
+  const limpias = pags.map((x) => x.replace(/^["']+|["']+$/g, "").trim()).filter(Boolean);
+  const out = limpias.map((p) => dir + p);
   log("MO lector: " + out.length + " páginas");
   return out;
 }
