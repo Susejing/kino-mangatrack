@@ -1,23 +1,57 @@
-// MangaTrack v0.1.16 — lector de mangas para Kino con pantalla propia.
-// Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
+// MangaTrack v0.2.0 — lector de mangas para Kino con pantalla propia.
+// Fuentes: LeerCapitulo (www.leercapitulo.co) y LectorXd (lectorxd.com).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.16";
-const FUENTE = "LeerCapitulo";
-const BASE = "https://www.leercapitulo.co";
-const MAX_CAPS = 490;
+const VERSION = "0.2.0";
+const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
+const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
+const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
+
+// Dos fuentes, cada una con su propio scraping: la activa se guarda en
+// el almacenamiento ("fuente") y las tarjetas de arriba de la portada
+// la cambian.
+const FUENTE_DEFECTO = "leercapitulo";
+const FUENTES = [
+  { id: "leercapitulo", nombre: "LeerCapitulo", base: "https://www.leercapitulo.co" },
+  { id: "lectorxd", nombre: "LectorXd", base: "https://lectorxd.com" },
+];
+
+function fuentePorId(id) {
+  for (let i = 0; i < FUENTES.length; i++) if (FUENTES[i].id === id) return FUENTES[i];
+  return FUENTES[0];
+}
+
+function fuenteActiva() {
+  const id = getJson("fuente", "") || FUENTE_DEFECTO;
+  return fuentePorId(String(id));
+}
+
+// La fuente de una serie por la forma de su URL: los favoritos y el
+// historial guardan URLs de las dos fuentes y el detalle sabe a cuál
+// pedirle la página. LeerCapitulo usa /manga/<id>/<slug>/ (dos pedazos
+// tras /manga/) y LectorXd /<tipo>/<slug>/ (uno solo): no chocan.
+function fuenteDeUrl(url) {
+  const u = String(url || "");
+  if (/^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]?$/.test(u)) return fuentePorId("leercapitulo");
+  if (/^[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/][a-z0-9-]+[/]?$/.test(u)) return fuentePorId("lectorxd");
+  return null;
+}
 
 // ------------------------------------------------------------------ red
 
-async function getHtml(path) {
-  const r = await kino.fetch(BASE + path, { headers: { Accept: "text/html" } });
+async function getHtmlDe(f, path) {
+  const r = await kino.fetch(f.base + path, { headers: { Accept: "text/html" } });
   if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
-    userMessage: "No se pudo conectar con " + FUENTE + ". Inténtalo de nuevo.",
+    userMessage: "No se pudo conectar con " + f.nombre + ". Inténtalo de nuevo.",
   });
   return r.text();
+}
+
+async function getHtml(path) {
+  return getHtmlDe(fuenteActiva(), path);
 }
 
 function log(msg) {
@@ -100,6 +134,53 @@ function homeCards(html, max) {
   }
   log("portada: " + out.length + " series");
   return out;
+}
+
+// Tarjetas de LectorXd: enlaces a /<tipo>/<slug> con una imagen y el
+// título en un h4 (catálogo) o un h3 (portada). Las novelas se excluyen.
+function cardsLX(html, max) {
+  const out = [];
+  const seen = {};
+  const re = /<a[^>]+href="([^"]*[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]?)"[^>]*>([\s\S]{0,1200}?)<[/]a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    let url = m[1];
+    if (/[/]novela[/]/i.test(url)) continue;
+    url = url.replace(/^https?:[/][/](?:www[.])?lectorxd[.]com/i, "");
+    if (!/^[/]/.test(url)) continue;
+    if (seen[url]) continue;
+    const inner = m[2];
+    const im = inner.match(/<img\b[^>]*>/i);
+    if (!im) continue;
+    const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bdata-lazy-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
+    if (!p) continue;
+    const poster = absLX(p[1]);
+    if (!poster || poster.indexOf("data:") === 0) continue;
+    let title = "";
+    const h4 = inner.match(/<h[34][^>]*>([\s\S]{2,150}?)<[/]h[34]>/i);
+    if (h4) title = clean(h4[1].replace(/<[^>]*>/g, " "));
+    if (!title) {
+      const a = im[0].match(/\balt="([^"]*)"/i);
+      if (a) title = clean(a[1]);
+    }
+    if (!title) title = url.split("/").filter(Boolean).pop() || url;
+    seen[url] = 1;
+    out.push({ url: url, title: title, poster: poster });
+    if (out.length >= max) break;
+  }
+  log("LX portada: " + out.length + " series");
+  return out;
+}
+
+function absLX(u) {
+  if (!u) return "";
+  if (u.indexOf("//") === 0) return "https:" + u;
+  if (u.indexOf("/") === 0) return "https://lectorxd.com" + u;
+  return u;
+}
+
+function cardsDe(f, html, max) {
+  return f.id === "lectorxd" ? cardsLX(html, max) : homeCards(html, max);
 }
 
 // Metadatos de la página de una serie (etiquetas og: de WordPress)
@@ -190,7 +271,7 @@ function isFav(url) { return favs().some((f) => f.url === url); }
 
 function favValido(f) {
   return !!f && typeof f === "object" && typeof f.url === "string" &&
-    /^[/]manga[/][a-z0-9]{4,}[/]/i.test(f.url);
+    fuenteDeUrl(f.url) !== null;
 }
 
 function syncPushFavs() {
@@ -224,8 +305,9 @@ function syncPullFavs() {
 function hist() { return getJson("hist", {}); }
 
 function histValido(v) {
-  return !!v && typeof v === "object" && typeof v.url === "string" &&
-    /^[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+[/][0-9]+(?:[.][0-9]+)?[/]$/i.test(v.url);
+  if (!v || typeof v !== "object" || typeof v.url !== "string") return false;
+  if (/^[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+[/][0-9]+(?:[.][0-9]+)?[/]$/i.test(v.url)) return true;
+  return /^[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]leer[/][^"?]+(?:[?]g=[-a-z0-9]+)?$/i.test(v.url);
 }
 
 function syncPushHist() {
@@ -242,7 +324,7 @@ function syncPullHist() {
   const sk = Object.keys(sh).slice(0, 200);
   for (let i = 0; i < sk.length; i++) {
     const k = sk[i];
-    if (!/^[/]manga[/][a-z0-9]{4,}[/]/i.test(k)) continue;
+    if (!fuenteDeUrl(k)) continue;
     const v = sh[k];
     if (!histValido(v) || typeof v.idx !== "number" || !(v.idx >= 0)) continue;
     const l = local[k];
@@ -314,6 +396,93 @@ function imgsDe(zona) {
     out.push(w > 0 && h > 0 ? { url: src, w: w, h: h } : { url: src });
   }
   return out;
+}
+
+// ------------------------------------------------ LectorXd (2ª fuente)
+// Metadatos de una serie de LectorXd: título h1, portada (img con
+// /manga/covers/ en su src) y sinopsis (p.leading-relaxed).
+function metaLX(html) {
+  const titulo = (html.match(/<h1[^>]*>([\s\S]{2,200}?)<[/]h1>/i) || [])[1];
+  let cov = "";
+  const mC = html.match(/<img\b[^>]*\bsrc="([^"]*[/]manga[/]covers[/][^"]+)"/i) ||
+    html.match(/<img\b[^>]*\bdata-src="([^"]*[/]manga[/]covers[/][^"]+)"/i);
+  if (mC) cov = mC[1];
+  if (!cov) cov = (html.match(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || [])[1] || "";
+  const sin = (html.match(/<p[^>]*class="[^"]*leading-relaxed[^"]*"[^>]*>([\s\S]{10,4000}?)<[/]p>/i) || [])[1];
+  const ogd = (html.match(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) || [])[1] || "";
+  return {
+    title: titulo ? clean(titulo.replace(/<[^>]*>/g, " ")) : "",
+    poster: cov ? absLX(cov) : "",
+    overview: sin ? clean(sin.replace(/<[^>]*>/g, " ")).slice(0, 600) : clean(ogd).slice(0, 600),
+  };
+}
+
+// Capítulos de LectorXd: la lista no son enlaces sino un JSON dentro del
+// atributo props de un astro-island (el formato de Astro guarda cada
+// valor como un par [tipo, valor]: se desenvuelve recursivamente y queda
+// { mangaType, mangaSlug, chapters: [{ chapter, groupId }] }). La URL de
+// cada capítulo es /<mangaType>/<mangaSlug>/leer/<chapter>?g=<groupId>.
+function capsLX(html) {
+  const tag = html.match(/<astro-island[^>]*component-url="[^"]*ChapterList[^"]*"[^>]*>/i);
+  if (!tag) return [];
+  const pm = tag[0].match(/\bprops="([^"]*)"/i);
+  if (!pm) return [];
+  let data = null;
+  try {
+    data = JSON.parse(pm[1].replace(/&quot;/g, String.fromCharCode(34)).replace(/&amp;/g, "&").replace(/&#39;/g, "'"));
+  } catch (e) { log("LX: props JSON roto"); return []; }
+  const unwrap = (v) => {
+    if (Array.isArray(v)) {
+      if (v.length === 2 && (typeof v[0] === "string" || typeof v[0] === "number" || typeof v[0] === "boolean")) return unwrap(v[1]);
+      return v.map(unwrap);
+    }
+    if (v && typeof v === "object") { const o = {}; for (const k in v) o[k] = unwrap(v[k]); return o; }
+    return v;
+  };
+  data = unwrap(data);
+  const tipo = String(data.mangaType || "");
+  const slug = String(data.mangaSlug || "");
+  const caps = Array.isArray(data.chapters) ? data.chapters : [];
+  const map = new Map();
+  for (let i = 0; i < caps.length; i++) {
+    const c = caps[i];
+    if (!c || typeof c !== "object") continue;
+    const num = String(c.chapter || "").trim();
+    if (!num || !tipo || !slug) continue;
+    let url = "/" + tipo + "/" + slug + "/leer/" + num;
+    if (c.groupId !== null && c.groupId !== undefined && c.groupId !== "") url += "?g=" + c.groupId;
+    if (!map.has(num)) map.set(num, { url: url, num: num });
+  }
+  const arr = [...map.values()];
+  arr.sort((a, b) => parseFloat(b.num) - parseFloat(a.num));
+  log("LX capítulos: " + arr.length + " (ej. " + (arr[0] ? arr[0].url : "-") + ")");
+  return arr;
+}
+
+// Imágenes de un capítulo de LectorXd: img.page-image, la dirección en
+// data-src / data-lazy-src / src (mismo orden que su extensión de Mihon).
+function imgsLX(html) {
+  const out = [];
+  const seen = {};
+  const re = /<img\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const tag = m[0];
+    if (!/class="[^"]*page-image/i.test(tag)) continue;
+    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
+    if (!p) continue;
+    const u = absLX(p[1]);
+    if (!u || u.indexOf("data:") === 0) continue;
+    if (seen[u]) continue;
+    seen[u] = 1;
+    out.push(u);
+  }
+  log("LX lector: " + out.length + " páginas");
+  return out;
+}
+
+function readerImagesDe(f, html) {
+  return f.id === "lectorxd" ? imgsLX(html) : readerImages(html);
 }
 
 // --------------------------------------- dimensiones de las páginas
@@ -523,9 +692,9 @@ function railOf(titulo, tituloEn, items, key, prefix) {
   ];
 }
 
-function fuenteCard(nombre, nota, activa) {
+function fuenteCard(nombre, nota, evento, arg) {
   return { type: "Card", key: "fuente-" + nombre.replace(/[^a-z0-9]/gi, ""), flush: true,
-    onTap: { event: activa ? "fuenteActual" : "fuentePronto", arg: nombre },
+    onTap: { event: evento, arg: arg },
     children: [
       { type: "Text", text: nombre, textEn: nombre, style: "h3", padding: 16 },
       { type: "Text", text: nota, textEn: nota, style: "caption", color: "muted", padding: 16 },
@@ -533,29 +702,49 @@ function fuenteCard(nombre, nota, activa) {
 }
 
 async function homeTree() {
-  const html = await getHtml("/");
-  // La portada del sitio trae tres secciones (Tendencias, Populares,
-  // Ultimos mangas): se reparte el HTML por sus encabezados y cada rail
-  // se llena con la suya. Si el sitio cambia y no aparecen, se vuelve a
-  // la cuadrícula mixta de siempre.
-  const posT = html.search(/tendencias/i);
-  const posP = html.search(/populares/i);
-  const posU = html.search(/ultimos\s+mangas/i);
+  const f = fuenteActiva();
+  const html = await getHtmlDe(f, "/");
   let populares = [];
   let recientes = [];
   let mixtas = [];
-  if (posT >= 0 && posP > posT && posU > posP) {
-    populares = homeCards(html.slice(posP, posU), 10)
-      .concat(homeCards(html.slice(posT, posP), 24));
-    recientes = homeCards(html.slice(posU), 24);
-    const vp = {};
-    populares = populares.filter((x) => (!vp[x.url] && (vp[x.url] = 1)));
-    const vr = {};
-    recientes = recientes.filter((x) => (!vr[x.url] && (vr[x.url] = 1)));
+  let titPop = "Populares en español";
+  let titPopEn = "Popular in Spanish";
+  let titRec = "Actualizados recientes";
+  let titRecEn = "Recently updated";
+  if (f.id === "lectorxd") {
+    // La portada de LectorXd trae "Populares de hoy" y "Recientes"; si el
+    // sitio cambia y no aparecen, se vuelve a la cuadrícula mixta.
+    titPop = "Populares de hoy"; titPopEn = "Popular today";
+    titRec = "Recientes"; titRecEn = "Recent";
+    const posP = html.search(/populares de hoy/i);
+    const posR = html.search(/recientes/i);
+    if (posP >= 0 && posR > posP) {
+      populares = cardsLX(html.slice(posP, posR), 12);
+      recientes = cardsLX(html.slice(posR), 24);
+    } else {
+      mixtas = cardsLX(html, 40);
+    }
   } else {
-    mixtas = homeCards(html, 40);
+    // La portada de LeerCapitulo trae tres secciones (Tendencias,
+    // Populares, Ultimos mangas): se reparte el HTML por sus encabezados
+    // y cada rail se llena con la suya. Si el sitio cambia y no aparecen,
+    // se vuelve a la cuadrícula mixta de siempre.
+    const posT = html.search(/tendencias/i);
+    const posP = html.search(/populares/i);
+    const posU = html.search(/ultimos\s+mangas/i);
+    if (posT >= 0 && posP > posT && posU > posP) {
+      populares = homeCards(html.slice(posP, posU), 10)
+        .concat(homeCards(html.slice(posT, posP), 24));
+      recientes = homeCards(html.slice(posU), 24);
+    } else {
+      mixtas = homeCards(html, 40);
+    }
   }
-  if (!populares.length && !recientes.length && !mixtas.length) mixtas = homeCards(html, 40);
+  const vp = {};
+  populares = populares.filter((x) => (!vp[x.url] && (vp[x.url] = 1)));
+  const vr = {};
+  recientes = recientes.filter((x) => (!vr[x.url] && (vr[x.url] = 1)));
+  if (!populares.length && !recientes.length && !mixtas.length) mixtas = cardsDe(f, html, 40);
   const mf = favs();
   const railFavs = mf.length ? [
     { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
@@ -576,32 +765,37 @@ async function homeTree() {
   const fuentes = [
     { type: "Text", text: "Fuentes", textEn: "Sources", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railFuentes", direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8, children: [
-        fuenteCard(FUENTE, "Activa", true),
-        fuenteCard("MangaOni", "Pronto", false),
-        fuenteCard("Mangas.in", "Pronto", false),
-      ] }] },
+      children: [{ type: "Row", gap: 8, children: FUENTES.map((x) =>
+        x.id === f.id
+          ? fuenteCard(x.nombre, "Activa", "fuenteActual", x.nombre)
+          : fuenteCard(x.nombre, "Toca para cambiar", "cambiarFuente", x.id)
+      ).concat([
+        fuenteCard("MangaOni", "Bloqueada (Cloudflare)", "fuentePronto", "MangaOni"),
+        fuenteCard("Mangas.in", "Bloqueada (firewall)", "fuentePronto", "Mangas.in"),
+      ]) }] },
   ];
   const gridSeries = mixtas.length ? [
-    { type: "Text", text: "Series de " + FUENTE, textEn: FUENTE + " series",
+    { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
       style: "h3", padding: 16 },
     gridOf(mixtas, VACIO_SERIES),
   ] : [];
   const catalogo = [
     { type: "Card", key: "catEntry", flush: true, onTap: { event: "openCatalog" },
       children: [
-        { type: "Text", text: "Catálogo completo · " + FUENTE, textEn: "Full catalog · " + FUENTE,
+        { type: "Text", text: "Catálogo completo · " + f.nombre, textEn: "Full catalog · " + f.nombre,
           style: "h3", padding: 16 },
-        { type: "Text", text: "Explora por género, tipo y estado",
-          textEn: "Browse by genre, type and status", style: "caption", color: "muted", padding: 16 },
+        { type: "Text", text: f.id === "lectorxd"
+            ? "Explora por tipo, estado y orden"
+            : "Explora por género, tipo y estado",
+          textEn: "Browse with filters", style: "caption", color: "muted", padding: 16 },
       ] },
   ];
   if (!populares.length && !recientes.length && !mixtas.length) return VACIO_SERIES;
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
     .concat(railHist)
-    .concat(railOf("Populares en español", "Popular in Spanish", populares, "railPop", "p-"))
-    .concat(railOf("Actualizados recientes", "Recently updated", recientes, "railRec", "r-"))
+    .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
+    .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railFavs)
     .concat(gridSeries)
     .concat(catalogo) };
@@ -890,8 +1084,20 @@ const GENEROS = [
 ];
 const TIPOS = [["", "Todos"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"]];
 const ESTADOS = [["", "Todos"], ["ongoing", "En emisión"], ["completed", "Finalizado"]];
+// Filtros del catálogo de LectorXd (mismos slugs que su extensión de Mihon).
+const TIPOS_LX = [["", "Todos"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"], ["one_shot", "One Shot"]];
+const ESTADOS_LX = [["", "Todos"], ["en_emision", "En emisión"], ["completado", "Completado"]];
+const ORDEN_LX = [["", "Recientes"], ["rating", "Mejor valorados"], ["views", "Más vistos"]];
 const CAT_POR_PAG = 30;
 const CAT_TOPE = 90;
+
+function catalogoUrlDe(f, cat, page) {
+  if (f.id !== "lectorxd") return catalogoUrl(cat, page);
+  let p = "/catalogo?filters=true&adult=safe&orderBy=" + (cat.order || "recent") + "&page=" + (page || 1);
+  if (cat.type) p += "&types=" + encodeURIComponent(cat.type);
+  if (cat.status) p += "&status=" + encodeURIComponent(cat.status);
+  return p;
+}
 
 function catalogoUrl(cat, page) {
   let p = "/manga/?page=" + (page || 1);
@@ -908,22 +1114,28 @@ function catDrop(label, key, opciones, valor, evento) {
 }
 
 function catalogTree(c) {
+  const f = fuentePorId(c.f || "leercapitulo");
   const items = Array.isArray(c.items) ? c.items : [];
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
   const hayMas = items.length < total && items.length < CAT_TOPE;
+  const drops = f.id === "lectorxd" ? [
+    catDrop("Tipo", "catType", TIPOS_LX, c.type, "catType"),
+    catDrop("Estado", "catStatus", ESTADOS_LX, c.status, "catStatus"),
+    catDrop("Orden", "catOrder", ORDEN_LX, c.order, "catOrder"),
+  ] : [
+    catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
+    catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
+    catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
+  ];
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + FUENTE,
+    appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + f.nombre,
       leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "SingleChildScrollView", key: "catBody", children: [{
       type: "Column", children: [
-        { type: "Row", gap: 8, padding: 16, wrap: true, children: [
-          catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
-          catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
-          catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
-        ] },
+        { type: "Row", gap: 8, padding: 16, wrap: true, children: drops },
         c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
           textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
         items.length ? gridOf(items, VACIO_SERIES) :
@@ -947,26 +1159,29 @@ function catalogTree(c) {
 // una página siguiente de los MISMOS filtros, se añade a lo ya
 // cargado (botón "Cargar más"); con filtros nuevos empieza de cero.
 async function cargarCatalogo(cat, page, conRuta) {
+  const f = fuenteActiva();
   const page1 = Math.max(1, parseInt(page, 10) || 1);
-  const html = await getHtml(catalogoUrl(cat, page1));
-  const nuevos = homeCards(html, CAT_POR_PAG);
+  const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
+  const nuevos = cardsDe(f, html, CAT_POR_PAG);
   const tm = html.match(/([\d][\d,]*)\s*series/i);
   const num = tm ? tm[1].replace(/[^0-9]/g, "") : "";
   let totalTxt = num ? num.replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " series" : "";
   const prevCat = page1 > 1 ? getJson("cat", null) : null;
   const prev = prevCat && Array.isArray(prevCat.items) &&
+    (prevCat.f || "leercapitulo") === f.id &&
     (prevCat.genre || "") === (cat.genre || "") &&
     (prevCat.type || "") === (cat.type || "") &&
-    (prevCat.status || "") === (cat.status || "") ? prevCat.items : [];
+    (prevCat.status || "") === (cat.status || "") &&
+    (prevCat.order || "") === (cat.order || "") ? prevCat.items : [];
   if (!totalTxt && prevCat && prevCat.totalTxt) totalTxt = prevCat.totalTxt;
   const vistos = {};
   const items = prev.concat(nuevos)
     .filter((x) => (!vistos[x.url] && (vistos[x.url] = 1)))
     .slice(0, CAT_TOPE);
-  setJson("cat", { items: items, page: page1, genre: cat.genre || "",
-    type: cat.type || "", status: cat.status || "", totalTxt: totalTxt });
-  log("catálogo pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
-    " series, filtros " + (cat.genre || "-") + "/" + (cat.type || "-") + "/" + (cat.status || "-"));
+  setJson("cat", { f: f.id, items: items, page: page1, genre: cat.genre || "",
+    type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt });
+  log("catálogo " + f.nombre + " pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
+    " series, filtros " + (cat.genre || cat.type || "-") + "/" + (cat.status || "-") + "/" + (cat.order || "-"));
   const resp = { state: { catTk: Date.now() } };
   if (conRuta) resp.route = { push: "catalog" };
   return resp;
@@ -1018,7 +1233,7 @@ export async function screenEvent(ev) {
       const r = ev.route || {};
       if (r.name === "detail") {
         const url = routeUrl(r);
-        if (url && /^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(url) &&
+        if (url && fuenteDeUrl(url) &&
             (!state.detail || state.detail.url !== url)) {
           return await cargarSerie(url, false);
         }
@@ -1031,33 +1246,41 @@ export async function screenEvent(ev) {
     }
     if (name === "goSearch") return { route: { push: "search" } };
     if (name === "openCatalog") {
-      return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, true);
+      return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
     }
     if (name === "fuentePronto") {
-      return { toast: String(ev.arg || "Esa fuente") + " llegará en una próxima versión." };
+      return { toast: String(ev.arg || "Esa fuente") + " está bloqueada por su protección anti-bots: no se puede leer desde Kino." };
     }
     if (name === "fuenteActual") {
-      return { toast: "Ya estás viendo " + FUENTE + "." };
+      return { toast: "Ya estás viendo " + fuenteActiva().nombre + "." };
     }
-    if (name === "catGenre" || name === "catType" || name === "catStatus") {
+    if (name === "cambiarFuente") {
+      const f2 = fuentePorId(String(ev.arg || ""));
+      if (f2.id === fuenteActiva().id) return { toast: "Ya estás viendo " + f2.nombre + "." };
+      setJson("fuente", f2.id);
+      return { state: { detail: null, reader: null, results: null, resultsQ: null },
+        toast: "Cambiando a " + f2.nombre + "…" };
+    }
+    if (name === "catGenre" || name === "catType" || name === "catStatus" || name === "catOrder") {
       const c = getJson("cat", {}) || {};
-      const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "" };
+      const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" };
       const v = String(ev.value || "");
       if (name === "catGenre") nuevo.genre = v;
       else if (name === "catType") nuevo.type = v;
-      else nuevo.status = v;
+      else if (name === "catStatus") nuevo.status = v;
+      else nuevo.order = v;
       return await cargarCatalogo(nuevo, 1, false);
     }
     if (name === "catMore") {
       const c = getJson("cat", null);
       if (!c || !Array.isArray(c.items) || !c.items.length) return null;
-      return await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "" },
+      return await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" },
         (c.page || 1) + 1, false);
     }
     if (name === "popBack") return { route: { pop: true } };
     if (name === "openSeries") {
       const url = String(ev.arg || "");
-      if (!/^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]$/i.test(url)) return null;
+      if (!fuenteDeUrl(url)) return null;
       return await cargarSerie(url, true);
     }
     if (name === "read" || name === "nextChap" || name === "prevChap" || name === "jumpChap") {
@@ -1074,8 +1297,9 @@ export async function screenEvent(ev) {
       }
       if (idx < 0 || idx >= d.chapters.length) return null;
       const ch = d.chapters[idx];
-      const html = await getHtml(ch.url);
-      let images = readerImages(html);
+      const fSer = fuenteDeUrl(d.url) || fuenteActiva();
+      const html = await getHtmlDe(fSer, ch.url);
+      let images = readerImagesDe(fSer, html);
       if (!images.length) {
         return { toast: "No se pudieron leer las páginas de este capítulo." };
       }
@@ -1100,8 +1324,12 @@ export async function screenEvent(ev) {
     if (name === "search") {
       const q = String((ev.value && ev.value.q) || "").trim();
       if (!q) return { toast: "Escribe un título." };
-      const html = await getHtml("/?s=" + encodeURIComponent(q));
-      const results = homeCards(html, 30);
+      const f = fuenteActiva();
+      const ruta = f.id === "lectorxd"
+        ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(q)
+        : "/?s=" + encodeURIComponent(q);
+      const html = await getHtmlDe(f, ruta);
+      const results = cardsDe(f, html, 30);
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
     }
@@ -1147,12 +1375,23 @@ export async function screenEvent(ev) {
 // Carga la página de una serie y prepara su detalle; si conRuta, empuja la
 // pantalla de la serie al terminar.
 async function cargarSerie(url, conRuta) {
-  const html = await getHtml(url);
-  const meta = seriesMeta(html);
-  const allCaps = chapterList(html);
-  meta.totalCaps = allCaps.length;
-  const chapters = allCaps.slice(0, MAX_CAPS).slice().reverse();
-  log("serie lista: " + meta.title + " / " + chapters.length + " capítulos");
+  const f = fuenteDeUrl(url);
+  if (!f) return { toast: "Esa serie no es de ninguna fuente conocida." };
+  const html = await getHtmlDe(f, url);
+  let meta;
+  let chapters;
+  if (f.id === "lectorxd") {
+    meta = metaLX(html);
+    const allCaps = capsLX(html);
+    meta.totalCaps = allCaps.length;
+    chapters = allCaps.slice(0, MAX_CAPS_LX).slice().reverse();
+  } else {
+    meta = seriesMeta(html);
+    const allCaps = chapterList(html);
+    meta.totalCaps = allCaps.length;
+    chapters = allCaps.slice(0, MAX_CAPS).slice().reverse();
+  }
+  log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " capítulos");
   if (!chapters.length) return { toast: "No se encontraron capítulos." };
   const resp = { state: { detail: { url: url, meta: meta, chapters: chapters } } };
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
