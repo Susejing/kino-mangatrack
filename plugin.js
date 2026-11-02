@@ -1,11 +1,11 @@
-// MangaTrack v0.2.0 — lector de mangas para Kino con pantalla propia.
-// Fuentes: LeerCapitulo (www.leercapitulo.co) y LectorXd (lectorxd.com).
+// MangaTrack v0.3.0 — lector de mangas para Kino con pantalla propia.
+// Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -17,6 +17,9 @@ const FUENTE_DEFECTO = "leercapitulo";
 const FUENTES = [
   { id: "leercapitulo", nombre: "LeerCapitulo", base: "https://www.leercapitulo.co" },
   { id: "lectorxd", nombre: "LectorXd", base: "https://lectorxd.com" },
+  { id: "mangadex", nombre: "MangaDex", base: "https://api.mangadex.org" },
+  { id: "inmanga", nombre: "InManga", base: "https://inmanga.com" },
+  { id: "manhwaweb", nombre: "ManhwaWeb", base: "https://manhwaweb.com" },
 ];
 
 function fuentePorId(id) {
@@ -37,6 +40,12 @@ function fuenteDeUrl(url) {
   const u = String(url || "");
   if (/^[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/]?$/.test(u)) return fuentePorId("leercapitulo");
   if (/^[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/][a-z0-9-]+[/]?$/.test(u)) return fuentePorId("lectorxd");
+  // MangaDex guarda sus series como /title/<uuid> (API oficial, sin slugs).
+  if (/^[/]title[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(u)) return fuentePorId("mangadex");
+  // InManga: /ver/manga/<slug>/<uuid de la serie>.
+  if (/^[/]ver[/]manga[/][a-z0-9-]+[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(u)) return fuentePorId("inmanga");
+  // ManhwaWeb: el slug de cada serie termina en _<timestamp>.
+  if (/^[/][a-z0-9-]+_[0-9]{10,}[/]?$/.test(u)) return fuentePorId("manhwaweb");
   return null;
 }
 
@@ -307,7 +316,13 @@ function hist() { return getJson("hist", {}); }
 function histValido(v) {
   if (!v || typeof v !== "object" || typeof v.url !== "string") return false;
   if (/^[/]leer[/][a-z0-9]{4,}[/][a-z0-9-]+[/][0-9]+(?:[.][0-9]+)?[/]$/i.test(v.url)) return true;
-  return /^[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]leer[/][^"?]+(?:[?]g=[-a-z0-9]+)?$/i.test(v.url);
+  if (/^[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]leer[/][^"?]+(?:[?]g=[-a-z0-9]+)?$/i.test(v.url)) return true;
+  // MangaDex: los capítulos son /chapter/<uuid>.
+  if (/^[/]chapter[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(v.url)) return true;
+  // InManga: /ver/manga/<slug>/<num>/<uuid del capítulo>.
+  if (/^[/]ver[/]manga[/][a-z0-9-]+[/][^/?]+[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(v.url)) return true;
+  // ManhwaWeb: /leer/<slug>-<num>_01.
+  return /^[/]leer[/][a-z0-9-]+_[0-9]+-[0-9]+(?:[_][0-9]+)?$/i.test(v.url);
 }
 
 function syncPushHist() {
@@ -483,6 +498,368 @@ function imgsLX(html) {
 
 function readerImagesDe(f, html) {
   return f.id === "lectorxd" ? imgsLX(html) : readerImages(html);
+}
+
+// ------------------------------------------------ MangaDex (3ª fuente)
+// MangaDex no se scrapea: tiene una API oficial pública que devuelve
+// JSON. Las series se guardan como /title/<uuid> y los capítulos como
+// /chapter/<uuid>; las páginas de un capítulo salen del servidor
+// at-home (baseUrl + /data/<hash>/<archivo>, baseUrl fijo:
+// uploads.mangadex.org) y se piden al ABRIR el capítulo porque las
+// URLs caducan al poco rato.
+
+const MD_API = "https://api.mangadex.org";
+const MD_CDN = "https://uploads.mangadex.org";
+const MAX_CAPS_MD = 300;
+
+async function mdJson(path) {
+  const r = await kino.fetch(MD_API + path, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con MangaDex. Inténtalo de nuevo.",
+  });
+  try { return await r.json(); } catch (e) { return JSON.parse((await r.text()).replace(/[\u0000-\u001F]/g, " ")); }
+}
+
+function mdTitulo(m) {
+  const a = (m && m.attributes) || {};
+  const t = a.title || {};
+  if (t.es) return String(t.es);
+  const alt = a.altTitles || [];
+  for (let i = 0; i < alt.length; i++) if (alt[i] && alt[i].es) return String(alt[i].es);
+  if (t.en) return String(t.en);
+  for (const k in t) return String(t[k]);
+  return "Sin título";
+}
+
+function mdPortada(m) {
+  const rel = (m && m.relationships) || [];
+  for (let i = 0; i < rel.length; i++) {
+    const r = rel[i];
+    if (r && r.type === "cover_art" && r.attributes && r.attributes.fileName) {
+      return MD_CDN + "/covers/" + m.id + "/" + r.attributes.fileName + ".256.jpg";
+    }
+  }
+  return "";
+}
+
+function mdCards(j, max) {
+  const out = [];
+  const arr = (j && j.data) || [];
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i];
+    if (!m || !m.id) continue;
+    out.push({ url: "/title/" + m.id, title: mdTitulo(m), poster: mdPortada(m) });
+  }
+  log("MD tarjetas: " + out.length);
+  return out;
+}
+
+function mdQuery(extra, offset, limit) {
+  let p = "?includes[]=cover_art&contentRating[]=safe&availableTranslatedLanguage[]=es&limit=" + limit;
+  if (offset) p += "&offset=" + offset;
+  if (extra) p += "&" + extra;
+  return "/manga" + p;
+}
+
+async function mdSearch(q) {
+  const j = await mdJson(mdQuery("title=" + encodeURIComponent(q) + "&order[relevance]=desc", 0, 30));
+  return mdCards(j, 30);
+}
+
+async function mdMeta(id) {
+  const j = await mdJson("/manga/" + id + "?includes[]=cover_art");
+  const m = (j && j.data) || null;
+  if (!m) throw kino.error("network", "manga vacío", {
+    userMessage: "No se encontró la serie en MangaDex.",
+  });
+  const d = (m.attributes && m.attributes.description) || {};
+  let ov = String(d.es || d.en || "");
+  ov = clean(ov.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[#*_]+/g, " ").slice(0, 600));
+  return { title: mdTitulo(m), poster: mdPortada(m), overview: ov };
+}
+
+async function mdCaps(id) {
+  const all = [];
+  const vistos = {};
+  let offset = 0;
+  while (offset < 1500) {
+    const j = await mdJson("/manga/" + id + "/feed?translatedLanguage[]=es&contentRating[]=safe&order[chapter]=desc&limit=500&offset=" + offset + "&includeExternalUrl=0&includeEmptyPages=0");
+    const arr = (j && j.data) || [];
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i];
+      const at = (c && c.attributes) || {};
+      if (at.externalUrl) continue;
+      if (at.chapter === null || at.chapter === undefined || at.chapter === "") continue;
+      const num = String(at.chapter);
+      if (vistos[num]) continue;
+      vistos[num] = 1;
+      all.push({ url: "/chapter/" + c.id, num: num });
+    }
+    offset += 500;
+    if (arr.length < 500) break;
+  }
+  all.sort(function (a, b) { return parseFloat(b.num) - parseFloat(a.num); });
+  log("MD capítulos: " + all.length);
+  return all;
+}
+
+async function mdImages(chUrl) {
+  const id = String(chUrl).replace(/^[/]chapter[/]/, "").split("?")[0];
+  const j = await mdJson("/at-home/server/" + id);
+  const ch = (j && j.chapter) || {};
+  const base = String(j.baseUrl || MD_CDN);
+  const hash = ch.hash || "";
+  const files = ch.data || [];
+  const out = [];
+  for (let i = 0; i < files.length; i++) out.push(base + "/data/" + hash + "/" + files[i]);
+  log("MD lector: " + out.length + " páginas (host " + base.replace(/^https?:[/][/]/, "") + ")");
+  return out;
+}
+
+async function mdCatalog(cat, page1) {
+  const ord = cat.order || "followedCount";
+  const j = await mdJson(mdQuery("order[" + ord + "]=desc", (page1 - 1) * CAT_POR_PAG, CAT_POR_PAG));
+  const total = (j && j.total) || 0;
+  return {
+    items: mdCards(j, CAT_POR_PAG),
+    totalTxt: total ? String(total).replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " series" : "",
+    mas: page1 * CAT_POR_PAG < total,
+  };
+}
+
+// ------------------------------------------------ InManga (4ª fuente)
+// InManga es un sitio clásico de mangas en español: el listado se pide
+// por POST (un formulario), la página de una serie viene completa en
+// HTML y las páginas de un capítulo se construyen con los IDs que
+// trae el lector (igual que su extensión de Mihon).
+
+const IM_BASE = "https://inmanga.com";
+const IM_CDN = "https://cdn1.intomanga.com";
+const MAX_CAPS_IM = 300;
+
+async function imPostForm(path, q, sortby, skip, take) {
+  const r = await kino.fetch(IM_BASE + path, {
+    method: "POST",
+    headers: { Accept: "text/html" },
+    body: { form: {
+      "filter[generes][]": "-1",
+      "filter[queryString]": q || "",
+      "filter[skip]": String(skip || 0),
+      "filter[take]": String(take || 10),
+      "filter[sortby]": String(sortby || 1),
+      "filter[broadcastStatus]": "0",
+      "filter[onlyFavorites]": "false",
+      "d": "",
+    } },
+  });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con InManga. Inténtalo de nuevo.",
+  });
+  return await r.text();
+}
+
+function imCards(html, max) {
+  const out = [];
+  const seen = {};
+  const re = /<a\b[^>]*\bhref="([^"]*[/]ver[/]manga[/][^"]+)"[^>]*>([\s\S]{0,600}?)<[/]a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < max) {
+    let url = m[1];
+    if (/^https?:/i.test(url)) url = url.replace(/^https?:[/][/][^/]+/i, "");
+    if (seen[url]) continue;
+    seen[url] = 1;
+    const h4 = m[2].match(/<h4[^>]*m0[^>]*>([\s\S]{2,150}?)<[/]h4>/i);
+    const im = m[2].match(/<img\b[^>]*>/i);
+    let poster = "";
+    if (im) {
+      const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
+      if (p) {
+        poster = p[1];
+        if (poster.indexOf("//") === 0) poster = "https:" + poster;
+        else if (poster.indexOf("/") === 0) poster = IM_BASE + poster;
+      }
+    }
+    out.push({ url: url, title: h4 ? clean(h4[1]) : "Sin título", poster: poster });
+  }
+  log("IM tarjetas: " + out.length);
+  return out;
+}
+
+async function imBuscar(q) {
+  return imCards(await imPostForm("/manga/getMangasConsultResult", q, 1, 0, 30), 30);
+}
+
+async function imSerie(url) {
+  const r = await kino.fetch(IM_BASE + url, { headers: { Accept: "text/html" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con InManga. Inténtalo de nuevo.",
+  });
+  const html = await r.text();
+  const h1 = html.match(/<h1[^>]*>([\s\S]{2,150}?)<[/]h1>/i);
+  let poster = "";
+  const pm = html.match(/<div[^>]*col-md-3[\s\S]{0,800}?<img\b[^>]*\bsrc="([^"]+)"/i);
+  if (pm) poster = pm[1];
+  const dm = html.match(/<div[^>]*col-md-9[\s\S]{0,3000}?<div[^>]*panel-body[^>]*>([\s\S]{10,3000}?)<[/]div>/i);
+  const caps = [];
+  const seen = {};
+  const re = /href="([^"]*[/]ver[/]manga[/][a-z0-9-]+[/][^/"<]+[/][0-9a-f-]{36})"/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    let u = m[1];
+    if (/^https?:/i.test(u)) u = u.replace(/^https?:[/][/][^/]+/i, "");
+    if (seen[u]) continue;
+    seen[u] = 1;
+    const seg = u.split("/").filter(Boolean);
+    caps.push({ url: u, num: seg[3] || "" });
+  }
+  const vnum = {};
+  const caps2 = caps.filter(function (x) {
+    const k = x.num + "";
+    if (vnum[k]) return false;
+    vnum[k] = 1;
+    return true;
+  });
+  caps2.sort(function (a, b) { return parseFloat(b.num) - parseFloat(a.num); });
+  log("IM capítulos: " + caps2.length);
+  return {
+    meta: {
+      title: h1 ? clean(h1[1]) : "Sin título",
+      poster: poster,
+      overview: dm ? clean(dm[1].replace(/<[^>]*>/g, " ")).slice(0, 600) : "",
+    },
+    chapters: caps2,
+  };
+}
+
+async function imImages(chUrl) {
+  const guid = String(chUrl).split("/").filter(Boolean).pop().split("?")[0];
+  const r = await kino.fetch(IM_BASE + "/chapter/chapterIndexControls?identification=" + guid, { headers: { Accept: "text/html" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con InManga. Inténtalo de nuevo.",
+  });
+  const html = await r.text();
+  const chId = (html.match(/<input\b[^>]*\bid="ChapterIdentification"[^>]*\bvalue="([^"]+)"/i) ||
+    html.match(/<input\b[^>]*\bvalue="([^"]+)"[^>]*\bid="ChapterIdentification"/i) || [])[1] || "";
+  const mId = (html.match(/<input\b[^>]*\bid="MangaIdentification"[^>]*\bvalue="([^"]+)"/i) ||
+    html.match(/<input\b[^>]*\bvalue="([^"]+)"[^>]*\bid="MangaIdentification"/i) || [])[1] || "";
+  const ids = [];
+  const re1 = /<img\b[^>]*\bid="([^"]+)"[^>]*class="[^"]*ImageContainer/gi;
+  const re2 = /<img\b[^>]*class="[^"]*ImageContainer[^"]*"[^>]*\bid="([^"]+)"/gi;
+  let m;
+  while ((m = re1.exec(html)) !== null) ids.push(m[1]);
+  while ((m = re2.exec(html)) !== null) { if (ids.indexOf(m[1]) < 0) ids.push(m[1]); }
+  const out = [];
+  for (let i = 0; i < ids.length; i++) out.push(IM_CDN + "/i/m/" + mId + "/c/" + chId + "/o/" + ids[i] + ".jpg");
+  log("IM lector: " + out.length + " páginas");
+  return out;
+}
+
+async function imCatalog(page1) {
+  const html = await imPostForm("/manga/getMangasConsultResult", "", 1, (page1 - 1) * CAT_POR_PAG, CAT_POR_PAG);
+  const items = imCards(html, CAT_POR_PAG);
+  return { items: items, mas: items.length >= CAT_POR_PAG };
+}
+
+// ------------------------------------------------ ManhwaWeb (5ª fuente)
+// ManhwaWeb expone una API JSON pública (biblioteca, series y
+// capítulos). Su JSON a veces trae saltos de línea crudos dentro de
+// los números, así que se limpia antes de parsear; los enlaces de los
+// capítulos se sacan por regex del texto por si la API vuelve a
+// cambiar de forma. Las series se guardan como /<slug>_<id>, los
+// capítulos como /leer/<slug>-<num>_01 y el contenido +18 se descarta.
+
+const MW_API = "https://api.manhwaweb.com";
+const MAX_CAPS_MW = 300;
+
+async function mwGet(path) {
+  const r = await kino.fetch(MW_API + path, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con ManhwaWeb. Inténtalo de nuevo.",
+  });
+  try { return await r.json(); } catch (e) { return JSON.parse((await r.text()).replace(/[\u0000-\u001F]/g, "")); }
+}
+
+function mwCards(j, max) {
+  let arr;
+  if (j && Array.isArray(j.data)) arr = j.data;
+  else if (Array.isArray(j)) arr = j;
+  else if (j && Array.isArray(j.utimos_mangas_creados)) arr = j.utimos_mangas_creados;
+  else if (j && j.data && (Array.isArray(j.data.weekly) || Array.isArray(j.data.total))) arr = (j.data.weekly || []).concat(j.data.total || []);
+  else arr = [];
+  const out = [];
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const x = arr[i];
+    if (!x || !x._id) continue;
+    if (String(x._erotico || "no") === "si") continue;
+    const poster = String(x._imagen || "");
+    if (!/^https?:/i.test(poster)) continue;
+    out.push({ url: "/" + x._id, title: clean(x.name_esp || x.the_real_name || x._name || x._id), poster: poster });
+  }
+  log("MW tarjetas: " + out.length + " de " + arr.length);
+  return out;
+}
+
+async function mwBuscar(q) {
+  const j = await mwGet("/manhwa/library?buscar=" + encodeURIComponent(q) + "&page=0");
+  return mwCards(j, 30);
+}
+
+async function mwSerie(url) {
+  const id = String(url).replace(/^[/]/, "").replace(/[/]$/, "");
+  const r = await kino.fetch(MW_API + "/manhwa/see/" + id, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con ManhwaWeb. Inténtalo de nuevo.",
+  });
+  const text = await r.text();
+  let meta = { title: id, poster: "", overview: "" };
+  try {
+    const j = JSON.parse(text.replace(/[\u0000-\u001F]/g, ""));
+    const d = (j && j.data && j.data._id) ? j.data : j;
+    meta.title = clean(d.name_esp || d._name || d.the_real_name || id);
+    meta.poster = String(d._imagen || "");
+    meta.overview = clean(String(d.sinopsis || d._sinopsis || "")).slice(0, 600);
+  } catch (e) { log("MW detalle JSON roto: " + e); }
+  const caps = [];
+  const seen = {};
+  const re = /"(?:link|url)"\s*:\s*"([^"]*[/]leer[/][^"]+)"/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let u = m[1];
+    if (/^https?:/i.test(u)) u = u.replace(/^https?:[/][/][^/]+/i, "");
+    if (seen[u]) continue;
+    seen[u] = 1;
+    const seg = u.split("/").filter(Boolean);
+    const slug = seg[1] || "";
+    const nm = slug.match(/-([0-9]+(?:[.][0-9]+)?)(?:[_][0-9]+)?$/);
+    caps.push({ url: u, num: nm ? nm[1] : slug });
+  }
+  const vnum = {};
+  const caps2 = caps.filter(function (x) {
+    const k = x.num + "";
+    if (vnum[k]) return false;
+    vnum[k] = 1;
+    return true;
+  });
+  caps2.sort(function (a, b) { return parseFloat(b.num) - parseFloat(a.num); });
+  log("MW capítulos: " + caps2.length);
+  return { meta: meta, chapters: caps2 };
+}
+
+async function mwImages(chUrl) {
+  const slug = String(chUrl).replace(/^[/]leer[/]/, "").replace(/[/]$/, "");
+  const j = await mwGet("/chapters/see/" + slug);
+  let imgs = [];
+  if (j && j.chapter && Array.isArray(j.chapter.img)) imgs = j.chapter.img;
+  else if (j && j.data && Array.isArray(j.data.images)) imgs = j.data.images;
+  const out = [];
+  for (let i = 0; i < imgs.length; i++) if (/^https?:/i.test(imgs[i] || "")) out.push(imgs[i]);
+  log("MW lector: " + out.length + " páginas");
+  return out;
+}
+
+async function mwCatalog(page1) {
+  const j = await mwGet("/manhwa/library?buscar=&page=" + (page1 - 1));
+  return { items: mwCards(j, CAT_POR_PAG), mas: !!(j && j.next) };
 }
 
 // --------------------------------------- dimensiones de las páginas
@@ -703,7 +1080,7 @@ function fuenteCard(nombre, nota, evento, arg) {
 
 async function homeTree() {
   const f = fuenteActiva();
-  const html = await getHtmlDe(f, "/");
+  let html = "";
   let populares = [];
   let recientes = [];
   let mixtas = [];
@@ -711,7 +1088,26 @@ async function homeTree() {
   let titPopEn = "Popular in Spanish";
   let titRec = "Actualizados recientes";
   let titRecEn = "Recently updated";
-  if (f.id === "lectorxd") {
+  if (f.id === "mangadex") {
+    // MangaDex es una API: la portada son dos consultas (populares y
+    // series con capítulo reciente en español).
+    titPop = "Populares de MangaDex"; titPopEn = "Popular on MangaDex";
+    titRec = "Actualizados en MangaDex"; titRecEn = "Updated on MangaDex";
+    try { populares = mdCards(await mdJson(mdQuery("order[followedCount]=desc", 0, 20)), 20); } catch (e) { log("MD home pop: " + e); }
+    try { recientes = mdCards(await mdJson(mdQuery("order[latestUploadedChapter]=desc", 0, 20)), 20); } catch (e) { log("MD home rec: " + e); }
+  } else if (f.id === "inmanga") {
+    titPop = "Populares de InManga"; titPopEn = "Popular on InManga";
+    titRec = "Recientes de InManga"; titRecEn = "Recent on InManga";
+    try { populares = imCards(await imPostForm("/manga/getMangasConsultResult", "", 1, 0, 20), 20); } catch (e) { log("IM home pop: " + e); }
+    try { recientes = imCards(await imPostForm("/manga/getMangasConsultResult", "", 3, 0, 20), 20); } catch (e) { log("IM home rec: " + e); }
+  } else if (f.id === "manhwaweb") {
+    titPop = "Nuevos en ManhwaWeb"; titPopEn = "New on ManhwaWeb";
+    titRec = "Biblioteca de ManhwaWeb"; titRecEn = "ManhwaWeb library";
+    try { populares = mwCards(await mwGet("/manhwa/nuevos"), 20); } catch (e) { log("MW home: " + e); }
+    try { recientes = mwCards(await mwGet("/manhwa/library?buscar=&page=0"), 20); } catch (e) { log("MW biblio: " + e); }
+  } else {
+    html = await getHtmlDe(f, "/");
+    if (f.id === "lectorxd") {
     // La portada de LectorXd trae "Populares de hoy" y "Recientes"; si el
     // sitio cambia y no aparecen, se vuelve a la cuadrícula mixta.
     titPop = "Populares de hoy"; titPopEn = "Popular today";
@@ -738,6 +1134,7 @@ async function homeTree() {
       recientes = homeCards(html.slice(posU), 24);
     } else {
       mixtas = homeCards(html, 40);
+    }
     }
   }
   const vp = {};
@@ -1088,6 +1485,8 @@ const ESTADOS = [["", "Todos"], ["ongoing", "En emisión"], ["completed", "Final
 const TIPOS_LX = [["", "Todos"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"], ["one_shot", "One Shot"]];
 const ESTADOS_LX = [["", "Todos"], ["en_emision", "En emisión"], ["completado", "Completado"]];
 const ORDEN_LX = [["", "Recientes"], ["rating", "Mejor valorados"], ["views", "Más vistos"]];
+// Orden del catálogo de MangaDex (los nombres de orden de su API).
+const ORDEN_MD = [["followedCount", "Populares"], ["latestUploadedChapter", "Actualizados"], ["createdAt", "Recién añadidos"]];
 const CAT_POR_PAG = 30;
 const CAT_TOPE = 90;
 
@@ -1117,16 +1516,26 @@ function catalogTree(c) {
   const f = fuentePorId(c.f || "leercapitulo");
   const items = Array.isArray(c.items) ? c.items : [];
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
-  const hayMas = items.length < total && items.length < CAT_TOPE;
-  const drops = f.id === "lectorxd" ? [
-    catDrop("Tipo", "catType", TIPOS_LX, c.type, "catType"),
-    catDrop("Estado", "catStatus", ESTADOS_LX, c.status, "catStatus"),
-    catDrop("Orden", "catOrder", ORDEN_LX, c.order, "catOrder"),
-  ] : [
-    catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
-    catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
-    catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
-  ];
+  const hayMas = c.mas === undefined || c.mas === null
+    ? (items.length < total && items.length < CAT_TOPE)
+    : !!c.mas;
+  let drops = [];
+  if (f.id === "lectorxd") {
+    drops = [
+      catDrop("Tipo", "catType", TIPOS_LX, c.type, "catType"),
+      catDrop("Estado", "catStatus", ESTADOS_LX, c.status, "catStatus"),
+      catDrop("Orden", "catOrder", ORDEN_LX, c.order, "catOrder"),
+    ];
+  } else if (f.id === "mangadex") {
+    drops = [catDrop("Orden", "catOrder", ORDEN_MD, c.order, "catOrder")];
+  } else if (f.id === "leercapitulo") {
+    drops = [
+      catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
+      catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
+      catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
+    ];
+  }
+  // InManga y ManhwaWeb: catálogo simple, sin filtros.
   return {
     type: "Scaffold",
     appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + f.nombre,
@@ -1135,7 +1544,7 @@ function catalogTree(c) {
       actions: [] },
     body: { type: "SingleChildScrollView", key: "catBody", children: [{
       type: "Column", children: [
-        { type: "Row", gap: 8, padding: 16, wrap: true, children: drops },
+        drops.length ? { type: "Row", gap: 8, padding: 16, wrap: true, children: drops } : null,
         c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
           textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
         items.length ? gridOf(items, VACIO_SERIES) :
@@ -1161,11 +1570,25 @@ function catalogTree(c) {
 async function cargarCatalogo(cat, page, conRuta) {
   const f = fuenteActiva();
   const page1 = Math.max(1, parseInt(page, 10) || 1);
-  const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
-  const nuevos = cardsDe(f, html, CAT_POR_PAG);
-  const tm = html.match(/([\d][\d,]*)\s*series/i);
-  const num = tm ? tm[1].replace(/[^0-9]/g, "") : "";
-  let totalTxt = num ? num.replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " series" : "";
+  let nuevos = [];
+  let totalTxt = "";
+  let mas;
+  if (f.id === "mangadex") {
+    const r2 = await mdCatalog(cat, page1);
+    nuevos = r2.items; totalTxt = r2.totalTxt; mas = r2.mas;
+  } else if (f.id === "inmanga") {
+    const r2 = await imCatalog(page1);
+    nuevos = r2.items; mas = r2.mas;
+  } else if (f.id === "manhwaweb") {
+    const r2 = await mwCatalog(page1);
+    nuevos = r2.items; mas = r2.mas;
+  } else {
+    const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
+    nuevos = cardsDe(f, html, CAT_POR_PAG);
+    const tm = html.match(/([\d][\d,]*)\s*series/i);
+    const num = tm ? tm[1].replace(/[^0-9]/g, "") : "";
+    if (num) totalTxt = num.replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " series";
+  }
   const prevCat = page1 > 1 ? getJson("cat", null) : null;
   const prev = prevCat && Array.isArray(prevCat.items) &&
     (prevCat.f || "leercapitulo") === f.id &&
@@ -1179,7 +1602,8 @@ async function cargarCatalogo(cat, page, conRuta) {
     .filter((x) => (!vistos[x.url] && (vistos[x.url] = 1)))
     .slice(0, CAT_TOPE);
   setJson("cat", { f: f.id, items: items, page: page1, genre: cat.genre || "",
-    type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt });
+    type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt,
+    mas: mas === undefined ? null : mas });
   log("catálogo " + f.nombre + " pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
     " series, filtros " + (cat.genre || cat.type || "-") + "/" + (cat.status || "-") + "/" + (cat.order || "-"));
   const resp = { state: { catTk: Date.now() } };
@@ -1298,8 +1722,17 @@ export async function screenEvent(ev) {
       if (idx < 0 || idx >= d.chapters.length) return null;
       const ch = d.chapters[idx];
       const fSer = fuenteDeUrl(d.url) || fuenteActiva();
-      const html = await getHtmlDe(fSer, ch.url);
-      let images = readerImagesDe(fSer, html);
+      let images = [];
+      if (fSer.id === "mangadex") {
+        images = await mdImages(ch.url);
+      } else if (fSer.id === "inmanga") {
+        images = await imImages(ch.url);
+      } else if (fSer.id === "manhwaweb") {
+        images = await mwImages(ch.url);
+      } else {
+        const html = await getHtmlDe(fSer, ch.url);
+        images = readerImagesDe(fSer, html);
+      }
       if (!images.length) {
         return { toast: "No se pudieron leer las páginas de este capítulo." };
       }
@@ -1325,11 +1758,20 @@ export async function screenEvent(ev) {
       const q = String((ev.value && ev.value.q) || "").trim();
       if (!q) return { toast: "Escribe un título." };
       const f = fuenteActiva();
-      const ruta = f.id === "lectorxd"
-        ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(q)
-        : "/?s=" + encodeURIComponent(q);
-      const html = await getHtmlDe(f, ruta);
-      const results = cardsDe(f, html, 30);
+      let results = [];
+      if (f.id === "mangadex") {
+        results = await mdSearch(q);
+      } else if (f.id === "inmanga") {
+        results = await imBuscar(q);
+      } else if (f.id === "manhwaweb") {
+        results = await mwBuscar(q);
+      } else {
+        const ruta = f.id === "lectorxd"
+          ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(q)
+          : "/?s=" + encodeURIComponent(q);
+        const html = await getHtmlDe(f, ruta);
+        results = cardsDe(f, html, 30);
+      }
       return { state: { results: results, resultsQ: q },
         toast: results.length ? results.length + " resultados" : "Sin resultados" };
     }
@@ -1377,10 +1819,27 @@ export async function screenEvent(ev) {
 async function cargarSerie(url, conRuta) {
   const f = fuenteDeUrl(url);
   if (!f) return { toast: "Esa serie no es de ninguna fuente conocida." };
-  const html = await getHtmlDe(f, url);
   let meta;
   let chapters;
-  if (f.id === "lectorxd") {
+  if (f.id === "mangadex") {
+    const id = url.replace(/^[/]title[/]/, "").replace(/[/]$/, "");
+    meta = await mdMeta(id);
+    const allCaps = await mdCaps(id);
+    meta.totalCaps = allCaps.length;
+    chapters = allCaps.slice(0, MAX_CAPS_MD).slice().reverse();
+  } else if (f.id === "inmanga") {
+    const s = await imSerie(url);
+    meta = s.meta;
+    meta.totalCaps = s.chapters.length;
+    chapters = s.chapters.slice(0, MAX_CAPS_IM).slice().reverse();
+  } else if (f.id === "manhwaweb") {
+    const s = await mwSerie(url);
+    meta = s.meta;
+    meta.totalCaps = s.chapters.length;
+    chapters = s.chapters.slice(0, MAX_CAPS_MW).slice().reverse();
+  } else {
+    const html = await getHtmlDe(f, url);
+    if (f.id === "lectorxd") {
     meta = metaLX(html);
     const allCaps = capsLX(html);
     meta.totalCaps = allCaps.length;
@@ -1390,6 +1849,7 @@ async function cargarSerie(url, conRuta) {
     const allCaps = chapterList(html);
     meta.totalCaps = allCaps.length;
     chapters = allCaps.slice(0, MAX_CAPS).slice().reverse();
+  }
   }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " capítulos");
   if (!chapters.length) return { toast: "No se encontraron capítulos." };
