@@ -1,11 +1,11 @@
-// MangaTrack v0.3.3 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.4 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.3";
+const VERSION = "0.3.4";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -19,7 +19,7 @@ const FUENTES = [
   { id: "lectorxd", nombre: "LectorXd", base: "https://lectorxd.com" },
   { id: "mangadex", nombre: "MangaDex", base: "https://api.mangadex.org" },
   { id: "inmanga", nombre: "InManga", base: "https://inmanga.com" },
-  { id: "manhwaweb", nombre: "ManhwaWeb", base: "https://manhwaweb.com" },
+  { id: "mangaoni", nombre: "MangaOni", base: "https://manga-oni.com" },
 ];
 
 function fuentePorId(id) {
@@ -44,16 +44,18 @@ function fuenteDeUrl(url) {
   if (/^[/]title[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(u)) return fuentePorId("mangadex");
   // InManga: /ver/manga/<slug>/<uuid de la serie>.
   if (/^[/]ver[/]manga[/][a-z0-9-]+[/][0-9a-f]{8}-[0-9a-f]{4}-/i.test(u)) return fuentePorId("inmanga");
-  // ManhwaWeb: el slug de cada serie termina en _<timestamp>.
-  if (/^[/][a-z0-9-]+_[0-9]{10,}[/]?$/.test(u)) return fuentePorId("manhwaweb");
+  // MangaOni: sus URL llevan el prefijo /oni para no chocar con las de
+  // LectorXd, que también usa /manga/<slug>/.
+  if (/^[/]oni[/]/.test(u)) return fuentePorId("mangaoni");
   return null;
 }
 
 // ------------------------------------------------------------------ red
 
 async function getHtmlDe(f, path) {
-  // Cloudflare (LectorXd) rechaza peticiones sin User-Agent: se envían
-  // cabeceras de navegador para que no las confunda con bots.
+  // Cloudflare (LectorXd y MangaOni) rechaza peticiones sin User-Agent:
+  // se envían cabeceras de navegador para que no las confunda con bots
+  // (receta verificada en la app de escritorio KageView, que lee ambos).
   const hdrs = f.id === "lectorxd"
     ? {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -61,10 +63,19 @@ async function getHtmlDe(f, path) {
         "User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
         Referer: f.base + "/",
       }
+    : f.id === "mangaoni"
+    ? {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-419,es;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: f.base + "/",
+      }
     : { Accept: "text/html" };
+  // MangaOni guarda sus series con el prefijo /oni: al pedir se quita.
+  const ruta = f.id === "mangaoni" ? moPath(path) : path;
   let r;
   try {
-    r = await kino.fetch(f.base + path, { headers: hdrs });
+    r = await kino.fetch(f.base + ruta, { headers: hdrs });
   } catch (e) {
     // La petición ni siquiera recibió respuesta (conexión rechazada,
     // TLS cortado por el filtro anti-bots): queda en el log con su
@@ -81,6 +92,8 @@ async function getHtmlDe(f, path) {
     throw kino.error("network", "HTTP " + r.status, {
       userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
         ? "LectorXd bloqueó la página (HTTP " + r.status + "). Si es una serie +18, la cierra sin cuenta; si no, es su filtro anti-bots. Prueba otra serie."
+        : f.id === "mangaoni" && r.status === 403
+        ? "MangaOni bloqueó la página (HTTP 403): es su protección anti-bots. Vuelve a intentarlo o prueba otra serie."
         : "No se pudo conectar con " + f.nombre + " (HTTP " + r.status + "). Inténtalo de nuevo.",
     });
   }
@@ -541,7 +554,9 @@ function imgsLX(html) {
 }
 
 function readerImagesDe(f, html) {
-  return f.id === "lectorxd" ? imgsLX(html) : readerImages(html);
+  if (f.id === "lectorxd") return imgsLX(html);
+  if (f.id === "mangaoni") return moImages(html);
+  return readerImages(html);
 }
 
 // ------------------------------------------------ MangaDex (3ª fuente)
@@ -974,6 +989,191 @@ async function mwCatalog(page1) {
   return { items: mwCards(j, CAT_POR_PAG), mas: !!(j && j.next) };
 }
 
+// ------------------------------------------------ MangaOni (5ª fuente)
+// MangaOni es un WordPress con Cloudflare que solo abre a peticiones
+// presentadas como navegador de escritorio (receta verificada en la app
+// KageView, que la lee con estas mismas cabeceras). Las series viven en
+// /<tipo>/<slug>/ y los capítulos en /lector/<slug>/<id>/; las páginas
+// de un capítulo vienen escondidas en un bloque base64 «var unicap»
+// con la forma <dir>||<página1>,<página2>,…||<siguiente>. Sus URL se
+// guardan con el prefijo /oni para no chocar con las de LectorXd, que
+// también usa /manga/<slug>/.
+
+const MAX_CAPS_MO = 300;
+const MO_BASE = "https://manga-oni.com";
+
+// Decodificador base64 (Kino no trae atob en el sandbox del plugin).
+function b64dec(s) {
+  const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const src = String(s || "").replace(/[^A-Za-z0-9+/]/g, "");
+  let out = "";
+  let bits = 0;
+  let n = 0;
+  for (let i = 0; i < src.length; i++) {
+    const v = T.indexOf(src.charAt(i));
+    if (v < 0) continue;
+    bits = (bits << 6) | v;
+    n += 6;
+    if (n >= 8) {
+      n -= 8;
+      out += String.fromCharCode((bits >> n) & 255);
+    }
+  }
+  return out;
+}
+
+function moPath(url) {
+  let u = String(url || "");
+  if (u.indexOf("/oni") === 0) u = u.slice(4);
+  return u;
+}
+
+// Portadas relativas del directorio resueltas contra el dominio propio.
+function moAbs(u) {
+  if (!u) return "";
+  if (u.indexOf("//") === 0) return "https:" + u;
+  if (u.indexOf("/") === 0) return MO_BASE + u;
+  if (/^https?:/i.test(u)) return u;
+  return MO_BASE + "/" + u;
+}
+
+// Tarjetas del directorio de MangaOni: cada serie es un <a itemprop="url">
+// con la portada en un <img> (data-src o src; el default.gif es la
+// silueta) y las +18 marcadas con <b id="in" class="c1">.
+function moCards(html, max) {
+  const out = [];
+  const re = /<a\b[^>]*itemprop="url"[^>]*href="([^"]+)"[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < max) {
+    const href = m[1];
+    if (!/[/](?:manga|manhwa|manhua|one[-_]shot|novela)[/]/i.test(href)) continue;
+    const start = m.index + m[0].length;
+    let inner = html.slice(start, start + 2000);
+    const corte = inner.search(/<a\b/i);
+    if (corte > 0) inner = inner.slice(0, corte);
+    // +18: fuera (Kino es un salón familiar).
+    if (/<b\b[^>]*(?:id="in"[^>]*class="[^"]*c1|class="[^"]*c1[^>]*id="in")/i.test(inner)) continue;
+    let poster = "";
+    let title = "";
+    const im = inner.match(/<img\b[^>]*>/i);
+    if (im) {
+      const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
+      // La silueta default.gif marca entradas sin portada (a menudo
+      // contenido oculto): fuera del directorio, como hace KageView.
+      if (p && /default[.]gif/i.test(p[1])) continue;
+      if (p) poster = moAbs(p[1]);
+      const a = im[0].match(/\balt="([^"]*)"/i);
+      if (a && a[1]) title = clean(a[1]);
+    }
+    const h = inner.match(/<h[23456][^>]*>([\s\S]{2,150}?)<\/h[23456]>/i);
+    if (h) {
+      const t = clean(h[1].replace(/<[^>]*>/g, " "));
+      if (t) title = t;
+    }
+    let path = href.replace(/^https?:[/][/][^/]+/i, "");
+    if (!/\/$/.test(path)) path += "/";
+    if (!title) {
+      const seg = path.split("/").filter(Boolean);
+      title = seg[1] ? seg[1].replace(/-/g, " ") : "Sin título";
+    }
+    out.push({ url: "/oni" + path, title: title, poster: poster });
+  }
+  log("MO tarjetas: " + out.length);
+  return out;
+}
+
+async function moCatalog(page1) {
+  const f = fuentePorId("mangaoni");
+  const html = await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=" + page1);
+  const items = moCards(html, 18);
+  return { items: items, mas: items.length >= 18 };
+}
+
+async function moBuscar(q) {
+  const f = fuentePorId("mangaoni");
+  const html = await getHtmlDe(f, "/buscar/?q=" + encodeURIComponent(q));
+  return moCards(html, 30);
+}
+
+// La página de una serie: título (h1), sinopsis (meta description) y
+// capítulos de #c_list. Cada entrada es un <a> a /lector/<slug>/<id>/
+// con el número en un .timeago (data-num) y los ids de sus páginas en
+// <img data-num>: la página del lector se pide con el slug y el primer
+// id (receta de KageView).
+async function moSerie(url) {
+  const f = fuentePorId("mangaoni");
+  const html = await getHtmlDe(f, moPath(url));
+  let title = "";
+  const h1 = html.match(/<h1\b[^>]*entry-title[^>]*>([\s\S]{2,200}?)<\/h1>/i);
+  if (h1) title = clean(h1[1].replace(/<[^>]*>/g, " "));
+  if (!title) {
+    const og = html.match(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i) ||
+               html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/i);
+    if (og) title = clean(og[1]);
+  }
+  let poster = "";
+  const ogi = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i) ||
+              html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:image"/i);
+  if (ogi) poster = ogi[1];
+  let overview = "";
+  const md = html.match(/<meta\b[^>]*name="description"[^>]*content="([^"]*)"/i) ||
+             html.match(/<meta\b[^>]*content="([^"]*)"[^>]*name="description"/i);
+  if (md) overview = clean(md[1]).slice(0, 600);
+  const meta = { title: title || "Serie", poster: poster, overview: overview };
+
+  const caps = [];
+  const seen = {};
+  const re = /<a\b[^>]*href="([^"]*[/]lector[/][^"]+)"[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && caps.length < 600) {
+    const href = m[1].replace(/^https?:[/][/][^/]+/i, "");
+    const seg = href.split("/").filter(Boolean); // [lector, slug, id]
+    if (seg.length < 3 || seg[0] !== "lector") continue;
+    const slug = seg[1];
+    const start = m.index + m[0].length;
+    let inner = html.slice(start, start + 2500);
+    const corte = inner.search(/<a\b/i);
+    if (corte > 0) inner = inner.slice(0, corte);
+    let num = "";
+    const tn = inner.match(/class="[^"]*timeago[^"]*"[^>]*data-num="([0-9]+(?:[.][0-9]+)?)"/i) ||
+               inner.match(/data-num="([0-9]+(?:[.][0-9]+)?)"[^>]*class="[^"]*timeago[^"]*"/i);
+    if (tn) num = tn[1];
+    if (!num) {
+      const ct = inner.match(/cap[ií]tulo\s*(?: nº?)?\s*([0-9]+(?:[.][0-9]+)?)/i);
+      if (ct) num = ct[1];
+    }
+    let pageId = "";
+    const pn = inner.match(/<img\b[^>]*data-num="([0-9]+)"/i);
+    if (pn) pageId = pn[1];
+    const chUrl = "/oni/lector/" + slug + "/" + (pageId || seg[2]) + "/";
+    if (seen[chUrl]) continue;
+    seen[chUrl] = 1;
+    if (!num) num = String(caps.length + 1);
+    caps.push({ url: chUrl, num: num });
+  }
+  // Del más nuevo al más viejo, como en las demás fuentes.
+  caps.sort((a, b) => (parseFloat(b.num) || 0) - (parseFloat(a.num) || 0) ||
+    String(b.num).localeCompare(String(a.num)));
+  log("MO capítulos: " + caps.length);
+  return { meta: meta, chapters: caps };
+}
+
+// Las páginas del capítulo vienen en el bloque base64 «var unicap».
+function moImages(html) {
+  const m = html.match(/var\s+unicap\s*=\s*'([^']+)'/);
+  if (!m) {
+    log("MO lector sin unicap (" + html.length + " chars)");
+    return [];
+  }
+  const dec = b64dec(m[1]);
+  const parts = dec.split("||");
+  const dir = (parts[0] || "").trim();
+  const pags = (parts[1] || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const out = pags.map((p) => dir + p);
+  log("MO lector: " + out.length + " páginas");
+  return out;
+}
+
 // --------------------------------------- dimensiones de las páginas
 // El Image de Kino no tiene modo «ajustar»: SIEMPRE rellena su caja
 // recortando lo que sobre (cover), con o sin width/height (la 0.1.8
@@ -1222,11 +1422,13 @@ async function homeTree() {
       titPop = "Últimas actualizaciones"; titPopEn = "Latest updates";
       try { populares = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
     }
-  } else if (f.id === "manhwaweb") {
-    titPop = "Nuevos en ManhwaWeb"; titPopEn = "New on ManhwaWeb";
-    titRec = "Biblioteca de ManhwaWeb"; titRecEn = "ManhwaWeb library";
-    try { populares = mwCards(await mwGet("/manhwa/nuevos"), 20); } catch (e) { log("MW home: " + e); }
-    try { recientes = mwCards(await mwGet("/manhwa/library?buscar=&page=0"), 20); } catch (e) { log("MW biblio: " + e); }
+  } else if (f.id === "mangaoni") {
+    // El directorio ordenado por visitas (populares) o por id (novedades),
+    // sin contenido +18, 18 series por página.
+    titPop = "Populares de MangaOni"; titPopEn = "Popular on MangaOni";
+    titRec = "Novedades de MangaOni"; titRecEn = "New on MangaOni";
+    try { populares = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home pop: " + e); }
+    try { recientes = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home rec: " + e); }
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
@@ -1338,8 +1540,8 @@ function detalleSinCaps(url) {
     return "MangaDex no tiene capítulos legibles en español de esta serie: sus capítulos en español suelen ser solo enlaces a otras webs (series licenciadas) o la serie está retirada. Prueba esta serie en otra fuente.";
   if (f && f.id === "inmanga")
     return "InManga no devolvió capítulos de esta serie. Si vuelve a pasar, mándame el log de depuración.";
-  if (f && f.id === "manhwaweb")
-    return "ManhwaWeb no devolvió capítulos de esta serie. Prueba otra serie.";
+  if (f && f.id === "mangaoni")
+    return "MangaOni no devolvió capítulos de esta serie: si es +18, su puerta la bloquea; si no, mándame el log de depuración.";
   return "No se encontraron capítulos para esta serie.";
 }
 
@@ -1723,8 +1925,8 @@ async function cargarCatalogo(cat, page, conRuta) {
   } else if (f.id === "inmanga") {
     const r2 = await imCatalog(page1);
     nuevos = r2.items; mas = r2.mas;
-  } else if (f.id === "manhwaweb") {
-    const r2 = await mwCatalog(page1);
+  } else if (f.id === "mangaoni") {
+    const r2 = await moCatalog(page1);
     nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
@@ -1916,8 +2118,8 @@ export async function screenEvent(ev) {
         results = await mdSearch(q);
       } else if (f.id === "inmanga") {
         results = await imBuscar(q);
-      } else if (f.id === "manhwaweb") {
-        results = await mwBuscar(q);
+      } else if (f.id === "mangaoni") {
+        results = await moBuscar(q);
       } else {
         const ruta = f.id === "lectorxd"
           ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(q)
@@ -1990,11 +2192,11 @@ async function cargarSerie(url, conRuta) {
     meta = s.meta;
     meta.totalCaps = s.chapters.length;
     chapters = s.chapters.slice(0, MAX_CAPS_IM).slice().reverse();
-  } else if (f.id === "manhwaweb") {
-    const s = await mwSerie(url);
+  } else if (f.id === "mangaoni") {
+    const s = await moSerie(url);
     meta = s.meta;
     meta.totalCaps = s.chapters.length;
-    chapters = s.chapters.slice(0, MAX_CAPS_MW).slice().reverse();
+    chapters = s.chapters.slice(0, MAX_CAPS_MO);
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
