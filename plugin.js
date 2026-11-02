@@ -1,11 +1,11 @@
-// MangaTrack v0.3.2 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.3 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.2";
+const VERSION = "0.3.3";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -62,7 +62,18 @@ async function getHtmlDe(f, path) {
         Referer: f.base + "/",
       }
     : { Accept: "text/html" };
-  const r = await kino.fetch(f.base + path, { headers: hdrs });
+  let r;
+  try {
+    r = await kino.fetch(f.base + path, { headers: hdrs });
+  } catch (e) {
+    // La petición ni siquiera recibió respuesta (conexión rechazada,
+    // TLS cortado por el filtro anti-bots): queda en el log con su
+    // causa y la persona recibe un mensaje honesto.
+    log(f.id + " conexión fallida en " + path + ": " + ((e && e.message) || e));
+    throw kino.error("network", "conexión: " + ((e && e.message) || e), {
+      userMessage: "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
+    });
+  }
   if (!r.ok) {
     // El estado se anota en el log: con él se distingue un bloqueo +18
     // (403/451) de una caída real de la red.
@@ -850,10 +861,15 @@ async function imImages(chUrl) {
   return out;
 }
 
+// InManga entrega como máximo 20 series por petición (con 30 devolvía 20
+// y el catálogo creía que la lista se había acabado). Las páginas del
+// catálogo usan 20 para que el salto cuadre con lo que el sitio sirve.
+const IM_POR_PAG = 20;
+
 async function imCatalog(page1) {
-  const html = await imPostForm("/manga/getMangasConsultResult", "", 1, (page1 - 1) * CAT_POR_PAG, CAT_POR_PAG);
-  const items = imCards(html, CAT_POR_PAG);
-  return { items: items, mas: items.length >= CAT_POR_PAG };
+  const html = await imPostForm("/manga/getMangasConsultResult", "", 1, (page1 - 1) * IM_POR_PAG, IM_POR_PAG);
+  const items = imCards(html, IM_POR_PAG);
+  return { items: items, mas: items.length >= IM_POR_PAG };
 }
 
 // ------------------------------------------------ ManhwaWeb (5ª fuente)
@@ -1729,6 +1745,13 @@ async function cargarCatalogo(cat, page, conRuta) {
   const items = prev.concat(nuevos)
     .filter((x) => (!vistos[x.url] && (vistos[x.url] = 1)))
     .slice(0, CAT_TOPE);
+  // Guardia: si una página siguiente no trajo ni una serie nueva (el
+  // sitio ignoró el salto o la lista se acabó), no se ofrece otro
+  // "Cargar más" en bucle.
+  if (page1 > 1 && prev.length && items.length <= prev.length) {
+    mas = false;
+    log("catálogo " + f.nombre + ": la pág. " + page1 + " no trajo series nuevas; fin de la lista");
+  }
   setJson("cat", { f: f.id, items: items, page: page1, genre: cat.genre || "",
     type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt,
     mas: mas === undefined ? null : mas });
@@ -1761,7 +1784,9 @@ export async function screen(ev) {
       return catalogTree(c);
     }
   } catch (e) {
-    return errorTree("No se pudo cargar (" + ((e && e.code) || "error") + ").");
+    log("error en pantalla: " + ((e && e.message) || e));
+    return errorTree((e && e.userMessage) ||
+      ("No se pudo cargar (" + ((e && e.code) || "error") + ")."));
   }
   const body = await homeTree();
   return {
@@ -1938,6 +1963,11 @@ export async function screenEvent(ev) {
     return null;
   } catch (e) {
     log("error en evento " + name + ": " + ((e && e.message) || e));
+    // Si el fallo traía un mensaje para la persona (bloqueo +18, HTTP,
+    // conexión rechazada), ese mensaje gana al genérico: antes se
+    // perdía aquí y la persona solo veía "Algo falló".
+    const um = (e && e.userMessage) || "";
+    if (um) return { toast: um };
     return { toast: "Algo falló (" + ((e && e.code) || "error") + ")." };
   }
 }
