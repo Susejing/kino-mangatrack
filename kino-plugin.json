@@ -1,6 +1,6 @@
 {"id":"mangatrack",
 "name":"MangaTrack",
-"version": "0.3.5",
+"version": "0.3.6",
 "creator":"Susejing",
 "description":"Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni).",
 "apiVersion":14,
@@ -23,5 +23,6 @@
   "cdn1.intomanga.com",
   "assets.intomanga.com",
   "manga-oni.com",
-  "www.manga-oni.com"],
+  "www.manga-oni.com",
+  "*.manga-oni.com"],
 "capabilities":["screen", "shared"],"debug":true,"screen":{"label":"MangaTrack","labelEn":"MangaTrack","menuOpens":"screen","opensFrom":["menu","settings"]}}
