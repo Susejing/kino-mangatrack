@@ -1,11 +1,11 @@
-// MangaTrack v0.1.15 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.16 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.15";
+const VERSION = "0.1.16";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -677,7 +677,7 @@ function detailTree(state) {
   }
   return {
     type: "Scaffold",
-    appBar: { title: String(meta.title || "Serie").slice(0, 30),
+    appBar: { type: "AppBar", key: "barDetail", title: String(meta.title || "Serie").slice(0, 30),
       leading: { type: "IconButton", key: "backFromDetail", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -831,7 +831,7 @@ function readerTree(state) {
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: { title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
+    appBar: { type: "AppBar", key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
@@ -847,7 +847,7 @@ function searchTree(state) {
   const results = Array.isArray(state.results) ? state.results : null;
   return {
     type: "Scaffold",
-    appBar: { title: "Buscar manga", titleEn: "Search manga", actions: [] },
+    appBar: { type: "AppBar", key: "barSearch", title: "Buscar manga", titleEn: "Search manga", actions: [] },
     body: { type: "SingleChildScrollView", key: "searchBody", children: [{
       type: "Column", children: [
         { type: "Form", key: "search", onSubmitted: "search", gap: 8, padding: 16, children: [
@@ -913,7 +913,7 @@ function catalogTree(c) {
   const hayMas = items.length < total && items.length < CAT_TOPE;
   return {
     type: "Scaffold",
-    appBar: { title: "Catálogo · " + FUENTE,
+    appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + FUENTE,
       leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
@@ -999,7 +999,7 @@ export async function screen(ev) {
   const body = await homeTree();
   return {
     type: "Scaffold",
-    appBar: { title: "MangaTrack",
+    appBar: { type: "AppBar", key: "barHome", title: "MangaTrack",
       actions: [
         { type: "IconButton", icon: "search", key: "goSearch",
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },
