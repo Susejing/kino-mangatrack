@@ -1,11 +1,11 @@
-// MangaTrack v0.3.5 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.6 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.5";
+const VERSION = "0.3.6";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -884,7 +884,10 @@ const IM_POR_PAG = 20;
 async function imCatalog(page1) {
   const html = await imPostForm("/manga/getMangasConsultResult", "", 1, (page1 - 1) * IM_POR_PAG, IM_POR_PAG);
   const items = imCards(html, IM_POR_PAG);
-  return { items: items, mas: items.length >= IM_POR_PAG };
+  // Mientras la página traiga series nuevas hay más que pedir: la
+  // guardia de cargarCatalogo corta si una página no aporta series
+  // nuevas (antes el botón desaparecía con 19 de 20 series).
+  return { items: items, mas: items.length > 0 };
 }
 
 // ------------------------------------------------ ManhwaWeb (5ª fuente)
@@ -1112,7 +1115,10 @@ async function moCatalog(page1) {
   const f = fuentePorId("mangaoni");
   const html = await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=" + page1);
   const items = moCards(html, 18);
-  return { items: items, mas: items.length >= 18 };
+  // Mientras traiga series, se ofrece "Cargar más" (el directorio no
+  // siempre llena 18: hay saltadas por +18 o sin portada); la guardia
+  // de cargarCatalogo corta cuando una página no aporta nada nuevo.
+  return { items: items, mas: items.length > 0 };
 }
 
 async function moBuscar(q) {
@@ -1137,6 +1143,12 @@ async function moSerie(url) {
                html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/i);
     if (og) title = clean(og[1]);
   }
+  // El sitio rellena títulos con su eslogan de buscador («La serie —
+  // leer manga en línea gratis español | MangaOni»): fuera.
+  title = title
+    .replace(/\s*[—–-]+\s*leer manga en l[ií]nea[^|]*/i, "")
+    .replace(/\s*[|]\s*MangaOni\s*$/i, "")
+    .trim();
   let poster = "";
   const ogi = html.match(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i) ||
               html.match(/<meta[^>]*content="([^"]*)"[^>]*property="og:image"/i);
@@ -1204,7 +1216,12 @@ function moImages(html) {
   const pags = raw.indexOf('","') >= 0 ? raw.split('","') : raw.split(",");
   const limpias = pags.map((x) => x.replace(/^["']+|["']+$/g, "").trim()).filter(Boolean);
   const out = limpias.map((p) => dir + p);
-  log("MO lector: " + out.length + " páginas");
+  if (out.length && out[0]) {
+    const host = out[0].replace(/^https?:[/][/]/, "").split("/")[0];
+    log("MO lector: " + out.length + " páginas (imágenes en " + host + ")");
+  } else {
+    log("MO lector: 0 páginas");
+  }
   return out;
 }
 
