@@ -1,11 +1,11 @@
-// MangaTrack v0.1.13 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.14 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
-// Una sola pantalla con rutas (inicio, serie, lector, buscar) y un
+// Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.13";
+const VERSION = "0.1.14";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -45,6 +45,17 @@ function absoluta(u) {
 function homeCards(html, max) {
   const out = [];
   const seen = {};
+  // Títulos de respaldo: en el catálogo las portadas no traen alt y el
+  // texto del enlace es la insignia del tipo ("Manga"); el título de
+  // verdad vive en OTRO enlace de texto puro a la misma serie.
+  const titulos = {};
+  const reT = /<a[^>]+href="([^"]*[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/])"[^>]*>([^<]{2,90})<[/]a>/gi;
+  let mt;
+  while ((mt = reT.exec(html)) !== null) {
+    const u = mt[1].replace(/^https?:[/][/](?:www[.])?leercapitulo[.]co/i, "");
+    const t = clean(mt[2]);
+    if (t && !/^(manga|manhwa|manhua)$/i.test(t) && !titulos[u]) titulos[u] = t;
+  }
   const reA = /<a[^>]+href="([^"]*[/]manga[/][a-z0-9]{4,}[/][a-z0-9-]+[/])"[^>]*>([\s\S]{0,600}?)<[/]a>/gi;
   let m;
   while ((m = reA.exec(html)) !== null) {
@@ -59,13 +70,17 @@ function homeCards(html, max) {
       const p = tag.match(/\b(?:data-src|data-lazy-src|src)="([^"]+)"/i);
       if (p) poster = absoluta(p[1]);
       const a = tag.match(/\balt="([^"]*)"/i) || tag.match(/\btitle="([^"]*)"/i);
-      if (a) title = clean(a[1]);
+      // El alt de las portadas dice "Portada de <título>": se quita el
+      // prefijo para que la tarjeta muestre solo el título de la serie.
+      if (a) title = clean(a[1]).replace(/^portada de\s+/i, "");
     }
     if (!title) {
       const texto = clean(inner.replace(/<[^>]*>/g, " "));
       if (texto && texto.length <= 90) title = texto;
     }
     if (!title) title = url.split("/").filter(Boolean).pop() || url;
+    const slug = url.split("/").filter(Boolean).pop() || url;
+    if ((title === slug || /^(manga|manhwa|manhua)$/i.test(title)) && titulos[url]) title = titulos[url];
     if (poster && !/logo|banner|icon|avatar|placeholder|ads?[-_/]/i.test(poster)) {
       seen[url] = 1;
       out.push({ url: url, title: title, poster: poster });
@@ -498,10 +513,49 @@ const VACIO_SERIES = { type: "emptyState", icon: "list",
 const VACIO_BUSQUEDA = { type: "emptyState", icon: "search",
   title: "Sin resultados.", titleEn: "No results." };
 
+function railOf(titulo, tituloEn, items, key, prefix) {
+  if (!items || !items.length) return [];
+  return [
+    { type: "Text", text: titulo, textEn: tituloEn, style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true)) }] },
+  ];
+}
+
+function fuenteCard(nombre, nota, activa) {
+  return { type: "Card", key: "fuente-" + nombre.replace(/[^a-z0-9]/gi, ""), flush: true,
+    onTap: { event: activa ? "fuenteActual" : "fuentePronto", arg: nombre },
+    children: [
+      { type: "Text", text: nombre, textEn: nombre, style: "h3", padding: 16 },
+      { type: "Text", text: nota, textEn: nota, style: "caption", color: "muted", padding: 16 },
+    ] };
+}
+
 async function homeTree() {
   const html = await getHtml("/");
-  const items = homeCards(html, 40);
-  if (!items.length) return VACIO_SERIES;
+  // La portada del sitio trae tres secciones (Tendencias, Populares,
+  // Ultimos mangas): se reparte el HTML por sus encabezados y cada rail
+  // se llena con la suya. Si el sitio cambia y no aparecen, se vuelve a
+  // la cuadrícula mixta de siempre.
+  const posT = html.search(/tendencias/i);
+  const posP = html.search(/populares/i);
+  const posU = html.search(/ultimos\s+mangas/i);
+  let populares = [];
+  let recientes = [];
+  let mixtas = [];
+  if (posT >= 0 && posP > posT && posU > posP) {
+    populares = homeCards(html.slice(posP, posU), 10)
+      .concat(homeCards(html.slice(posT, posP), 24));
+    recientes = homeCards(html.slice(posU), 24);
+    const vp = {};
+    populares = populares.filter((x) => (!vp[x.url] && (vp[x.url] = 1)));
+    const vr = {};
+    recientes = recientes.filter((x) => (!vr[x.url] && (vr[x.url] = 1)));
+  } else {
+    mixtas = homeCards(html, 40);
+  }
+  if (!populares.length && !recientes.length && !mixtas.length) mixtas = homeCards(html, 40);
   const mf = favs();
   const railFavs = mf.length ? [
     { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
@@ -519,11 +573,38 @@ async function homeTree() {
       children: [{ type: "Row", gap: 8,
         children: hItems.map((it) => posterCard(it, "h-", true)) }] },
   ] : [];
-  return { type: "SingleChildScrollView", key: "home", children: [
+  const fuentes = [
+    { type: "Text", text: "Fuentes", textEn: "Sources", style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: "railFuentes", direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8, children: [
+        fuenteCard(FUENTE, "Activa", true),
+        fuenteCard("MangaOni", "Pronto", false),
+        fuenteCard("Mangas.in", "Pronto", false),
+      ] }] },
+  ];
+  const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + FUENTE, textEn: FUENTE + " series",
       style: "h3", padding: 16 },
-    gridOf(items, VACIO_SERIES),
-  ].concat(railHist).concat(railFavs) };
+    gridOf(mixtas, VACIO_SERIES),
+  ] : [];
+  const catalogo = [
+    { type: "Card", key: "catEntry", flush: true, onTap: { event: "openCatalog" },
+      children: [
+        { type: "Text", text: "Catálogo completo · " + FUENTE, textEn: "Full catalog · " + FUENTE,
+          style: "h3", padding: 16 },
+        { type: "Text", text: "Explora por género, tipo y estado",
+          textEn: "Browse by genre, type and status", style: "caption", color: "muted", padding: 16 },
+      ] },
+  ];
+  if (!populares.length && !recientes.length && !mixtas.length) return VACIO_SERIES;
+  return { type: "SingleChildScrollView", key: "home", children: []
+    .concat(fuentes)
+    .concat(railHist)
+    .concat(railOf("Populares en español", "Popular in Spanish", populares, "railPop", "p-"))
+    .concat(railOf("Actualizados recientes", "Recently updated", recientes, "railRec", "r-"))
+    .concat(railFavs)
+    .concat(gridSeries)
+    .concat(catalogo) };
 }
 
 function detailTree(state) {
@@ -786,6 +867,109 @@ function searchTree(state) {
 
 // ------------------------------------------------------------- los exports
 
+// ------------------------------------------------- catálogo completo
+// La página /manga/ del sitio lista TODO el catálogo con filtros
+// (?genre=, ?type=, ?status=) y paginación (?page=, 30 series por
+// página). Slugs verificados contra el sitio el 1 nov 2026: genre:
+// action, adventure, comedy, drama, fantasy, horror, isekai, josei,
+// mecha, mystery, psychological, romance, sci-fi, seinen, shoujo,
+// shounen, slice-of-life — type: manga, manhwa, manhua — status:
+// ongoing, completed. El catálogo tiene 28.312 series: la cuadrícula
+// se limita a CAT_TOPE tarjetas porque Kino admite 600 nodos por
+// pantalla y cada tarjeta son 5 o 6 nodos.
+const GENEROS = [
+  ["", "Todos los géneros"],
+  ["action", "Acción"], ["adventure", "Aventura"], ["comedy", "Comedia"],
+  ["drama", "Drama"], ["fantasy", "Fantasía"], ["horror", "Terror"],
+  ["isekai", "Isekai"], ["josei", "Josei"], ["mecha", "Mecha"],
+  ["mystery", "Misterio"], ["psychological", "Psicológico"], ["romance", "Romance"],
+  ["sci-fi", "Ciencia ficción"], ["seinen", "Seinen"], ["shoujo", "Shoujo"],
+  ["shounen", "Shounen"], ["slice-of-life", "Slice of life"],
+];
+const TIPOS = [["", "Todos"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"]];
+const ESTADOS = [["", "Todos"], ["ongoing", "En emisión"], ["completed", "Finalizado"]];
+const CAT_POR_PAG = 30;
+const CAT_TOPE = 90;
+
+function catalogoUrl(cat, page) {
+  let p = "/manga/?page=" + (page || 1);
+  if (cat.genre) p += "&genre=" + encodeURIComponent(cat.genre);
+  if (cat.type) p += "&type=" + encodeURIComponent(cat.type);
+  if (cat.status) p += "&status=" + encodeURIComponent(cat.status);
+  return p;
+}
+
+function catDrop(label, key, opciones, valor, evento) {
+  return { type: "DropdownButton", key: key, labelText: label, labelTextEn: label,
+    value: valor || "", onChanged: evento,
+    options: opciones.map((o) => ({ value: o[0], label: o[1] })) };
+}
+
+function catalogTree(c) {
+  const items = Array.isArray(c.items) ? c.items : [];
+  const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
+  const hayMas = items.length < total && items.length < CAT_TOPE;
+  return {
+    type: "Scaffold",
+    appBar: { title: "Catálogo · " + FUENTE,
+      leading: { type: "IconButton", key: "backFromCatalog", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "catBody", children: [{
+      type: "Column", children: [
+        { type: "Row", gap: 8, padding: 16, wrap: true, children: [
+          catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
+          catDrop("Tipo", "catType", TIPOS, c.type, "catType"),
+          catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
+        ] },
+        c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
+          textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
+        items.length ? gridOf(items, VACIO_SERIES) :
+          { type: "Text", text: "Sin resultados con estos filtros.",
+            textEn: "No results with these filters.", color: "muted", padding: 16 },
+        items.length >= CAT_TOPE && total > CAT_TOPE ?
+          { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
+            textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
+            style: "caption", color: "muted", padding: 16 } : null,
+        hayMas ? { type: "ElevatedButton", key: "catMore", icon: "expand_more",
+          labelText: "Cargar más", labelTextEn: "Load more", onPressed: "catMore" } : null,
+      ].filter(Boolean) }] },
+  };
+}
+
+// Carga una página del catálogo con los filtros pedidos y la deja en
+// kino.storage ("cat"); la respuesta solo avisa del cambio (catTk)
+// para que Kino vuelva a pedir la pantalla, que lee el catálogo del
+// almacenamiento — así el estado de la pantalla no crece (Kino admite
+// 64 KB de estado y un catálogo de 90 series pesaría 14 KB). Si es
+// una página siguiente de los MISMOS filtros, se añade a lo ya
+// cargado (botón "Cargar más"); con filtros nuevos empieza de cero.
+async function cargarCatalogo(cat, page, conRuta) {
+  const page1 = Math.max(1, parseInt(page, 10) || 1);
+  const html = await getHtml(catalogoUrl(cat, page1));
+  const nuevos = homeCards(html, CAT_POR_PAG);
+  const tm = html.match(/([\d][\d,]*)\s*series/i);
+  const num = tm ? tm[1].replace(/[^0-9]/g, "") : "";
+  let totalTxt = num ? num.replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " series" : "";
+  const prevCat = page1 > 1 ? getJson("cat", null) : null;
+  const prev = prevCat && Array.isArray(prevCat.items) &&
+    (prevCat.genre || "") === (cat.genre || "") &&
+    (prevCat.type || "") === (cat.type || "") &&
+    (prevCat.status || "") === (cat.status || "") ? prevCat.items : [];
+  if (!totalTxt && prevCat && prevCat.totalTxt) totalTxt = prevCat.totalTxt;
+  const vistos = {};
+  const items = prev.concat(nuevos)
+    .filter((x) => (!vistos[x.url] && (vistos[x.url] = 1)))
+    .slice(0, CAT_TOPE);
+  setJson("cat", { items: items, page: page1, genre: cat.genre || "",
+    type: cat.type || "", status: cat.status || "", totalTxt: totalTxt });
+  log("catálogo pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
+    " series, filtros " + (cat.genre || "-") + "/" + (cat.type || "-") + "/" + (cat.status || "-"));
+  const resp = { state: { catTk: Date.now() } };
+  if (conRuta) resp.route = { push: "catalog" };
+  return resp;
+}
+
 function routeUrl(r) {
   if (!r) return "";
   return String((r.params && r.params.url) || (r.args && r.args.url) || r.url || "");
@@ -802,6 +986,11 @@ export async function screen(ev) {
     }
     if (route.name === "read") return readerTree(state);
     if (route.name === "search") return searchTree(state);
+    if (route.name === "catalog") {
+      const c = getJson("cat", null);
+      if (!c || typeof c !== "object") return loadingTree("Cargando catálogo…");
+      return catalogTree(c);
+    }
   } catch (e) {
     return errorTree("No se pudo cargar (" + ((e && e.code) || "error") + ").");
   }
@@ -832,9 +1021,37 @@ export async function screenEvent(ev) {
           return await cargarSerie(url, false);
         }
       }
+      if (r.name === "catalog") {
+        const c = getJson("cat", null);
+        if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, false);
+      }
       return null;
     }
     if (name === "goSearch") return { route: { push: "search" } };
+    if (name === "openCatalog") {
+      return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, true);
+    }
+    if (name === "fuentePronto") {
+      return { toast: String(ev.arg || "Esa fuente") + " llegará en una próxima versión." };
+    }
+    if (name === "fuenteActual") {
+      return { toast: "Ya estás viendo " + FUENTE + "." };
+    }
+    if (name === "catGenre" || name === "catType" || name === "catStatus") {
+      const c = getJson("cat", {}) || {};
+      const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "" };
+      const v = String(ev.value || "");
+      if (name === "catGenre") nuevo.genre = v;
+      else if (name === "catType") nuevo.type = v;
+      else nuevo.status = v;
+      return await cargarCatalogo(nuevo, 1, false);
+    }
+    if (name === "catMore") {
+      const c = getJson("cat", null);
+      if (!c || !Array.isArray(c.items) || !c.items.length) return null;
+      return await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "" },
+        (c.page || 1) + 1, false);
+    }
     if (name === "popBack") return { route: { pop: true } };
     if (name === "openSeries") {
       const url = String(ev.arg || "");
