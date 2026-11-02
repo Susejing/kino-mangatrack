@@ -1,12 +1,10 @@
-
-// MangaTrack v0.3.1 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -53,14 +51,24 @@ function fuenteDeUrl(url) {
 // ------------------------------------------------------------------ red
 
 async function getHtmlDe(f, path) {
-  const r = await kino.fetch(f.base + path, { headers: { Accept: "text/html" } });
+  // Cloudflare (LectorXd) rechaza peticiones sin User-Agent: se envían
+  // cabeceras de navegador para que no las confunda con bots.
+  const hdrs = f.id === "lectorxd"
+    ? {
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-419,es;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        Referer: f.base + "/",
+      }
+    : { Accept: "text/html" };
+  const r = await kino.fetch(f.base + path, { headers: hdrs });
   if (!r.ok) {
     // El estado se anota en el log: con él se distingue un bloqueo +18
     // (403/451) de una caída real de la red.
     log(f.id + " HTTP " + r.status + " en " + path);
     throw kino.error("network", "HTTP " + r.status, {
       userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
-        ? "LectorXd bloqueó la página (HTTP " + r.status + "): si es una serie +18, la cierra sin cuenta. Prueba otra serie."
+        ? "LectorXd bloqueó la página (HTTP " + r.status + "). Si es una serie +18, la cierra sin cuenta; si no, es su filtro anti-bots. Prueba otra serie."
         : "No se pudo conectar con " + f.nombre + " (HTTP " + r.status + "). Inténtalo de nuevo.",
     });
   }
@@ -490,6 +498,7 @@ function capsLX(html) {
     if (!num || !tipo || !slug) continue;
     let url = "/" + tipo + "/" + slug + "/leer/" + num;
     if (c.groupId !== null && c.groupId !== undefined && c.groupId !== "") url += "?g=" + c.groupId;
+
     if (!map.has(num)) map.set(num, { url: url, num: num });
   }
   const arr = [...map.values()];
@@ -755,15 +764,49 @@ async function imSerie(url) {
   const dm = html.match(/<div[^>]*col-md-9[\s\S]{0,3000}?<div[^>]*panel-body[^>]*>([\s\S]{10,3000}?)<[/]div>/i);
   const caps = [];
   const seen = {};
-  const re = /href="([^"]*[/]ver[/]manga[/][a-z0-9-]+[/][^/"<]+[/][0-9a-f-]{36})"/gi;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    let u = m[1];
-    if (/^https?:/i.test(u)) u = u.replace(/^https?:[/][/][^/]+/i, "");
-    if (seen[u]) continue;
-    seen[u] = 1;
-    const seg = u.split("/").filter(Boolean);
-    caps.push({ url: u, num: seg[3] || "" });
+  // Capítulos: el camino fiable es el JSON de getall (verificado en vivo);
+  // el HTML de la serie trae los GUID en MAYÚSCULAS y a veces sin lista,
+  // así que queda como respaldo con el patrón corregido.
+  const guid = (String(url).match(/[0-9a-fA-F-]{36}/) || [])[0] || "";
+  const slug = String(url).split("/").filter(Boolean)[2] || "";
+  if (guid) {
+    try {
+      const gr = await kino.fetch(IM_BASE + "/chapter/getall?mangaIdentification=" + guid,
+        { headers: { Accept: "application/json" } });
+      if (gr.ok) {
+        const j = JSON.parse(await gr.text());
+        const inner = typeof j.data === "string" ? JSON.parse(j.data) : j;
+        const arr = (inner && inner.result) || [];
+        for (let i = 0; i < arr.length; i++) {
+          const c = arr[i] || {};
+          const cid = String(c.Identification || "");
+          const num = String(c.FriendlyChapterNumberUrl || c.FriendlyChapterNumber || c.Number || "");
+          if (!cid || !num) continue;
+          const u = "/ver/manga/" + slug + "/" + num + "/" + cid;
+          if (seen[u]) continue;
+          seen[u] = 1;
+          caps.push({ url: u, num: num });
+        }
+        log("IM getall: " + caps.length + " capítulos");
+      } else {
+        log("IM getall HTTP " + gr.status);
+      }
+    } catch (e) {
+      log("IM getall falló: " + e);
+    }
+  }
+  if (!caps.length) {
+    const re = /href="([^"]*[/]ver[/]manga[/][a-zA-Z0-9-]+[/][^/"<]+[/][0-9a-fA-F-]{36})"/gi;
+    let m;
+    while ((m = re.exec(html)) !== null) {
+      let u = m[1];
+      if (/^https?:/i.test(u)) u = u.replace(/^https?:[/][/][^/]+/i, "");
+      if (seen[u]) continue;
+      seen[u] = 1;
+      const seg = u.split("/").filter(Boolean);
+      caps.push({ url: u, num: seg[3] || "" });
+    }
+    log("IM caps por HTML: " + caps.length);
   }
   const vnum = {};
   const caps2 = caps.filter(function (x) {
@@ -956,6 +999,7 @@ function dimsDeBytes(b) {
       if (m === 0x01 || (m >= 0xD0 && m <= 0xD9)) { i += 2; continue; }
       const len = (b[i + 2] << 8) | b[i + 3];
       if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+
         return { w: (b[i + 7] << 8) | b[i + 8], h: (b[i + 5] << 8) | b[i + 6] };
       }
       if (m === 0xDA) break;
@@ -1271,6 +1315,19 @@ async function homeTree() {
     .concat(catalogo) };
 }
 
+function detalleSinCaps(url) {
+  const f = fuenteDeUrl(url);
+  if (f && f.id === "lectorxd")
+    return "No hay capítulos legibles de esta serie en LectorXd: si es +18, la cierra sin cuenta. Prueba otra serie.";
+  if (f && f.id === "mangadex")
+    return "MangaDex no tiene capítulos legibles en español de esta serie: sus capítulos en español suelen ser solo enlaces a otras webs (series licenciadas) o la serie está retirada. Prueba esta serie en otra fuente.";
+  if (f && f.id === "inmanga")
+    return "InManga no devolvió capítulos de esta serie. Si vuelve a pasar, mándame el log de depuración.";
+  if (f && f.id === "manhwaweb")
+    return "ManhwaWeb no devolvió capítulos de esta serie. Prueba otra serie.";
+  return "No se encontraron capítulos para esta serie.";
+}
+
 function detailTree(state) {
   const d = state.detail;
   if (!d) return loadingTree("Cargando serie…");
@@ -1281,8 +1338,7 @@ function detailTree(state) {
   if (!chapters.length) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "Icon", name: "error", color: "muted" },
-      { type: "Text", text: "No se encontraron capítulos para esta serie.",
-        textEn: "No chapters found for this series.", color: "muted" },
+      { type: "Text", text: detalleSinCaps(d.url), color: "muted" },
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Volver", labelTextEn: "Back",
         onPressed: { event: "popBack" } },
     ] };
@@ -1444,6 +1500,7 @@ function readerTree(state) {
   const r = state.reader;
   if (!r || !Array.isArray(r.images) || !r.images.length) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+
       { type: "Icon", name: "error", color: "muted" },
       { type: "Text", text: "Este capítulo no tiene páginas cargadas.",
         textEn: "This chapter has no pages loaded.", color: "muted" },
@@ -1931,9 +1988,11 @@ async function cargarSerie(url, conRuta) {
   }
   }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " capítulos");
-  if (!chapters.length) return { toast: "No se encontraron capítulos." };
+  // Con 0 capítulos también se abre el detalle: ahí explica por qué
+  // (serie +18, licenciada o enlaces externos) en vez de un toast seco.
   const resp = { state: { detail: { url: url, meta: meta, chapters: chapters } } };
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
