@@ -1,12 +1,19 @@
-// MangaTrack v0.3.6 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.7 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.6";
+const VERSION = "0.3.7";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
+// Capítulos que se muestran a la vez en el detalle de una serie (una
+// "ventana"): el estado de una pantalla de Kino admite 64 KB y una
+// serie larga no cabe entera. Con la lista completa guardada en el
+// almacén, los botones "más antiguos/recientes" van pasando de ventana
+// en ventana (VENTANA_CAPS por vez), hasta 1200 capítulos guardados.
+const VENTANA_CAPS = 300;
+const TOPE_CAPS_SERIE = 1200;
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
 
@@ -676,8 +683,13 @@ async function mdImages(chUrl) {
 }
 
 async function mdCatalog(cat, page1) {
-  const ord = cat.order || "followedCount";
-  const j = await mdJson(mdQuery("order[" + ord + "]=desc", (page1 - 1) * CAT_POR_PAG, CAT_POR_PAG));
+  // Filtros de MangaDex por parámetros de su API: género (tag uuid),
+  // estado y idioma original; el orden ya existía.
+  let q = "order[" + (cat.order || "followedCount") + "]=desc";
+  if (cat.genre) q += "&includedTags[]=" + encodeURIComponent(cat.genre) + "&includedTagsMode=AND";
+  if (cat.status) q += "&status[]=" + encodeURIComponent(cat.status);
+  if (cat.type) q += "&originalLanguage[]=" + encodeURIComponent(cat.type);
+  const j = await mdJson(mdQuery(q, (page1 - 1) * CAT_POR_PAG, CAT_POR_PAG));
   const total = (j && j.total) || 0;
   return {
     items: mdCards(j, CAT_POR_PAG),
@@ -1111,9 +1123,10 @@ function moCards(html, max) {
   return out;
 }
 
-async function moCatalog(page1) {
+async function moCatalog(cat, page1) {
   const f = fuentePorId("mangaoni");
-  const html = await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=" + page1);
+  const filtro = (cat && cat.order) || "visitas";
+  const html = await getHtmlDe(f, "/directorio?filtro=" + encodeURIComponent(filtro) + "&orden=desc&adulto=false&p=" + page1);
   const items = moCards(html, 18);
   // Mientras traiga series, se ofrece "Cargar más" (el directorio no
   // siempre llena 18: hay saltadas por +18 o sin portada); la guardia
@@ -1446,11 +1459,14 @@ async function homeTree() {
   let html = "";
   let populares = [];
   let recientes = [];
+  let actualizados = [];
   let mixtas = [];
   let titPop = "Populares en español";
   let titPopEn = "Popular in Spanish";
   let titRec = "Actualizados recientes";
   let titRecEn = "Recently updated";
+  let titUpd = "Actualizados recientes";
+  let titUpdEn = "Recently updated";
   if (f.id === "mangadex") {
     // MangaDex es una API: la portada son dos consultas (populares y
     // series con capítulo reciente en español).
@@ -1475,11 +1491,14 @@ async function homeTree() {
     }
   } else if (f.id === "mangaoni") {
     // El directorio ordenado por visitas (populares) o por id (novedades),
-    // sin contenido +18, 18 series por página.
+    // sin contenido +18, 18 series por página; /recientes trae el
+    // feed de capítulos recién publicados.
     titPop = "Populares de MangaOni"; titPopEn = "Popular on MangaOni";
     titRec = "Novedades de MangaOni"; titRecEn = "New on MangaOni";
+    titUpd = "Actualizados de MangaOni"; titUpdEn = "Updated on MangaOni";
     try { populares = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home pop: " + e); }
     try { recientes = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home rec: " + e); }
+    try { actualizados = moCards(await getHtmlDe(f, "/recientes"), 20); } catch (e) { log("MO home upd: " + e); }
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
@@ -1577,6 +1596,7 @@ async function homeTree() {
     .concat(railHist)
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
+    .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
     .concat(railFavs)
     .concat(gridSeries)
     .concat(catalogo) };
@@ -1601,7 +1621,12 @@ function detailTree(state) {
   const meta = d.meta || {};
   const chapters = Array.isArray(d.chapters) ? d.chapters : [];
   const hInfo = hist()[d.url];
-  const hIdx = hInfo && hInfo.idx >= 0 && hInfo.idx < chapters.length ? hInfo.idx : -1;
+  // El historial guarda el índice ABSOLUTO del capítulo (independiente
+  // de la ventana que se esté viendo); "Continuar" lo abre aunque esté
+  // en otra ventana de la lista.
+  const hIdx = hInfo && hInfo.idx >= 0 ? hInfo.idx : -1;
+  const capStart = d.capStart || 0;
+  const capsTotal = d.capsTotal || chapters.length;
   if (!chapters.length) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "Icon", name: "error", color: "muted" },
@@ -1632,9 +1657,9 @@ function detailTree(state) {
               labelText: "Leer lo último", labelTextEn: "Read latest",
               onPressed: { event: "read", arg: String(chapters.length - 1) } },
             { type: "ElevatedButton", key: "continuar", icon: "play_arrow",
-              labelText: hIdx >= 0 ? "Continuar: cap. " + chapters[hIdx].num : "Continuar",
-              labelTextEn: hIdx >= 0 ? "Continue: ch. " + chapters[hIdx].num : "Continue",
-              onPressed: { event: "read", arg: String(hIdx) },
+              labelText: hIdx >= 0 ? "Continuar: cap. " + (hInfo.num || "?") : "Continuar",
+              labelTextEn: hIdx >= 0 ? "Continue: ch. " + (hInfo.num || "?") : "Continue",
+              onPressed: { event: "seguirLeyendo", arg: String(hIdx) },
               enabled: hIdx >= 0, hidden: hIdx < 0 },
             { type: "ElevatedButton", key: "fav", icon: isFav(d.url) ? "heart" : "star",
               labelText: isFav(d.url) ? "Quitar de favoritos" : "Añadir a favoritos",
@@ -1650,17 +1675,36 @@ function detailTree(state) {
   // Card+Text (2 nodos por capítulo): con series largas superaba los 600
   // nodos que Kino admite por pantalla y la descartaba entera (pantalla negra).
   const items = [head];
-  const totalTxt = meta.totalCaps > chapters.length
-    ? chapters.length + " capítulos (de " + meta.totalCaps + " — los más recientes)"
+  const totalTxt = capsTotal > chapters.length
+    ? "Capítulos " + (capStart + 1) + "–" + (capStart + chapters.length) + " de " + capsTotal
     : chapters.length + " capítulos";
   items.push({ type: "Text", text: totalTxt,
     textEn: chapters.length + " chapters", style: "h3", padding: 16 });
+  // Fila de ventanas: en series largas la lista se pasea de VENTANA_CAPS
+  // en VENTANA_CAPS con estos dos botones (arriba y abajo de la lista).
+  const navFila = (pref) => ({ type: "Row", key: pref + "nav", gap: 8, wrap: true, padding: { h: 16 }, children: [
+    capStart > 0
+      ? { type: "ElevatedButton", key: pref + "navPrev", icon: "arrow_upward",
+          labelText: "Capítulos más recientes", labelTextEn: "Newer chapters",
+          onPressed: { event: "capsPrev" } } : null,
+    capStart + chapters.length < capsTotal
+      ? { type: "ElevatedButton", key: pref + "navNext", icon: "arrow_downward",
+          labelText: "Capítulos más antiguos", labelTextEn: "Older chapters",
+          onPressed: { event: "capsNext" } } : null,
+  ].filter(Boolean) });
+  if (capStart > 0 || capStart + chapters.length < capsTotal) {
+    items.push(navFila("ar"));
+  }
+  const leidos = hIdx - capStart;   // hasta qué fila de ESTA ventana llegó
   for (let i = 0; i < chapters.length; i++) {
     items.push({
       type: "ListTile", key: "cap" + i, dense: true,
-      title: "Capítulo " + chapters[i].num + (hIdx >= 0 && i <= hIdx ? " ✓" : ""),
+      title: "Capítulo " + chapters[i].num + (hIdx >= 0 && i <= leidos ? " ✓" : ""),
       onTap: { event: "read", arg: String(i) },
     });
+  }
+  if (capStart > 0 || capStart + chapters.length < capsTotal) {
+    items.push(navFila("ab"));
   }
   return {
     type: "Scaffold",
@@ -1883,6 +1927,28 @@ const ESTADOS_LX = [["", "Todos"], ["en_emision", "En emisión"], ["completado",
 const ORDEN_LX = [["", "Recientes"], ["rating", "Mejor valorados"], ["views", "Más vistos"]];
 // Orden del catálogo de MangaDex (los nombres de orden de su API).
 const ORDEN_MD = [["followedCount", "Populares"], ["latestUploadedChapter", "Actualizados"], ["createdAt", "Recién añadidos"]];
+// Géneros oficiales de MangaDex (grupo "genre" de su API de tags: el
+// uuid se pasa a la API tal cual, el nombre se ve en el desplegable).
+const GENEROS_MD = [
+  ["391b0423-d847-456f-aff0-8b0cfc03066b", "Acción"], ["87cc87cd-a395-47af-b27a-93258283bbc6", "Aventura"],
+  ["4d32cc48-9f00-4cca-9b5a-a839f0764984", "Comedia"], ["5ca48985-9a9d-4bd8-be29-80dc0303db72", "Crimen"],
+  ["b9af3a63-f058-46de-a9a0-e0c13906197a", "Drama"], ["39730448-9a5f-48a2-85b0-a70db87b123b", "Demonios"],
+  ["ace04997-f6bd-436e-b261-779182193d3d", "Isekai"], ["cdc58593-87dd-415e-bbc0-2ec27bf404cc", "Fantasía"],
+  ["cdad7e68-1419-41dd-bdce-27753074a640", "Horror"], ["33771934-028e-4cb3-8744-691e866a923e", "Histórico"],
+  ["5920b825-4181-4a17-beeb-9918b0ff7a30", "Boys' Love"], ["a3c67850-4684-404e-9b7f-c69850ee5da6", "Girls' Love"],
+  ["81c836c9-914e-4eca-981a-560dad663e73", "Magical Girls"], ["50880a9d-5440-4732-9afb-8f457127e836", "Mecha"],
+  ["ee968100-4191-4968-93d3-f82d72be7e46", "Misterio"], ["c8cbe35b-1b2b-4a3f-9c37-db84c4514856", "Médico"],
+  ["3b60b75c-a2d7-4860-ab56-05f391bb889c", "Psicológico"], ["b1e97889-25b4-4258-b28b-cd7f4d28ea9b", "Filosófico"],
+  ["423e2eae-a7a2-4a8b-ac03-a8351462d71d", "Romance"], ["69964a64-2f90-4d33-beeb-f3ed2875eb4c", "Deportes"],
+  ["256c8bd9-4904-4360-bf4f-508a76d67183", "Sci-Fi"], ["e5301a23-ebd9-49dd-a0cb-2add944c7fe9", "Slice of Life"],
+  ["7064a261-a137-4d3a-8848-2d385de3a99c", "Superhéroes"], ["07251805-a27e-4d59-b488-f0bfbec15168", "Thriller"],
+  ["f8f62932-27da-4fe4-8ee1-6779a8c5edba", "Tragedia"],
+];
+// Idioma original de MangaDex: manga (Japón), manhwa (Corea), manhua (China).
+const TIPOS_MD = [["", "Todos"], ["ja", "Manga (Japón)"], ["ko", "Manhwa (Corea)"], ["zh", "Manhua (China)"]];
+const ESTADOS_MD = [["", "Todos"], ["ongoing", "En curso"], ["completed", "Completado"], ["hiatus", "Pausado"], ["cancelled", "Cancelado"]];
+// Orden del catálogo de MangaOni (los "filtro" de su directorio).
+const ORDEN_MO = [["visitas", "Populares"], ["id", "Novedades"]];
 const CAT_POR_PAG = 30;
 const CAT_TOPE = 90;
 
@@ -1923,7 +1989,14 @@ function catalogTree(c) {
       catDrop("Orden", "catOrder", ORDEN_LX, c.order, "catOrder"),
     ];
   } else if (f.id === "mangadex") {
-    drops = [catDrop("Orden", "catOrder", ORDEN_MD, c.order, "catOrder")];
+    drops = [
+      catDrop("Género", "catGenre", GENEROS_MD, c.genre, "catGenre"),
+      catDrop("Tipo", "catType", TIPOS_MD, c.type, "catType"),
+      catDrop("Estado", "catStatus", ESTADOS_MD, c.status, "catStatus"),
+      catDrop("Orden", "catOrder", ORDEN_MD, c.order, "catOrder"),
+    ];
+  } else if (f.id === "mangaoni") {
+    drops = [catDrop("Orden", "catOrder", ORDEN_MO, c.order, "catOrder")];
   } else if (f.id === "leercapitulo") {
     drops = [
       catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
@@ -1931,7 +2004,8 @@ function catalogTree(c) {
       catDrop("Estado", "catStatus", ESTADOS, c.status, "catStatus"),
     ];
   }
-  // InManga y ManhwaWeb: catálogo simple, sin filtros.
+  // InManga: catálogo simple, sin filtros (su web no los expone por
+  // fuera; su buscador interno no se puede alcanzar desde el plugin).
   return {
     type: "Scaffold",
     appBar: { type: "AppBar", key: "barCatalog", title: "Catálogo · " + f.nombre,
@@ -1976,7 +2050,7 @@ async function cargarCatalogo(cat, page, conRuta) {
     const r2 = await imCatalog(page1);
     nuevos = r2.items; mas = r2.mas;
   } else if (f.id === "mangaoni") {
-    const r2 = await moCatalog(page1);
+    const r2 = await moCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
@@ -2112,9 +2186,51 @@ export async function screenEvent(ev) {
       if (!fuenteDeUrl(url)) return null;
       return await cargarSerie(url, true);
     }
-    if (name === "read" || name === "nextChap" || name === "prevChap" || name === "jumpChap") {
+    if (name === "capsPrev" || name === "capsNext") {
+      // Ventanas de capítulos en series largas: la lista completa vive en
+      // el almacén; estos botones muestran la ventana anterior (más
+      // recientes) o la siguiente (más antiguos).
+      const d = state.detail;
+      if (!d || !Array.isArray(d.chapters)) return null;
+      const full = getJson("caps:" + d.url, null);
+      if (!Array.isArray(full) || !full.length) return { toast: "No hay más capítulos de esta serie." };
+      const cs = d.capStart || 0;
+      let start = 0;
+      if (name === "capsPrev") {
+        if (cs <= 0) return null;
+        start = Math.max(0, cs - VENTANA_CAPS);
+      } else {
+        start = cs + d.chapters.length;
+        if (start >= full.length) return null;
+      }
+      const caps = full.slice(start, start + VENTANA_CAPS);
+      log("capítulos " + (start + 1) + "–" + (start + caps.length) + " de " + full.length);
+      return { state: { detail: { url: d.url, meta: d.meta, chapters: caps, capStart: start, capsTotal: full.length } } };
+    }
+    if (name === "read" || name === "nextChap" || name === "prevChap" || name === "jumpChap" || name === "seguirLeyendo") {
       const d = state.detail;
       if (!d || !Array.isArray(d.chapters) || !d.chapters.length) return null;
+      if (name === "seguirLeyendo") {
+        // Capítulo por índice ABSOLUTO (botón "Continuar"): si está en
+        // otra ventana, se carga su ventana y se abre directo al lector.
+        const abs = parseInt(String(ev.arg || ""), 10);
+        if (!(abs >= 0)) return null;
+        const cs = d.capStart || 0;
+        let d2 = d;
+        if (abs < cs || abs >= cs + d.chapters.length) {
+          const full = getJson("caps:" + d.url, null);
+          if (!Array.isArray(full) || !full.length || abs >= full.length) {
+            return { toast: "No se encontró ese capítulo guardado." };
+          }
+          let start = Math.floor(abs / VENTANA_CAPS) * VENTANA_CAPS;
+          if (start >= full.length) start = Math.max(0, full.length - VENTANA_CAPS);
+          d2 = { url: d.url, meta: d.meta, chapters: full.slice(start, start + VENTANA_CAPS), capStart: start, capsTotal: full.length };
+        }
+        const r = await abrirCapitulo(d2, abs - (d2.capStart || 0), true);
+        if (!r) return { toast: "No se pudieron leer las páginas de este capítulo." };
+        if (d2 !== d) r.state.detail = d2;
+        return r;
+      }
       let idx;
       if (name === "read") {
         idx = parseInt(String(ev.arg || "0"), 10) || 0;
@@ -2125,39 +2241,9 @@ export async function screenEvent(ev) {
         idx = ((state.reader && state.reader.idx) || 0) + (name === "nextChap" ? 1 : -1);
       }
       if (idx < 0 || idx >= d.chapters.length) return null;
-      const ch = d.chapters[idx];
-      const fSer = fuenteDeUrl(d.url) || fuenteActiva();
-      let images = [];
-      if (fSer.id === "mangadex") {
-        images = await mdImages(ch.url);
-      } else if (fSer.id === "inmanga") {
-        images = await imImages(ch.url);
-      } else if (fSer.id === "manhwaweb") {
-        images = await mwImages(ch.url);
-      } else {
-        const html = await getHtmlDe(fSer, ch.url);
-        images = readerImagesDe(fSer, html);
-      }
-      if (!images.length) {
-        return { toast: "No se pudieron leer las páginas de este capítulo." };
-      }
-      images = images.map((x) => (typeof x === "string" ? { url: x } : x));
-      await medirImagenes(images, 9000);
-      const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
-      log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
-      // Historial: el último capítulo abierto de la serie (para
-      // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
-      const h = hist();
-      h[d.url] = { url: ch.url, num: ch.num, idx: idx, ts: Date.now(),
-        title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
-      const hk = Object.keys(h);
-      if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
-        for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
-      setJson("hist", h);
-      syncPushHist();
-      const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
-      if (name === "read") resp.route = { push: "read" };
-      return resp;
+      const r2 = await abrirCapitulo(d, idx, name === "read");
+      if (!r2) return { toast: "No se pudieron leer las páginas de este capítulo." };
+      return r2;
     }
     if (name === "search") {
       const q = String((ev.value && ev.value.q) || "").trim();
@@ -2224,29 +2310,67 @@ export async function screenEvent(ev) {
   }
 }
 
+// Abre en el lector el capítulo idx de la ventana actual del detalle:
+// descarga las páginas, las mide y guarda el historial con su índice
+// ABSOLUTO (capStart + idx) para que "Continuar" y las marcas ✓
+// funcionen sin importar desde qué ventana se leyó.
+async function abrirCapitulo(d, idx, conRuta) {
+  const ch = d.chapters[idx];
+  const fSer = fuenteDeUrl(d.url) || fuenteActiva();
+  let images = [];
+  if (fSer.id === "mangadex") {
+    images = await mdImages(ch.url);
+  } else if (fSer.id === "inmanga") {
+    images = await imImages(ch.url);
+  } else if (fSer.id === "manhwaweb") {
+    images = await mwImages(ch.url);
+  } else {
+    const html = await getHtmlDe(fSer, ch.url);
+    images = readerImagesDe(fSer, html);
+  }
+  if (!images.length) return null;
+  images = images.map((x) => (typeof x === "string" ? { url: x } : x));
+  await medirImagenes(images, 9000);
+  const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
+  log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+  // Historial: el último capítulo abierto de la serie (para
+  // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
+  const h = hist();
+  h[d.url] = { url: ch.url, num: ch.num, idx: (d.capStart || 0) + idx, ts: Date.now(),
+    title: (d.meta && d.meta.title) || "", poster: (d.meta && d.meta.poster) || "" };
+  const hk = Object.keys(h);
+  if (hk.length > 100) { hk.sort((a, b) => (h[b].ts || 0) - (h[a].ts || 0));
+    for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
+  setJson("hist", h);
+  syncPushHist();
+  const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
+  if (conRuta) resp.route = { push: "read" };
+  return resp;
+}
+
 // Carga la página de una serie y prepara su detalle; si conRuta, empuja la
 // pantalla de la serie al terminar.
 async function cargarSerie(url, conRuta) {
   const f = fuenteDeUrl(url);
   if (!f) return { toast: "Esa serie no es de ninguna fuente conocida." };
   let meta;
-  let chapters;
+  let full = null;   // lista COMPLETA (desc: lo más nuevo primero), hasta 1200
   if (f.id === "mangadex") {
     const id = url.replace(/^[/]title[/]/, "").replace(/[/]$/, "");
     meta = await mdMeta(id);
     const allCaps = await mdCaps(id);
     meta.totalCaps = allCaps.length;
-    chapters = allCaps.slice(0, MAX_CAPS_MD).slice().reverse();
+    full = allCaps.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   } else if (f.id === "inmanga") {
     const s = await imSerie(url);
     meta = s.meta;
     meta.totalCaps = s.chapters.length;
-    chapters = s.chapters.slice(0, MAX_CAPS_IM).slice().reverse();
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   } else if (f.id === "mangaoni") {
     const s = await moSerie(url);
     meta = s.meta;
     meta.totalCaps = s.chapters.length;
-    chapters = s.chapters.slice(0, MAX_CAPS_MO);
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
@@ -2259,18 +2383,26 @@ async function cargarSerie(url, conRuta) {
     meta = metaLX(html);
     const allCaps = capsLX(html);
     meta.totalCaps = allCaps.length;
-    chapters = allCaps.slice(0, MAX_CAPS_LX).slice().reverse();
+    full = allCaps.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   } else {
     meta = seriesMeta(html);
     const allCaps = chapterList(html);
     meta.totalCaps = allCaps.length;
-    chapters = allCaps.slice(0, MAX_CAPS).slice().reverse();
+    full = allCaps.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   }
   }
-  log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " capítulos");
+  // El detalle solo enseña la primera ventana (VENTANA_CAPS); la lista
+  // completa se guarda en el almacén para que los botones "más
+  // antiguos/recientes" puedan pasar de ventana sin inflar el estado.
+  const chapters = full.slice(0, VENTANA_CAPS);
+  let capsTotal = full.length;
+  if (full.length > chapters.length) {
+    try { setJson("caps:" + url, full); } catch (e) { log("caps sin guardar: " + e); }
+  }
+  log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " de " + capsTotal + " capítulos");
   // Con 0 capítulos también se abre el detalle: ahí explica por qué
   // (serie +18, licenciada o enlaces externos) en vez de un toast seco.
-  const resp = { state: { detail: { url: url, meta: meta, chapters: chapters } } };
+  const resp = { state: { detail: { url: url, meta: meta, chapters: chapters, capStart: 0, capsTotal: capsTotal } } };
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
