@@ -1,11 +1,13 @@
-// MangaTrack v0.3.10 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.11 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
-// Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
-// adaptador de scraping por fuente: las próximas fuentes se agregan
-// como funciones nuevas sin tocar la interfaz.
+// Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
+// (Image fit "width" + aspect de la proporción medida) y modo páginas
+// (widget pages, de 2 a 250, con barra de progreso y zoom por página).
+// Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
+// tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.3.10";
+const VERSION = "0.3.11";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1714,55 +1716,63 @@ function detailTree(state) {
   };
 }
 
-// Escala de tamaños de Kino: un width/height fuera de esta escala se
-// descarta, ¡y con él el nodo entero! El Image rellena su caja con
-// recorte (cover), así que la caja debe PARECÉRSELE a la página: se
-// busca la caja más ANCHA posible (página grande) cuya mejor altura
-// de la escala quede a un error pequeño. En tiras de webtoon
-// (proporción > 1.8) se exige todavía menos error: cualquier recorte
-// parte palabras y globos en las costuras. Si nada cumple el tope,
-// gana la caja con MENOR error (nunca una caja fija por defecto).
-// El fit: "width" de la docs nueva se envía igual: un Kino que no lo
-// conozca lo descarta y sigue con cover; uno que sí, dibuja la página
-// a ancho completo con su altura real y el recorte desaparece.
-const PAG_ESCALA = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
+// Lector de Kino 0.9.81 (docs screen-components.md, "Image" y "Un
+// lector" de screen-reference.md): con fit "width" la imagen toma el
+// ANCHO de su caja y su alto propio, así una página o una tira larga
+// nunca se corta — sin medir bytes, sin tabla de cajas. El aspect
+// "w:h" (cualquier ancho sobre alto de 0,2 a 5) solo guarda el hueco
+// hasta que la imagen carga; se arma con la proporción MEDIDA de cada
+// página (dims) o con la mediana del capítulo como guía. Un Kino más
+// antiguo lee fit como cover y aspect solo en las 4 formas fijas: por
+// eso el aspect va en la forma "1:X" y el nodo no lleva width/height
+// (una caja explícita angosta limitaría el ancho incluso con fit).
 
-function pageCaja(ratio, wMax, errTope) {
-  if (!isFinite(ratio) || ratio <= 0) return null;
-  const ws = PAG_ESCALA.filter((x) => x <= wMax).sort((a, b) => b - a);
-  let mejor = null;
-  for (let i = 0; i < ws.length; i++) {
-    const w = ws[i];
-    let mh = 0, me = 9;
-    for (let j = 0; j < PAG_ESCALA.length; j++) {
-      const h = PAG_ESCALA[j];
-      const err = Math.abs(h / w - ratio) / ratio;
-      if (mh === 0 || err < me) { mh = h; me = err; }
-    }
-    if (me <= errTope) return { width: w, height: mh, err: me };
-    if (!mejor || me < mejor.err - 0.001) mejor = { width: w, height: mh, err: me };
-  }
-  return mejor;
-}
-
-function pageNodes(p, i, ratioGuia) {
+function pageNodes(p, i, ratioGuia, sinFallback) {
   const url = typeof p === "string" ? p : p.url;
   const w = (p && p.w) || 0, h = (p && p.h) || 0;
   let ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 1.4);
   if (!(ratio >= 0.2)) ratio = 0.2;
   if (ratio > 5) ratio = 5;
-  const tope = ratio > 1.8 ? 0.07 : 0.12;
-  const small = pageCaja(ratio, 400, tope) || { width: 400, height: 560 };
-  const big = pageCaja(ratio, 640, tope) || { width: 480, height: 640 };
-  return [{
+  const aspect = "1:" + (Math.round(ratio * 100) / 100);
+  // El fallback (un nodo Column + un Text) sobra en el modo páginas:
+  // con 250 páginas llevaría el árbol por encima de los 600 nodos que
+  // Kino admite por pantalla. Sin fallback, una imagen que falla
+  // muestra la marca de Kino.
+  const nodo = {
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
     fit: "width",
-    width: { compact: small.width, medium: big.width, expanded: big.width },
-    height: { compact: small.height, medium: big.height, expanded: big.height },
-    fallback: { type: "Column", padding: 16, children: [
-      { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
-  }];
+    aspect: aspect,
+  };
+  if (!sinFallback) {
+    nodo.fallback = { type: "Column", padding: 16, children: [
+      { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] };
+  }
+  return [nodo];
+}
+
+// El widget pages (apiVersion 17, Kino 0.9.81): páginas a pantalla
+// completa que se pasan con el dedo, con la barra de progreso fina de
+// Kino y zoom en cada página. Un Kino más antiguo descarta el nodo,
+// así que SOLO se ofrece si el runtime lo declara.
+function pagesDisponible() {
+  try {
+    return typeof kino === "object" && kino !== null &&
+      typeof kino.screen === "object" && kino.screen !== null &&
+      Array.isArray(kino.screen.widgets) &&
+      kino.screen.widgets.indexOf("pages") >= 0;
+  } catch (e) { return false; }
+}
+
+function modoLectorPref() {
+  return getJson("modoLector", "tira") === "paginas" ? "paginas" : "tira";
+}
+
+// El modo páginas solo procede con el widget disponible y un capítulo
+// de 2 a 250 páginas (los límites del widget con progress "bar").
+function modoLectorEfectivo(n) {
+  const puede = pagesDisponible() && n >= 2 && n <= 250;
+  return puede && modoLectorPref() === "paginas" ? "paginas" : "tira";
 }
 
 function readerTree(state) {
@@ -1787,19 +1797,34 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // Páginas en cajas GRANDES ajustadas a la proporción medida: la
-  // caja más ancha posible con recorte mínimo, y fit "width" como
-  // aperitivo para un Kino futuro que sí lo conozca.
-  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
-    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
+  const modo = modoLectorEfectivo(r.images.length);
+  const pg = state.inputs && typeof state.inputs.pgs === "number" && state.inputs.pgs >= 0
+    ? state.inputs.pgs : 0;
+  let cuerpo;
+  if (modo === "paginas") {
+    // Modo páginas (Kino 0.9.81): una página a la vez, se pasa con el
+    // dedo, barra fina de progreso de Kino y zoom (pellizco) dentro de
+    // cada página. La página en la que se quedó vive en
+    // state.inputs.pgs y la guarda el evento pgChanged.
+    cuerpo = { type: "pages", key: "pgs", flex: 1, progress: "bar", onPageChanged: "pgChanged",
+      children: r.images.map((p, i) => ({ type: "SingleChildScrollView", key: "z" + i, zoom: true,
+        children: pageNodes(p, i, ratioGuia, true) })) };
+  } else {
+    // Tira vertical de siempre: todas las páginas pegadas (gap 0) a
+    // ancho completo — fit "width" toma el ancho de la caja y el alto
+    // propio de la imagen — y zoom de pellizco en todo el capítulo.
+    cuerpo = { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true,
+      children: [{ type: "Column", gap: 0, crossAxisAlignment: "center",
+        children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) }] };
+  }
+  const barraTexto = modo === "paginas"
+    ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · pág " + (pg + 1)
+      + " de " + r.images.length + " · pellizca para acercar"
+    : "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
+      + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
+      + " · pellizca para acercar";
   const body = [
-  // El "zoom" de la docs nueva de Kino (screen-components.md, rama main):
-  // pellizcar o doble toque amplía el desplazamiento vertical hasta 4x y el
-  // contenido se dibuja más ancho, así las tiras angostas se leen grandes.
-  // Es aditivo: un Kino más antiguo (0.9.78) lo descarta sin queja y el resto
-  // se dibuja igual; se activa solo cuando Kino publique la versión que lo
-  // trae. Igual que el fit "width" de cada página: semillas plantadas.
-  { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true, children: [pageCol] },
+    cuerpo,
     { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
@@ -1809,10 +1834,13 @@ function readerTree(state) {
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-      { type: "Text", text: "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
-          + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100),
+    ].concat(pagesDisponible() ? [
+      { type: "TextButton", key: "btnModo", labelText: modo === "paginas" ? "Modo tira" : "Modo páginas",
+        labelTextEn: modo === "paginas" ? "Strip mode" : "Page mode", onPressed: "modoLector" },
+    ] : []).concat([
+      { type: "Text", text: barraTexto,
         style: "caption", color: "muted" },
-    ] },
+    ]) },
   ];
   const raiz = {
     type: "Scaffold",
@@ -2200,6 +2228,44 @@ export async function screenEvent(ev) {
       if (!r2) return { toast: "No se pudieron leer las páginas de este capítulo." };
       return r2;
     }
+    if (name === "modoLector") {
+      // Cambia entre la tira vertical de siempre y el modo páginas del
+      // Kino nuevo (una página a la vez, con la barra de progreso de
+      // Kino y zoom en cada página).
+      const nuevo = modoLectorPref() === "paginas" ? "tira" : "paginas";
+      setJson("modoLector", nuevo);
+      const r = state.reader;
+      if (!r || !Array.isArray(r.images) || !r.images.length) {
+        return { toast: nuevo === "paginas" ? "Modo páginas" : "Modo tira" };
+      }
+      if (nuevo === "paginas" && (r.images.length < 2 || r.images.length > 250)) {
+        return { toast: "Este capítulo no entra en el modo páginas (2 a 250 páginas): se queda en tira." };
+      }
+      const resp = { state: { reader: { images: r.images, idx: r.idx, tk: Date.now(),
+          pend: r.pend || 0, fallos: r.fallos || 0 } },
+        toast: nuevo === "paginas" ? "Leyendo por páginas" : "Leyendo en tira" };
+      if (nuevo === "paginas") {
+        const d = state.detail;
+        const ch = d && Array.isArray(d.chapters) ? d.chapters[r.idx || 0] : null;
+        let at = ch ? getJson("pgAt:" + ch.url, 0) : 0;
+        at = parseInt(at, 10);
+        if (!(at >= 0) || at >= r.images.length) at = 0;
+        resp.ui = [{ set: { key: "pgs", value: at } }];
+      }
+      return resp;
+    }
+    if (name === "pgChanged") {
+      // El pages del Kino nuevo avisa en qué página se quedó: se
+      // guarda por capítulo para retomar la próxima vez.
+      const r = state.reader;
+      const d = state.detail;
+      if (!r || !d || !Array.isArray(d.chapters)) return null;
+      const ch = d.chapters[r.idx || 0];
+      if (!ch) return null;
+      const pg = parseInt(String(ev.value), 10);
+      if (pg >= 0) setJson("pgAt:" + ch.url, pg);
+      return null;
+    }
     if (name === "search") {
       const q = String((ev.value && ev.value.q) || "").trim();
       if (!q) return { toast: "Escribe un título." };
@@ -2300,6 +2366,16 @@ async function abrirCapitulo(d, idx, conRuta) {
   syncPushHist();
   const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
   if (conRuta) resp.route = { push: "read" };
+  // Modo páginas (Kino 0.9.81): retomar donde se quedó (la receta del
+  // lector de la docs: un `set` de ui sobre la key del pages en la
+  // respuesta que abre el capítulo).
+  if (modoLectorEfectivo(images.length) === "paginas") {
+    let at = getJson("pgAt:" + ch.url, 0);
+    at = parseInt(at, 10);
+    if (!(at >= 0) || at >= images.length) at = 0;
+    resp.ui = [{ set: { key: "pgs", value: at } }];
+    log("modo páginas: retomando en la pág " + (at + 1));
+  }
   return resp;
 }
 
@@ -2361,3 +2437,4 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
