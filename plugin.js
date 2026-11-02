@@ -1,11 +1,11 @@
-// MangaTrack v0.3.7 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.8 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.7";
+const VERSION = "0.3.8";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1176,7 +1176,7 @@ async function moSerie(url) {
   const seen = {};
   const re = /<a\b[^>]*href="([^"]*[/]lector[/][^"]+)"[^>]*>/gi;
   let m;
-  while ((m = re.exec(html)) !== null && caps.length < 600) {
+  while ((m = re.exec(html)) !== null && caps.length < TOPE_CAPS_SERIE) {
     const href = m[1].replace(/^https?:[/][/][^/]+/i, "");
     const seg = href.split("/").filter(Boolean); // [lector, slug, id]
     if (seg.length < 3 || seg[0] !== "lector") continue;
@@ -1239,13 +1239,15 @@ function moImages(html) {
 }
 
 // --------------------------------------- dimensiones de las páginas
-// El Image de Kino no tiene modo «ajustar»: SIEMPRE rellena su caja
-// recortando lo que sobre (cover), con o sin width/height (la 0.1.8
-// dejaba las páginas sin caja y Kino ponía una por defecto: por eso se
-// seguían cortando las palabras en las uniones). Una página solo se ve
-// entera si su caja tiene la MISMA proporción que la imagen. Las
-// rebanadas del sitio no traen dimensiones en el HTML: se leen de los
-// primeros bytes de cada imagen (SOF del JPEG, IHDR del PNG, VP8 del
+// El Image de Kino admite fit: "width" (aditivo, sin apiVersion nuevo;
+// un Kino más antiguo lo lee como cover): la imagen toma el ANCHO de
+// su caja y SU PROPIA altura — una página o una tira larga nunca se
+// recorta, y no hace falta adivinar una caja con la proporción exacta.
+// Historia: antes de conocer fit, el Image siempre rellenaba su caja
+// recortando (cover) y la única defensa era elegir cajas con la
+// proporción de cada página medida — de ahí todo el sistema de medir
+// dimensiones leyendo los primeros bytes de cada imagen (SOF del
+// JPEG, IHDR del PNG, VP8 del
 // WebP, la cabecera del GIF) con kino.fetch + maxBytes, y se guardan en
 // kino.storage para no volver a medirlas. Kino acepta 60 peticiones por
 // llamada: se miden 50 por evento y las que falten las mide un
@@ -1719,92 +1721,26 @@ function detailTree(state) {
 // Escala de tamaños de Kino: un width/height fuera de esta escala se
 // descarta, ¡y con él el nodo entero! La caja se ajusta a la proporción
 // real de la página buscando el par de la escala más cercano.
-const SIZE_SCALE = [16, 24, 32, 40, 48, 64, 80, 96, 120, 160, 200, 240, 320, 400, 480, 560, 640];
-// La caja de una página: el par (w, h) de la escala con MENOR error de
-// proporción; entre las casi exactas (diferencia menor a 0.01) prefiere
-// la de mayor área. El Image de Kino SIEMPRE rellena su caja recortando
-// (cover): cuanto más cerca esté la caja de la proporción real, menos
-// borde se pierde. En un webtoon las rebanadas son cortes de una tira
-// continua y un globo puede cruzar la unión: cada píxel recortado de
-// más en la costura parte palabras. La escala es dispersa: algunas
-// proporciones no tienen par exacto (ej. 900×1300 → 400×560, recorte
-// de ~3%), muchas otras sí (900×1800 → 320×640, 800×2560 → 200×640,
-// exactas). La versión anterior usaba escalones de tolerancia y
-// prefería área: para algunas proporciones elegía cajas con más error
-// del necesario (hasta 12% en TV).
-function pageCaja(ratio, wMin, wMax, hMin, hMax) {
-  if (!isFinite(ratio) || ratio <= 0) return null;
-  let mejor = null;
-  for (const w of SIZE_SCALE) {
-    if (w > wMax || w < wMin) continue;
-    for (const h of SIZE_SCALE) {
-      if (h > hMax || h < hMin) continue;
-      const err = Math.abs(h / w - ratio) / ratio;
-      if (!mejor || err < mejor.err - 0.01 ||
-          (err < mejor.err + 0.01 && w * h > mejor.a)) {
-        mejor = { w: w, h: h, a: w * h, err: err };
-      }
-    }
-  }
-  return mejor ? { width: mejor.w, height: mejor.h, err: mejor.err } : null;
-}
-
-// Caja a ANCHO COMPLETO para páginas de manga tradicional: la más
-// ancha de la escala cuya altura más cercana dé un error de
-// proporción de 8% o menos. En páginas tradicionales ese recorte
-// pequeño solo toca el margen blanco del papel (invisible); en un
-// webtoon partiría palabras, y por eso pageNodes solo la usa cuando
-// el capítulo se detectó de páginas uniformes.
-function pageLlena(ratio, wCap) {
-  if (!isFinite(ratio) || ratio <= 0) return null;
-  const ws = SIZE_SCALE.filter((x) => x <= wCap).sort((a, b) => b - a);
-  for (let wi = 0; wi < ws.length; wi++) {
-    const w = ws[wi];
-    let mejorH = 0, mejorErr = 0;
-    for (const h of SIZE_SCALE) {
-      const err = Math.abs(h / w - ratio) / ratio;
-      if (mejorH === 0 || err < mejorErr) { mejorH = h; mejorErr = err; }
-    }
-    if (mejorErr <= 0.08) return { width: w, height: mejorH, err: mejorErr };
-  }
-  return null;
-}
-
-function pageNodes(p, i, ratioGuia, llena) {
+// Cada página: Image con fit "width" dentro de una columna "stretch"
+// (tan ancha como la pantalla): la página se dibuja al ancho completo
+// y con su altura real, sin recortes y sin miniaturas, con dimensiones
+// o sin ellas. El "aspect" solo reserva el hueco con la proporción
+// conocida (propia o la mediana del capítulo) hasta que la imagen
+// carga; Kino acepta cualquier "w:h" entre 0,2 y 5.
+function pageNodes(p, i, ratioGuia) {
   const url = typeof p === "string" ? p : p.url;
   const w = (p && p.w) || 0, h = (p && p.h) || 0;
-  // Sin dimensiones propias usa la mediana del capítulo (las rebanadas
-  // de un webtoon comparten ancho): caja provisional cercana mientras
-  // dimsTick mide esta página, en vez de la caja plana por defecto.
-  const ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 0);
-  const node = {
+  let ratio = w > 0 && h > 0 ? h / w : (ratioGuia || 1.4);
+  if (!(ratio >= 0.2)) ratio = 0.2;
+  if (ratio > 5) ratio = 5;
+  return [{
     type: "Image", key: "p" + i, url: url,
     alt: "Página " + (i + 1), altEn: "Page " + (i + 1),
+    fit: "width",
+    aspect: "1:" + (Math.round(ratio * 100) / 100),
     fallback: { type: "Column", padding: 16, children: [
       { type: "Text", text: "Página " + (i + 1), textEn: "Page " + (i + 1), color: "muted" } ] },
-  };
-  if (ratio > 0) {
-    let small = pageCaja(ratio, 80, 400, 96, 640);
-    let big = pageCaja(ratio, 240, 640, 320, 640);
-    const alt = pageCaja(ratio, 120, 640, 200, 640);
-    if (alt && big && alt.err < big.err - 0.005) big = alt;
-    // Capítulo de páginas uniformes: a ancho completo; el recorte
-    // pequeño solo toca el margen blanco del papel.
-    if (llena) {
-      const sL = pageLlena(ratio, 400);
-      const bL = pageLlena(ratio, 640);
-      if (sL) small = sL;
-      if (bL) big = bL;
-    }
-    if (small && big) {
-      node.width = { compact: small.width, medium: big.width, expanded: big.width };
-      node.height = { compact: small.height, medium: big.height, expanded: big.height };
-      return [node];
-    }
-  }
-  node.width = { compact: 400, medium: 400, expanded: 480 };
-  node.height = { compact: 560, medium: 560, expanded: 640 };
-  return [node];
+  }];
 }
 
 function readerTree(state) {
@@ -1829,19 +1765,12 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // Capítulo de páginas normales (manga tradicional, no webtoon): la
-  // MEDIANA debe ser de página común (0.5 a 1.7) y el 80% de las
-  // proporciones medidas debe caer a ±0.25 de esa mediana, para que
-  // una portada o doble página rara NO desactive el ancho completo
-  // (la regla anterior usaba el rango entero min-max y una sola página
-  // distinta bastaba). Los webtoones cortan sus tiras a alturas muy
-  // variadas (2.0-3.5) y no pasan la regla: siguen con cajas exactas
-  // para no partir palabras en las costuras.
-  const alrededor = medidas.filter((x) => Math.abs(x - ratioGuia) <= 0.25).length;
-  const llena = medidas.length >= 3 && ratioGuia >= 0.5 && ratioGuia <= 1.7 &&
-    alrededor >= medidas.length * 0.8;
-  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
-    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia, llena)) };
+  // Páginas a ANCHO COMPLETO con fit "width": la columna stretch hace
+  // cada caja tan ancha como la pantalla y la imagen aporta su altura
+  // real — sin recortes ni miniaturas, sean páginas normales o tiras
+  // de webtoon.
+  const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "stretch",
+    children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
     { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
@@ -1854,8 +1783,7 @@ function readerTree(state) {
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
       { type: "Text", text: "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
-          + medidas.length + " pág · mediana " + (Math.round(ratioGuia * 100) / 100)
-          + " · " + (llena ? "ancho completo" : "cajas exactas"),
+          + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100),
         style: "caption", color: "muted" },
     ] },
   ];
