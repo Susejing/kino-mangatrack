@@ -1,11 +1,11 @@
-// MangaTrack v0.1.14 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.1.15 — lector de mangas para Kino con pantalla propia.
 // Fuente de esta versión: LeerCapitulo (www.leercapitulo.co).
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.1.14";
+const VERSION = "0.1.15";
 const FUENTE = "LeerCapitulo";
 const BASE = "https://www.leercapitulo.co";
 const MAX_CAPS = 490;
@@ -813,7 +813,7 @@ function readerTree(state) {
     children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia, llena)) };
   const body = [
     { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
-    { type: "Row", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
+    { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
       { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
@@ -834,7 +834,9 @@ function readerTree(state) {
     appBar: { title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
-      actions: [] },
+      actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
+        labelText: "Ocultar o mostrar controles", labelTextEn: "Hide or show controls",
+        onPressed: { ui: [{ toggle: "barraLector" }] } }] },
     body: { type: "Column", children: body },
   };
   return raiz;
