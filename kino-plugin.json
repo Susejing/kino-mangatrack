@@ -1,28 +1,45 @@
-{"id":"mangatrack",
-"name":"MangaTrack",
-"version": "0.3.8",
-"creator":"Susejing",
-"description":"Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni).",
-"apiVersion":14,
-"entry":"plugin.js",
-"hosts":[
-  "www.leercapitulo.co",
-  "leercapitulo.co",
-  "i0.wp.com",
-  "i1.wp.com",
-  "i2.wp.com",
-  "i3.wp.com",
-  "*.t34798ndc.com",
-  "lectorxd.com",
-  "www.lectorxd.com",
-  "s1.cdnlxd.xyz",
-  "s2.cdnlxd.xyz",
-  "api.mangadex.org",
-  "uploads.mangadex.org",
-  "inmanga.com",
-  "cdn1.intomanga.com",
-  "assets.intomanga.com",
-  "manga-oni.com",
-  "www.manga-oni.com",
-  "*.manga-oni.com"],
-"capabilities":["screen", "shared"],"debug":true,"screen":{"label":"MangaTrack","labelEn":"MangaTrack","menuOpens":"screen","opensFrom":["menu","settings"]}}
+{
+  "id": "mangatrack",
+  "name": "MangaTrack",
+  "version": "0.3.9",
+  "creator": "Susejing",
+  "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni).",
+  "apiVersion": 14,
+  "entry": "plugin.js",
+  "hosts": [
+    "www.leercapitulo.co",
+    "leercapitulo.co",
+    "i0.wp.com",
+    "i1.wp.com",
+    "i2.wp.com",
+    "i3.wp.com",
+    "*.t34798ndc.com",
+    "lectorxd.com",
+    "www.lectorxd.com",
+    "s1.cdnlxd.xyz",
+    "s2.cdnlxd.xyz",
+    "api.mangadex.org",
+    "uploads.mangadex.org",
+    "inmanga.com",
+    "cdn1.intomanga.com",
+    "assets.intomanga.com",
+    "manga-oni.com",
+    "www.manga-oni.com",
+    "*.manga-oni.com",
+    "oni.ntr-files.online"
+  ],
+  "capabilities": [
+    "screen",
+    "shared"
+  ],
+  "debug": true,
+  "screen": {
+    "label": "MangaTrack",
+    "labelEn": "MangaTrack",
+    "menuOpens": "screen",
+    "opensFrom": [
+      "menu",
+      "settings"
+    ]
+  }
+}
