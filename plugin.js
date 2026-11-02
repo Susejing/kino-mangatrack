@@ -1,11 +1,11 @@
-// MangaTrack v0.3.9 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.3.10 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.9";
+const VERSION = "0.3.10";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1793,7 +1793,13 @@ function readerTree(state) {
   const pageCol = { type: "Column", gap: 0, crossAxisAlignment: "center",
     children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) };
   const body = [
-    { type: "SingleChildScrollView", key: scrollKey, flex: 1, children: [pageCol] },
+  // El "zoom" de la docs nueva de Kino (screen-components.md, rama main):
+  // pellizcar o doble toque amplía el desplazamiento vertical hasta 4x y el
+  // contenido se dibuja más ancho, así las tiras angostas se leen grandes.
+  // Es aditivo: un Kino más antiguo (0.9.78) lo descarta sin queja y el resto
+  // se dibuja igual; se activa solo cuando Kino publique la versión que lo
+  // trae. Igual que el fit "width" de cada página: semillas plantadas.
+  { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true, children: [pageCol] },
     { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
