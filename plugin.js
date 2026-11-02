@@ -1,11 +1,12 @@
-// MangaTrack v0.3.0 — lector de mangas para Kino con pantalla propia.
+
+// MangaTrack v0.3.1 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y ManhwaWeb.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Una sola pantalla con rutas (inicio, serie, lector, buscar, catálogo) y un
 // adaptador de scraping por fuente: las próximas fuentes se agregan
 // como funciones nuevas sin tocar la interfaz.
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
@@ -53,10 +54,17 @@ function fuenteDeUrl(url) {
 
 async function getHtmlDe(f, path) {
   const r = await kino.fetch(f.base + path, { headers: { Accept: "text/html" } });
-  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
-    userMessage: "No se pudo conectar con " + f.nombre + ". Inténtalo de nuevo.",
-  });
-  return r.text();
+  if (!r.ok) {
+    // El estado se anota en el log: con él se distingue un bloqueo +18
+    // (403/451) de una caída real de la red.
+    log(f.id + " HTTP " + r.status + " en " + path);
+    throw kino.error("network", "HTTP " + r.status, {
+      userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
+        ? "LectorXd bloqueó la página (HTTP " + r.status + "): si es una serie +18, la cierra sin cuenta. Prueba otra serie."
+        : "No se pudo conectar con " + f.nombre + " (HTTP " + r.status + "). Inténtalo de nuevo.",
+    });
+  }
+  return await r.text();
 }
 
 async function getHtml(path) {
@@ -146,11 +154,16 @@ function homeCards(html, max) {
 }
 
 // Tarjetas de LectorXd: enlaces a /<tipo>/<slug> con una imagen y el
-// título en un h4 (catálogo) o un h3 (portada). Las novelas se excluyen.
+// título en un h3/h4/h5 o en el alt de la imagen. Las novelas se excluyen.
+// La tarjeta ya no tiene que vivir entera dentro del <a>: en el HTML real
+// los títulos larguísimos y las etiquetas anidadas rompían el patrón
+// corto, así que tras cada <a> se busca la primera imagen y el primer
+// título hasta el siguiente enlace.
 function cardsLX(html, max) {
   const out = [];
   const seen = {};
-  const re = /<a[^>]+href="([^"]*[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]?)"[^>]*>([\s\S]{0,1200}?)<[/]a>/gi;
+  let consumido = 0;
+  const re = /<a\b[^>]*\bhref="([^"]*[/](?:manga|manhwa|manhua|one[-_]shot)[/][a-z0-9-]+[/]?)"[^>]*>/gi;
   let m;
   while ((m = re.exec(html)) !== null) {
     let url = m[1];
@@ -158,29 +171,40 @@ function cardsLX(html, max) {
     url = url.replace(/^https?:[/][/](?:www[.])?lectorxd[.]com/i, "");
     if (!/^[/]/.test(url)) continue;
     if (seen[url]) continue;
-    const inner = m[2];
-    const im = inner.match(/<img\b[^>]*>/i);
-    if (!im) continue;
-    const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bdata-lazy-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
-    if (!p) continue;
-    const poster = absLX(p[1]);
+    const start = m.index + m[0].length;
+    let inner = html.slice(start, start + 2000);
+    const corte = inner.search(/<a\b/i);
+    if (corte > 0) inner = inner.slice(0, corte);
+    let im = inner.match(/<img\b[^>]*>/i);
+    let poster = "";
+    if (!im && m.index > consumido) {
+      // Portada que vive ANTES del enlace: solo si no pertenece a la
+      // tarjeta anterior.
+      const antes = html.slice(consumido, m.index);
+      const im2 = antes.match(/<img\b[^>]*>/i);
+      if (im2) im = im2;
+    }
+    if (im) {
+      const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bdata-lazy-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
+      if (p) poster = absLX(p[1]);
+    }
     if (!poster || poster.indexOf("data:") === 0) continue;
     let title = "";
-    const h4 = inner.match(/<h[34][^>]*>([\s\S]{2,150}?)<[/]h[34]>/i);
-    if (h4) title = clean(h4[1].replace(/<[^>]*>/g, " "));
-    if (!title) {
+    const h = inner.match(/<h[345][^>]*>([\s\S]{2,200}?)<\/h[345]>/i);
+    if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
+    if (!title && im) {
       const a = im[0].match(/\balt="([^"]*)"/i);
-      if (a) title = clean(a[1]);
+      if (a && a[1]) title = clean(a[1]);
     }
     if (!title) title = url.split("/").filter(Boolean).pop() || url;
     seen[url] = 1;
+    consumido = start + inner.length;
     out.push({ url: url, title: title, poster: poster });
     if (out.length >= max) break;
   }
-  log("LX portada: " + out.length + " series");
+  log("LX tarjetas: " + out.length);
   return out;
 }
-
 function absLX(u) {
   if (!u) return "";
   if (u.indexOf("//") === 0) return "https:" + u;
@@ -652,25 +676,38 @@ async function imPostForm(path, q, sortby, skip, take) {
       "d": "",
     } },
   });
-  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
-    userMessage: "No se pudo conectar con InManga. Inténtalo de nuevo.",
-  });
-  return await r.text();
+  if (!r.ok) {
+    // El POST es lo que más puede fallar en InManga (su catálogo y su
+    // búsqueda solo responden a POST): el estado queda en el log.
+    log("IM POST " + path + " → HTTP " + r.status);
+    throw kino.error("network", "HTTP " + r.status, {
+      userMessage: "No se pudo conectar con InManga (HTTP " + r.status + "). Inténtalo de nuevo.",
+    });
+  }
+  const t = await r.text();
+  log("IM POST " + path + " ok: " + t.length + " chars");
+  return t;
 }
 
 function imCards(html, max) {
   const out = [];
   const seen = {};
-  const re = /<a\b[^>]*\bhref="([^"]*[/]ver[/]manga[/][^"]+)"[^>]*>([\s\S]{0,600}?)<[/]a>/gi;
+  // Enlaces a la página de una serie (/ver/manga/<slug>/<guid>). La
+  // tarjeta no tiene que vivir entera dentro del <a>: se busca la
+  // primera imagen y el primer título hasta el siguiente enlace.
+  const re = /<a\b[^>]*\bhref="([^"]*[/]ver[/]manga[/][a-z0-9-]+[/][0-9a-f-]{36}[/]?)"[^>]*>/gi;
   let m;
   while ((m = re.exec(html)) !== null && out.length < max) {
     let url = m[1];
     if (/^https?:/i.test(url)) url = url.replace(/^https?:[/][/][^/]+/i, "");
     if (seen[url]) continue;
-    seen[url] = 1;
-    const h4 = m[2].match(/<h4[^>]*m0[^>]*>([\s\S]{2,150}?)<[/]h4>/i);
-    const im = m[2].match(/<img\b[^>]*>/i);
+    const start = m.index + m[0].length;
+    let inner = html.slice(start, start + 1600);
+    const corte = inner.search(/<a\b/i);
+    if (corte > 0) inner = inner.slice(0, corte);
+    const im = inner.match(/<img\b[^>]*>/i);
     let poster = "";
+    let title = "";
     if (im) {
       const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
       if (p) {
@@ -678,8 +715,24 @@ function imCards(html, max) {
         if (poster.indexOf("//") === 0) poster = "https:" + poster;
         else if (poster.indexOf("/") === 0) poster = IM_BASE + poster;
       }
+      const a = im[0].match(/\balt="([^"]*)"/i);
+      if (a && a[1]) title = clean(a[1]);
     }
-    out.push({ url: url, title: h4 ? clean(h4[1]) : "Sin título", poster: poster });
+    const h = inner.match(/<h[23456][^>]*>([\s\S]{2,150}?)<\/h[23456]>/i);
+    if (h) {
+      const t = clean(h[1].replace(/<[^>]*>/g, " "));
+      if (t) title = t;
+    }
+    if (!title) {
+      const st = inner.match(/<(?:strong|b)\b[^>]*>([^<]{2,120})<\/(?:strong|b)>/i);
+      if (st) title = clean(st[1]);
+    }
+    if (!title) {
+      const seg = url.split("/").filter(Boolean);
+      title = seg[2] ? seg[2].replace(/-/g, " ") : "Sin título";
+    }
+    seen[url] = 1;
+    out.push({ url: url, title: title, poster: poster });
   }
   log("IM tarjetas: " + out.length);
   return out;
@@ -1096,10 +1149,20 @@ async function homeTree() {
     try { populares = mdCards(await mdJson(mdQuery("order[followedCount]=desc", 0, 20)), 20); } catch (e) { log("MD home pop: " + e); }
     try { recientes = mdCards(await mdJson(mdQuery("order[latestUploadedChapter]=desc", 0, 20)), 20); } catch (e) { log("MD home rec: " + e); }
   } else if (f.id === "inmanga") {
+    // El catálogo popular sale del POST; si el POST no responde, la
+    // portada misma de InManga (un GET, que sí funciona) trae
+    // «Últimas actualizaciones» con sus enlaces.
     titPop = "Populares de InManga"; titPopEn = "Popular on InManga";
-    titRec = "Recientes de InManga"; titRecEn = "Recent on InManga";
-    try { populares = imCards(await imPostForm("/manga/getMangasConsultResult", "", 1, 0, 20), 20); } catch (e) { log("IM home pop: " + e); }
-    try { recientes = imCards(await imPostForm("/manga/getMangasConsultResult", "", 3, 0, 20), 20); } catch (e) { log("IM home rec: " + e); }
+    titRec = "Últimas actualizaciones"; titRecEn = "Latest updates";
+    let pag = "";
+    try { pag = await imPostForm("/manga/getMangasConsultResult", "", 1, 0, 20); } catch (e) { log("IM POST falló: " + e); }
+    try { populares = pag ? imCards(pag, 20) : []; } catch (e) { log("IM cards POST: " + e); }
+    if (populares.length) {
+      try { recientes = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
+    } else {
+      titPop = "Últimas actualizaciones"; titPopEn = "Latest updates";
+      try { populares = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
+    }
   } else if (f.id === "manhwaweb") {
     titPop = "Nuevos en ManhwaWeb"; titPopEn = "New on ManhwaWeb";
     titRec = "Biblioteca de ManhwaWeb"; titRecEn = "ManhwaWeb library";
@@ -1108,17 +1171,27 @@ async function homeTree() {
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
-    // La portada de LectorXd trae "Populares de hoy" y "Recientes"; si el
-    // sitio cambia y no aparecen, se vuelve a la cuadrícula mixta.
+    // La portada de LectorXd trae "Populares de hoy" y "Recientes". Los
+    // encabezados se buscan tolerando etiquetas en medio (el HTML real
+    // viene con <span> dentro de los títulos) y "Recientes" se busca
+    // DESPUÉS de "Populares de hoy", porque la palabra puede aparecer
+    // antes en un menú. Si algo no aparece, se vuelve a la cuadrícula
+    // mixta y el log anota los encabezados que trajo la página.
     titPop = "Populares de hoy"; titPopEn = "Popular today";
     titRec = "Recientes"; titRecEn = "Recent";
-    const posP = html.search(/populares de hoy/i);
-    const posR = html.search(/recientes/i);
+    const mP = html.match(/populares(?:[^<>]|<[^>]*>){1,80}?hoy/i);
+    const posP = mP ? mP.index : -1;
+    const mR = posP >= 0 ? html.slice(posP + 5).match(/recientes/i) : null;
+    const posR = mR ? posP + 5 + mR.index : -1;
+    log("LX portada: posP=" + posP + " posR=" + posR + " html=" + html.length);
     if (posP >= 0 && posR > posP) {
       populares = cardsLX(html.slice(posP, posR), 12);
       recientes = cardsLX(html.slice(posR), 24);
-    } else {
-      mixtas = cardsLX(html, 40);
+    }
+    if (!populares.length && !recientes.length) mixtas = cardsLX(html, 40);
+    if (!populares.length && !recientes.length) {
+      const heads = (html.match(/<h[123][^>]*>[^<]{2,50}/gi) || []).slice(0, 6);
+      log("LX portada sin secciones; h: " + heads.join(" ~ ").replace(/\s+/g, " ").slice(0, 300));
     }
   } else {
     // La portada de LeerCapitulo trae tres secciones (Tendencias,
@@ -1840,6 +1913,12 @@ async function cargarSerie(url, conRuta) {
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
+    // El +18 de LectorXd sin cuenta: la página viene con un aviso de
+    // "Contenido para Adultos" y no trae la lista de capítulos.
+    if (/contenido para adultos/i.test(html) && /cambiar tus preferencias/i.test(html)) {
+      log("LX serie +18 cerrada: " + url);
+      return { toast: "Esta serie es +18: LectorXd la bloquea sin cuenta. Prueba otra." };
+    }
     meta = metaLX(html);
     const allCaps = capsLX(html);
     meta.totalCaps = allCaps.length;
@@ -1857,3 +1936,4 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
