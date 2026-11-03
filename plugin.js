@@ -1,4 +1,7 @@
-// MangaTrack v0.4.7 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.8 — lector de mangas para Kino con pantalla propia.
+// v0.4.8 — el +18 de LectorXd es un aviso tapado: sin sesión el sitio ya
+// entrega la lista de capítulos y las páginas debajo del aviso (verificado
+// en una serie +18 real), y ahora el plugin las lee como hacen otras apps.
 // v0.4.7 — el filtro anti-bots de LectorXd y MangaOni entra y sale: las
 // peticiones ahora se reintentan (otro disfraz de navegador, la dirección
 // www del sitio y una pequeña espera entre intentos) antes de rendirse.
@@ -10,7 +13,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.7";
+const VERSION = "0.4.8";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3125,6 +3128,13 @@ async function abrirCapitulo(d, idx, conRuta) {
   } else {
     const html = await getHtmlDe(fSer, ch.url);
     images = readerImagesDe(fSer, html);
+    // v0.4.8 — un capítulo +18 de LectorXd con aviso pero sin imágenes:
+    // ese capítulo sí está cerrado de verdad; mensaje honesto en vez de
+    // un fallo mudo.
+    if (!images.length && fSer.id === "lectorxd" && /contenido para adultos/i.test(html)) {
+      log("LX capítulo +18 sin imágenes servidas: " + ch.url);
+      return { toast: "Este capítulo es +18 y LectorXd no entregó sus imágenes: ese sí necesita cuenta en el sitio." };
+    }
   }
   if (!images.length) return null;
   images = images.map((x) => (typeof x === "string" ? { url: x } : x));
@@ -3191,14 +3201,21 @@ async function cargarSerie(url, conRuta) {
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
-    // El +18 de LectorXd sin cuenta: la página viene con un aviso de
-    // "Contenido para Adultos" y no trae la lista de capítulos.
-    if (/contenido para adultos/i.test(html) && /cambiar tus preferencias/i.test(html)) {
-      log("LX serie +18 cerrada: " + url);
-      return { toast: "Esta serie es +18: LectorXd la bloquea sin cuenta. Prueba otra." };
-    }
+    // v0.4.8 — El +18 de LectorXd es un AVISO TAPADO: sin sesión el sitio
+    // ya entrega la lista de capítulos debajo del aviso (verificado en una
+    // serie +18 real: los capítulos y el lector con sus páginas vienen
+    // servidos). Así lo leen las otras apps: sin cuentas, leyendo los datos
+    // que ya vinieron. Si la lista no llegara, ahí sí el aviso honesto.
+    const adultoLX = /contenido para adultos/i.test(html) && /cambiar tus preferencias/i.test(html);
+    if (adultoLX) log("LX serie +18 (aviso tapado, leyendo debajo): " + url);
     meta = metaLX(html);
     const allCaps = capsLX(html);
+    if (!allCaps.length && adultoLX) {
+      // El aviso venía sin lista debajo: ese contenido sí está cerrado sin
+      // cuenta y la persona merece saberlo con franqueza.
+      log("LX serie +18 sin capítulos servidos: " + url);
+      return { toast: "Esta serie es +18 y LectorXd no entregó su lista de capítulos: esa sí necesita cuenta en el sitio." };
+    }
     meta.totalCaps = allCaps.length;
     full = allCaps.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   } else {
