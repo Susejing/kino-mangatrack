@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.3.11";
+const VERSION = "0.4.0";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -643,7 +643,17 @@ async function mdMeta(id) {
   const d = (m.attributes && m.attributes.description) || {};
   let ov = String(d.es || d.en || "");
   ov = clean(ov.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[#*_]+/g, " ").slice(0, 600));
-  return { title: mdTitulo(m), poster: mdPortada(m), overview: ov };
+  // MangaDex publica los ids de AniList y MAL de cada serie en sus
+  // "links": con ellos el registro en las listas es EXACTO, sin
+  // búsqueda por título (lo usa la puerta de AniTrack).
+  const L = ((m.attributes && m.attributes.links) || {});
+  const idDe = (v) => {
+    const s = String(v || "").trim();
+    const mm = s.match(/(\d+)\D*$/);
+    return mm && parseInt(mm[1], 10) > 0 ? parseInt(mm[1], 10) : 0;
+  };
+  return { title: mdTitulo(m), poster: mdPortada(m), overview: ov,
+    anilistId: idDe(L.al), malId: idDe(L.mal) };
 }
 
 async function mdCaps(id) {
@@ -2331,6 +2341,49 @@ export async function screenEvent(ev) {
   }
 }
 
+// Aviso de progreso a AniTrack por la puerta "manga" del protocolo
+// entre plugins (Kino 0.9.81+; MangaTrack declara la puerta en
+// enhancements["20"], invisible para los Kino viejos). Cada capítulo
+// que abre la persona se le cuenta a AniTrack, que lo busca en
+// AniList/MAL y lo marca en las listas. Si AniTrack no está o el Kino
+// es anterior, no pasa nada: queda en el registro y el capítulo abre
+// igual.
+function avisarAnitrack(d, ch, fSer) {
+  try {
+    if (typeof kino.plugins !== "object" || !kino.plugins) return Promise.resolve(null);
+    const titulo = ((d && d.meta && d.meta.title) || "").trim();
+    const num = parseFloat(ch && ch.num);
+    if (!titulo || !isFinite(num)) return Promise.resolve(null);
+    const arg = { title: titulo.slice(0, 200), chapter: num, source: (fSer && fSer.id) || "" };
+    if (d.meta.anilistId) arg.anilistId = d.meta.anilistId;
+    if (d.meta.malId) arg.malId = d.meta.malId;
+    return kino.plugins.call("anitrack", "markChapter", arg)
+      .then(function (r) {
+        if (!r || r.marked !== true) {
+          const motivo = (r && r.reason) || "";
+          if (motivo === "sin-sesion") return "AniTrack no tiene sesión: entra a sus Ajustes e inicia sesión para registrar lo que lees.";
+          if (motivo === "no-encontrada") return "AniTrack no encontró «" + titulo.slice(0, 60) + "» en AniList: este capítulo no se marcó.";
+          if (motivo) return "AniTrack no registró el capítulo (" + motivo + ").";
+          return null;
+        }
+        if (r.dup) return null;   // ya estaba (releído o más adelante): silencio
+        return "✓ Cap. " + num + " de «" + String(r.title || titulo).slice(0, 40) + "» registrado en " + (r.where || "AniList") + ".";
+      })
+      .catch(function (e) {
+        const code = (e && e.code) || "";
+        log("anitrack " + code + ": " + ((e && e.message) || e));
+        if (code === "provider_missing" && !getJson("avisoAnitrackFalta", 0)) {
+          setJson("avisoAnitrackFalta", 1);
+          return "AniTrack no está instalado o está apagado: el capítulo no quedó registrado en tus listas.";
+        }
+        return null;
+      });
+  } catch (e) {
+    log("anitrack aviso: " + ((e && e.message) || e));
+    return Promise.resolve(null);
+  }
+}
+
 // Abre en el lector el capítulo idx de la ventana actual del detalle:
 // descarga las páginas, las mide y guarda el historial con su índice
 // ABSOLUTO (capStart + idx) para que "Continuar" y las marcas ✓
@@ -2338,6 +2391,10 @@ export async function screenEvent(ev) {
 async function abrirCapitulo(d, idx, conRuta) {
   const ch = d.chapters[idx];
   const fSer = fuenteDeUrl(d.url) || fuenteActiva();
+  // El registro en AniList/MAL corre en PARALELO con la descarga de las
+  // páginas: se dispara ya y se recoge al final, así el capítulo no
+  // espera por él.
+  const avisoAnitrack = avisarAnitrack(d, ch, fSer);
   let images = [];
   if (fSer.id === "mangadex") {
     images = await mdImages(ch.url);
@@ -2376,6 +2433,12 @@ async function abrirCapitulo(d, idx, conRuta) {
     resp.ui = [{ set: { key: "pgs", value: at } }];
     log("modo páginas: retomando en la pág " + (at + 1));
   }
+  // Recoge el aviso de AniTrack (venía corriendo en paralelo): si hay
+  // algo que decir, viaja como toast del capítulo recién abierto.
+  try {
+    const aviso = await avisoAnitrack;
+    if (aviso) resp.toast = aviso;
+  } catch (e) { log("anitrack aviso: " + ((e && e.message) || e)); }
   return resp;
 }
 
