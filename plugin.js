@@ -1,4 +1,12 @@
-// MangaTrack v0.4.9 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.10 — lector de mangas para Kino con pantalla propia.
+// v0.4.10 — el catálogo y el buscador de LectorXd sirven sus tarjetas en
+// una cuadrícula propia ("manga-grid", el marcado que leen las demás
+// apps del sitio): ahora también se leen así, con el cierre de cada
+// enlace respetado y el título aceptado en cualquier encabezado. Si la
+// página no trajera ni eso, el registro anota qué encontró, para afinar
+// con datos y no con adivinanzas. Y el aviso a AniTrack gana una segunda
+// oportunidad: los títulos con adornos «(Sin Censura)» se reintentan sin
+// el adorno en MangaDex, que los guarda limpios.
 // v0.4.9 — cuando LectorXd le cierra la puerta a la conexión de la
 // persona (el 403 que no se va; la portada carga porque la sirve la
 // caché del propio filtro), Kino abre una ventanita de navegador real
@@ -19,7 +27,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.9";
+const VERSION = "0.4.10";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -370,7 +378,7 @@ function cardsLX(html, max) {
     }
     if (!poster || poster.indexOf("data:") === 0) continue;
     let title = "";
-    const h = inner.match(/<h[345][^>]*>([\s\S]{2,200}?)<\/h[345]>/i);
+    const h = inner.match(/<h[2-6][^>]*>([\s\S]{2,200}?)<\/h[2-6]>/i);
     if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
     if (!title && im) {
       const a = im[0].match(/\balt="([^"]*)"/i);
@@ -392,8 +400,58 @@ function absLX(u) {
   return u;
 }
 
+// v0.4.10 — el catálogo y el buscador de LectorXd sirven sus tarjetas
+// en una cuadrícula "manga-grid" (el mismo marcado que leen las demás
+// apps del sitio): cada tarjeta es UN enlace <a>…</a> completo con la
+// portada y el título dentro. El lector de siempre (cardsLX) corta la
+// tarjeta en el siguiente <a> y a veces se queda sin la portada: este
+// segundo intento respeta el cierre </a>, acepta el título en cualquier
+// encabezado h2-h6 y, si la página no trajo ni eso, anota en el registro
+// qué encontró — para afinar con datos, no con adivinanzas.
+function cardsLXCat(html, max) {
+  const out = [];
+  const seen = {};
+  const iGrid = html.search(/manga-grid/i);
+  if (iGrid < 0) {
+    log("LX catálogo: sin cuadrícula en la página (html=" + html.length + ")");
+    return out;
+  }
+  const zona = html.slice(iGrid);
+  const re = /<a\b[^>]*\bhref="([^"]*\/(?:manga|manhwa|manhua|one[-_]shot)\/[a-z0-9-]+\/?)"[^>]*>([\s\S]{0,4000}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(zona)) !== null) {
+    let url = m[1];
+    if (/\/novela\//i.test(url)) continue;
+    url = url.replace(/^https?:\/\/(?:www\.)?lectorxd\.com/i, "");
+    if (!/^\//.test(url)) continue;
+    if (seen[url]) continue;
+    const inner = m[2];
+    let poster = "";
+    const imgs = inner.match(/<img\b[^>]*>/gi) || [];
+    for (let i = 0; i < imgs.length; i++) {
+      const p = imgs[i].match(/\bdata-src="([^"]+)"/i) || imgs[i].match(/\bdata-lazy-src="([^"]+)"/i) || imgs[i].match(/\bsrc="([^"]+)"/i);
+      if (p && p[1] && p[1].indexOf("data:") !== 0) { poster = absLX(p[1]); break; }
+    }
+    let title = "";
+    const h = inner.match(/<h[2-6][^>]*>([\s\S]{2,200}?)<\/h[2-6]>/i);
+    if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
+    if (!title && imgs.length) {
+      const a = imgs[0].match(/\balt="([^"]*)"/i);
+      if (a && a[1]) title = clean(a[1]);
+    }
+    if (!title) title = url.split("/").filter(Boolean).pop() || url;
+    seen[url] = 1;
+    out.push({ url: url, title: title, poster: poster });
+    if (out.length >= max) break;
+  }
+  log("LX catálogo: " + out.length + " tarjetas de la cuadrícula");
+  return out;
+}
+
 function cardsDe(f, html, max) {
-  return f.id === "lectorxd" ? cardsLX(html, max) : homeCards(html, max);
+  if (f.id !== "lectorxd") return homeCards(html, max);
+  const t = cardsLX(html, max);
+  return t.length ? t : cardsLXCat(html, max);
 }
 
 // Metadatos de la página de una serie (etiquetas og: de WordPress)
@@ -3096,6 +3154,19 @@ function normTituloMD(s) {
 // si el parecido es claro: ante la duda, nada — AniTrack seguirá con
 // su búsqueda por título, como siempre, y nunca se marca una serie
 // equivocada.
+// Título sin los adornos que ponen las fuentes al final — «(Sin
+// Censura)», «(Novela)»… — para buscar en MangaDex como la guarda la
+// gente: solo se usa como reintento, el título tal cual va primero.
+function tituloLimpioMD(t) {
+  let s = String(t || "").trim();
+  let antes = "";
+  while (antes !== s) {
+    antes = s;
+    s = s.replace(/\s*\([^()]{1,40}\)\s*$/, "").trim();
+  }
+  return s;
+}
+
 async function idsPorTitulo(titulo) {
   const clave = "idsMd:" + titulo.slice(0, 80);
   const cache = getJson(clave, null);
@@ -3172,7 +3243,14 @@ function avisarAnitrack(d, ch, fSer) {
     // MangaDex guarda títulos en español (altTitles) y publica los
     // enlaces exactos a AniList y MAL de cada serie. Con esos ids el
     // registro es exacto, no un parecido de título.
-    const idsP = (arg.anilistId || arg.malId) ? Promise.resolve(null) : idsPorTitulo(titulo);
+    // v0.4.10 — segunda oportunidad: los adornos «(Sin Censura)» y
+    // parecidos no los conoce MangaDex, pero el título limpio sí.
+    const limpio = tituloLimpioMD(titulo);
+    const idsP = (arg.anilistId || arg.malId) ? Promise.resolve(null) : idsPorTitulo(titulo)
+      .then(function (ids) {
+        if (ids || !limpio || limpio === titulo) return ids;
+        return idsPorTitulo(limpio);
+      });
     return idsP
       .then(function (ids) {
         if (ids && ids.al) arg.anilistId = ids.al;
