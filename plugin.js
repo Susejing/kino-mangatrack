@@ -1,4 +1,4 @@
-// MangaTrack v0.3.11 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.0 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
