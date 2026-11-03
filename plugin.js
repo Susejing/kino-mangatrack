@@ -37,6 +37,21 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.17 — la cuarta prueba real trajo dos verdades. La buena: las
+// imágenes SÍ bajan cuando se piden con cara de navegador («Little
+// Bully»: 26 de 26 páginas medidas). La amarga: Kino las mide bien
+// pero al DIBUJARLAS no puede presentarse ante el sitio (su pintor de
+// imágenes no manda Referer) y el sitio las niega: páginas en blanco.
+// Y la ventanita de la revisión no apareció porque Kino solo la abre
+// cuando la PERSONA toca algo, nunca en una carga de fondo como la
+// portada. Esta versión pone la ventanita al alcance del dedo: si las
+// populares vienen bloqueadas, la portada muestra un botón «Mangas.in
+// pide su revisión» que abre la ventanita (toque de la persona:
+// contexto legal), pasa la revisión una vez y recarga. El Registro
+// cuenta ahora el porqué de CADA imagen que no baje (de cualquier
+// casa, no solo las de Mangas.in) y en qué casa vive cada página del
+// lector. Y si un capítulo de Mangas.in llega sin ninguna página
+// entregada, el lector lo DICE en vez de mostrar un silencio blanco.
 // v0.4.16 — la receta de LectorXd (v0.4.9) llega a Mangas.in: cuando el
 // sitio le cierra la puerta a esta conexión en sus páginas de listas
 // (el 403 del catálogo y de las populares en la prueba real), Kino abre
@@ -91,7 +106,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.16";
+const VERSION = "0.4.17";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -330,12 +345,16 @@ async function getHtml(path) {
   return getHtmlDe(fuenteActiva(), path);
 }
 
-// v0.4.16 — La ventanita de Mangas.in, con freno: una ventana por hora
-// como máximo, pase lo que pase dentro (si la revisión se pasa, la
-// galleta ya viaja sola en cada petición; si no, no se martilla a la
-// persona con ventanas).
-async function msPasarRevision(f) {
-  if (Date.now() - (getJson("msVentanaFallo", 0) || 0) < 3600000) return false;
+// v0.4.16/17 — La ventanita de Mangas.in, con freno: una ventana por
+// hora como máximo en los intentos automáticos, pase lo que pase
+// dentro (si la revisión se pasa, la galleta ya viaja sola en cada
+// petición; si no, no se martilla a la persona con ventanas). El
+// freno se salta cuando es la PERSONA la que pide la ventana (el
+// botón de la portada): su toque es deliberado. OJO: Kino solo abre
+// la ventanita desde una acción de la persona (ajustes o un evento
+// de pantalla TOCADO), nunca en una carga de fondo.
+async function msPasarRevision(f, manual) {
+  if (!manual && Date.now() - (getJson("msVentanaFallo", 0) || 0) < 3600000) return false;
   setJson("msVentanaFallo", Date.now());
   return await pasarRevision(f, "/");
 }
@@ -2428,9 +2447,13 @@ function imgsMS(html) {
     seen[u] = 1;
     out.push(u);
   }
-  log("MS lector: " + out.length + " páginas en " +
-    (out.length ? out[0].replace(/^https?:\/\//, "").split("/")[0] : "-") +
-    " (" + nResp + " resp de " + nImgs + " imgs en la zona)");
+  // v0.4.17 — todas las casas donde viven las páginas del capítulo
+  // (la cuarta prueba real solo anotaba la primera; los capítulos
+  // fallidos no decían dónde vivían sus imágenes).
+  const hosts = {};
+  for (let i = 0; i < out.length; i++) hosts[out[i].replace(/^https?:\/\//, "").split("/")[0]] = 1;
+  log("MS lector: " + out.length + " páginas [" + Object.keys(hosts).join(", ") + "] (" +
+    nResp + " resp de " + nImgs + " imgs en la zona)");
   return out;
 }
 
@@ -2552,18 +2575,21 @@ async function dimsDeImagen(url) {
     }
     const r = await kino.fetch(url, ops);
     if (!r.ok) {
-      if (/m440\.in|bp\.blogspot\.com/i.test(u) && !msImgFalladas[u]) {
+      // v0.4.17 — el porqué de CADA imagen que no baje, de cualquier
+      // casa (la cuarta prueba real mostró capítulos que fallaban sin
+      // dejar rastro porque el diagnóstico solo miraba a Mangas.in).
+      if (!msImgFalladas[u]) {
         msImgFalladas[u] = 1;
-        log("MS imagen respondió HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + u.slice(0, 120));
+        log("dims imagen HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + u.slice(0, 120));
       }
       return null;
     }
     const d = dimsDeBytes(deB64(r.base64()));
     return d && d.w > 0 && d.h > 0 ? d : null;
   } catch (e) {
-    if (/m440\.in|bp\.blogspot\.com/i.test(u) && !msImgFalladas[u]) {
+    if (!msImgFalladas[u]) {
       msImgFalladas[u] = 1;
-      log("MS imagen no bajó (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + ((e && e.message) || e));
+      log("dims imagen no bajó (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + ((e && e.message) || e));
     }
     return null;
   }
@@ -2689,6 +2715,7 @@ async function homeTree() {
   let recientes = [];
   let actualizados = [];
   let mixtas = [];
+  let msPopBloqueada = false;
   let titPop = "Populares en español";
   let titPopEn = "Popular in Spanish";
   let titRec = "Actualizados recientes";
@@ -2742,14 +2769,13 @@ async function homeTree() {
       try {
         populares = msCards(await getHtmlDe(f, "/manga-list?page=1"), 20);
       } catch (e2) {
-        // v0.4.16 — también el catálogo público cerrado: la receta de
-        // LectorXd — la ventanita de la persona para pasar la revisión
-        // una vez y reintentar ya con su galleta de acceso.
-        log("MS home pop /manga-list también bloqueado (" + ((e2 && e2.message) || e2) + ")");
-        if (await msPasarRevision(f)) {
-          try { populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20); }
-          catch (e3) { log("MS home pop tras revisión: " + ((e3 && e3.message) || e3)); }
-        }
+        // v0.4.17 — también el catálogo público cerrado. Aquí NO se
+        // intenta la ventanita: Kino solo la abre cuando la PERSONA
+        // toca algo y esta es una carga de fondo (la prueba real lo
+        // demostró: «ventana mangasin falló»). En su lugar, la portada
+        // planta un botón para que la persona la abra y la pase.
+        msPopBloqueada = true;
+        log("MS home pop /manga-list también bloqueado (" + ((e2 && e2.message) || e2) + "): botón de revisión en la portada");
       }
     }
     try {
@@ -2864,10 +2890,27 @@ async function homeTree() {
           textEn: "Browse with filters", style: "caption", color: "muted", padding: 16 },
       ] },
   ];
-  if (!populares.length && !recientes.length && !mixtas.length) return VACIO_SERIES;
+  // v0.4.17 — Mangas.in con sus listas cerradas: el botón de la
+  // revisión donde deberían estar las populares. La persona lo toca,
+  // Kino abre su ventanita (toque = contexto legal) y al pasarla la
+  // portada se recarga ya con la galleta de acceso.
+  const msAviso = msPopBloqueada ? [
+    { type: "Text", text: titPop, textEn: titPopEn, style: "h3", padding: 16 },
+    { type: "Card", key: "msRevision", flush: true, onTap: { event: "msRevision" },
+      children: [
+        { type: "Text", text: "Mangas.in pide su revisión",
+          textEn: "Mangas.in asks for its check", style: "h3", padding: 16 },
+        { type: "Text",
+          text: "Toca aquí para abrir la ventanita y pasarla una vez, como hiciste con LectorXd. Después saldrán las populares y el catálogo.",
+          textEn: "Tap to open the check and pass it once, like with LectorXd. Popular and catalog load afterwards.",
+          style: "caption", color: "muted", padding: 16 },
+      ] },
+  ] : [];
+  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length) return VACIO_SERIES;
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
     .concat(railHist)
+    .concat(msAviso)
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
@@ -3071,6 +3114,19 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
+  // v0.4.17 — capítulo de Mangas.in sin NINGUNA página entregada (el
+  // sitio negó hasta la medida): en vez de un silencio blanco, el
+  // lector dice qué pasó y qué puede hacer la persona.
+  const avisoMs = (d && d.url && d.url.indexOf("/ms/") === 0 && !medidas.length) ? [
+    { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
+      { type: "Text", text: "El sitio no entregó ninguna de las " + r.images.length + " páginas.",
+        textEn: "The site served none of the " + r.images.length + " pages.", style: "h4" },
+      { type: "Text",
+        text: "Si la revisión de Mangas.in no está pasada, ábrela desde la portada (el botón «Mangas.in pide su revisión») y vuelve a abrir el capítulo. Si ya la pasaste, manda el Registro: dirá el motivo exacto.",
+        textEn: "If Mangas.in's check is not passed, open it from home (the «Mangas.in asks for its check» button) and reopen the chapter. If already passed, send the log: it will say the exact reason.",
+        style: "caption", color: "muted" },
+    ] },
+  ] : [];
   const modo = modoLectorEfectivo(r.images.length);
   // Modo inmersivo (v0.4.2): el OJO de la barra esconde la barra de
   // arriba y la de controles de abajo — quedan solo las páginas y un
@@ -3103,7 +3159,7 @@ function readerTree(state) {
     : "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
       + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
       + " · pellizca para acercar";
-  const body = [
+  const body = avisoMs.concat([
     cuerpo,
     { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
@@ -3121,7 +3177,7 @@ function readerTree(state) {
       { type: "Text", text: barraTexto,
         style: "caption", color: "muted" },
     ]) },
-  ];
+  ]);
   // Modo inmersivo: el botoncito flotante (sin etiqueta, discreto)
   // trae las barras de vuelta.
   if (inm) body.push({ type: "FloatingActionButton", key: "verBarras", icon: "visibility",
@@ -3451,6 +3507,16 @@ export async function screenEvent(ev) {
     }
     if (name === "goSearch") return { route: { push: "search" } };
     if (name === "favsOpen") return { route: { push: "favs" } };
+    // v0.4.17 — el botón «Mangas.in pide su revisión»: la PERSONA toca
+    // (contexto legal para la ventanita), la revisión se pasa una vez
+    // y la portada se recarga ya con la galleta de acceso.
+    if (name === "msRevision") {
+      const fMs = fuentePorId("mangasin");
+      const ok = await msPasarRevision(fMs, true);
+      if (ok) return { state: { detail: null, reader: null, results: null, resultsQ: null },
+        toast: "✓ Revisión superada: Mangas.in desbloqueado." };
+      return { toast: "La revisión no se completó: vuelve a tocar el botón en un rato." };
+    }
     if (name === "alRetry") {
       // v0.4.4 — reintentar la carga de AniList sin cambiar de pantalla.
       try {
@@ -4496,6 +4562,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
