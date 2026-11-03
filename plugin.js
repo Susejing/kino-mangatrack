@@ -1,4 +1,4 @@
-// MangaTrack v0.4.5 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.6 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.5";
+const VERSION = "0.4.6";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -367,24 +367,38 @@ function regCache(clave, bytes) {
   setJsonTxt("cacheIdx", JSON.stringify(idx));
 }
 
+// v0.4.6 — borrar una clave DE VERDAD. La cuota de 256 KB de Kino
+// mide "el JSON de todas las claves y valores": dejar el valor en ""
+// liberaba el valor pero conservaba la CLAVE, y las de este plugin
+// llevan URLs enteras en el nombre. kino.storage.remove() es el
+// borrado de verdad; si no existiera, queda el valor vacío.
+function borrarClave(clave) {
+  try {
+    if (typeof kino.storage.remove === "function") {
+      kino.storage.remove(clave);
+      return true;
+    }
+  } catch (e) { log("storage: " + e); }
+  return setJsonTxt(clave, "");
+}
+
 function setJsonCache(clave, val) {
   let txt = "";
   try { txt = JSON.stringify(val); } catch (e) { return false; }
   if (setJsonTxt(clave, txt)) { regCache(clave, txt.length); return true; }
-  // v0.4.5 — Lleno: liberar las cachés registradas de una en una (la
-  // más vieja primero, nunca la clave que se escribe) y REINTENTAR la
-  // escritura tras cada una. Así, si el almacén está lleno de cachés
-  // viejas, la escritura termina pasando: cada intento libera espacio
-  // de verdad. Solo si no queda ninguna caché registrada se devuelve
-  // false para que el llamador avise en vez de fingir que guardó.
+  // v0.4.6 — Lleno: liberar las cachés registradas de una en una (la
+  // más vieja primero, nunca la clave que se escribe) BORRÁNDOLAS de
+  // verdad y reintentando la escritura tras cada una. Solo si no
+  // queda ninguna caché registrada se devuelve false, para que el
+  // llamador avise en vez de fingir que guardó.
   const idx = cacheIdx();
   const ks = Object.keys(idx)
     .filter(function (k) { return k !== clave; })
     .sort(function (a, b) { return ((idx[a] && idx[a].t) || 0) - ((idx[b] && idx[b].t) || 0); });
   let ok = false;
   for (let i = 0; i < ks.length && !ok; i++) {
-    if (setJsonTxt(ks[i], "")) delete idx[ks[i]];
-    else { delete idx[ks[i]]; continue; }
+    borrarClave(ks[i]);
+    delete idx[ks[i]];
     setJsonTxt("cacheIdx", JSON.stringify(idx));
     if (setJsonTxt(clave, txt)) ok = true;
   }
@@ -393,59 +407,115 @@ function setJsonCache(clave, val) {
   return false;
 }
 
-// v0.4.5 — limpieza única (flag "limpia045"). La de 0.4.4 liberó las
-// series viejas del historial pero el almacén siguió lleno: el guardián
-// solo puede liberar cachés REGISTRADAS y las heredadas de las
-// versiones anteriores nunca lo estaban. Esta pasada (1) REGISTRA lo
-// que ya hay —cachés de capítulos de todas las series del historial,
-// catálogo, AniList y dimensiones, con su tamaño real— para que el
-// guardián tenga con qué trabajar; (2) suelta las cachés de las series
-// viejas (más de 20 puestos atrás y no favoritas); y (3) suelta las
-// páginas leídas legadas (una clave "pgAt:" por capítulo), que se
-// enumeran desde las listas de capítulos guardadas. Corre sola una
-// vez, al abrir el plugin.
+// v0.4.6 — limpieza única (flag "limpia046"). Las limpiezas
+// anteriores no vaciaron el almacén por dos razones: dejaban los
+// valores en "" (la cuota de Kino mide "el JSON de todas las claves y
+// valores", y estas claves llevan URLs enteras en el nombre) y no
+// veían las cachés "huérfanas" de series que ya salieron del
+// historial. Esta pasada enumera el almacén COMPLETO con
+// kino.storage.keys(): (1) recoge la página guardada de las claves
+// legadas "pgAt:" (en orden de lectura, las más recientes primero)
+// para migrarla a pgAtMap; (2) registra TODA caché "caps:" con su
+// tamaño real (huérfanas con t=0, para que el guardián las suelte
+// primero) y tira las cáscaras vacías que dejaron las limpiezas
+// anteriores; (3) registra cat/al/dims; (4) borra las caps: de
+// series más allá del puesto 20 que no son favoritas y las de series
+// que ya no están en el historial; (5) válvula de seguridad: si el
+// almacén sigue por encima de 192 KB, suelta las cachés registradas
+// más viejas hasta bajar; (6) migra pgAtMap y BORRA las claves
+// legadas. Los datos personales (favoritos, historial, vínculos) no
+// se tocan; las cachés siempre se pueden volver a pedir al sitio.
+// Corre una vez, al abrir el plugin.
 function limpiaAlmacen() {
-  if (getJson("limpia045", 0)) return;
+  if (getJson("limpia046", 0)) return;
   const idx = cacheIdx();
   const ahora = Date.now();
-  let regN = 0;
+  let ks = [];
+  try { if (typeof kino.storage.keys === "function") ks = kino.storage.keys() || []; } catch (e) { ks = []; }
+  const h = hist();
+  const favUrls = favs().map(function (x) { return x.url; });
+  // (1) páginas legadas: recoger el valor para migrarlo al final,
+  // cuando ya haya espacio (solo si el mapa no lo tiene y caben las
+  // más recientes en el tope de 120).
+  const m = getJson("pgAtMap", {}) || {};
+  let enMapa = Object.keys(m).length;
+  const pgLegacy = [];
+  let pgBytes = 0;
+  for (let i = ks.length - 1; i >= 0; i--) {
+    if (ks[i].indexOf("pgAt:") !== 0) continue;
+    let v = null;
+    try { v = kino.storage.get(ks[i]); } catch (e) {}
+    pgLegacy.push(ks[i]);
+    pgBytes += ks[i].length + (v ? v.length : 0) + 6;
+    const cu = ks[i].slice(5);
+    if (v && !(cu in m)) {
+      const nPg = parseInt(v, 10);
+      if (isFinite(nPg) && nPg >= 0 && enMapa < 120) { m[cu] = nPg; enMapa++; }
+    }
+  }
+  // (2) registrar TODA caché caps: (huérfanas con t=0) y tirar las
+  // cáscaras vacías de las limpiezas anteriores.
+  let regN = 0, casN = 0;
+  for (let i = 0; i < ks.length; i++) {
+    const k = ks[i];
+    if (k.indexOf("caps:") !== 0) continue;
+    let raw = null;
+    try { raw = kino.storage.get(k); } catch (e) {}
+    if (raw === "") { if (borrarClave(k)) casN++; continue; }
+    if (raw && raw.length > 2 && !idx[k]) {
+      idx[k] = { t: (h[k.slice(5)] && h[k.slice(5)].ts) || 0, b: raw.length };
+      regN++;
+    }
+  }
   ["cat", "al", "dims"].forEach(function (k) {
+    if (idx[k]) return;
     try {
       const raw = kino.storage.get(k);
-      if (raw && raw.length > 2 && !idx[k]) { idx[k] = { t: ahora, b: raw.length }; regN++; }
+      if (raw && raw.length > 2) { idx[k] = { t: ahora, b: raw.length }; regN++; }
     } catch (e) {}
   });
-  const h = hist();
+  // (3) caps: de series viejas (más de 20 puestos atrás y no
+  // favoritas) y de series que ya salieron del historial: fuera.
   const urls = Object.keys(h).sort(function (a, b) { return (h[b].ts || 0) - (h[a].ts || 0); });
-  const pgViejas = {};
-  for (let i = 0; i < urls.length; i++) {
-    const ck = "caps:" + urls[i];
-    try {
-      const raw = kino.storage.get(ck);
-      if (raw && raw.length > 2) {
-        if (!idx[ck]) { idx[ck] = { t: (h[urls[i]] && h[urls[i]].ts) || 0, b: raw.length }; regN++; }
-        try {
-          const caps = JSON.parse(raw);
-          if (Array.isArray(caps)) for (let j = 0; j < caps.length; j++) {
-            if (caps[j] && caps[j].url) pgViejas["pgAt:" + caps[j].url] = 1;
-          }
-        } catch (e) {}
-      }
-    } catch (e) {}
-  }
-  let pgN = 0;
-  Object.keys(pgViejas).forEach(function (k) { if (setJsonTxt(k, "")) pgN++; });
-  const favUrls = favs().map(function (x) { return x.url; });
   let n = 0;
   for (let i = 20; i < urls.length; i++) {
     if (favUrls.indexOf(urls[i]) >= 0) continue;
     const ck = "caps:" + urls[i];
-    if (setJsonTxt(ck, "")) { n++; delete idx[ck]; }
+    if (borrarClave(ck)) { n++; delete idx[ck]; }
+  }
+  Object.keys(idx).forEach(function (k) {
+    if (k.indexOf("caps:") === 0 && !h[k.slice(5)]) {
+      if (borrarClave(k)) { n++; delete idx[k]; }
+    }
+  });
+  // (4) válvula de seguridad: "el JSON de todas las claves y
+  // valores"; si tras lo de arriba (menos las páginas legadas, que ya
+  // van a salir) sigue por encima de 192 KB, se suelta la caché
+  // registrada más vieja hasta quedar por debajo.
+  let usados = 0;
+  for (let i = 0; i < ks.length; i++) {
+    let v = null;
+    try { v = kino.storage.get(ks[i]); } catch (e) {}
+    if (v === null) continue;
+    usados += ks[i].length + v.length + 6;
+  }
+  usados -= pgBytes;
+  let lib = 0;
+  const porT = Object.keys(idx).sort(function (a, b) { return ((idx[a] && idx[a].t) || 0) - ((idx[b] && idx[b].t) || 0); });
+  for (let i = 0; i < porT.length && usados > 192000; i++) {
+    const b = (idx[porT[i]] && idx[porT[i]].b) || 0;
+    if (borrarClave(porT[i])) { usados -= b + porT[i].length + 6; delete idx[porT[i]]; lib++; }
   }
   setJsonTxt("cacheIdx", JSON.stringify(idx));
-  setJson("limpia045", 1);
-  log("limpieza 0.4.5: " + regN + " cachés registradas, " + n +
-    " series viejas liberadas, " + pgN + " páginas legadas sueltas");
+  // (5) migrar pgAtMap (ya hay espacio) y borrar las claves legadas.
+  let pgN = 0;
+  if (setJson("pgAtMap", m)) {
+    for (let i = 0; i < pgLegacy.length; i++) { if (borrarClave(pgLegacy[i])) pgN++; }
+  }
+  setJson("limpia046", 1);
+  log("limpieza 0.4.6: " + regN + " cachés registradas, " + n + " series viejas liberadas, " +
+    pgN + " páginas legadas borradas" + (casN ? ", " + casN + " cáscaras vacías" : "") +
+    (lib ? ", " + lib + " cachés extra por válvula" : ""));
 }
 
 // v0.4.4 — la página donde quedó cada capítulo ya no es una clave por
@@ -470,7 +540,9 @@ function pgGuardar(chUrl, pg) {
   m[chUrl] = pg;
   const ks = Object.keys(m);
   while (ks.length > 120) delete m[ks.shift()];
-  setJson("pgAtMap", m);
+  // v0.4.6 — al guardar la página en el mapa se borra la clave
+  // legada de ese capítulo, para no dejar cáscaras en el almacén.
+  if (setJson("pgAtMap", m)) borrarClave("pgAt:" + chUrl);
 }
 function favs() { return getJson("favs", []); }
 function isFav(url) { return favs().some((f) => f.url === url); }
