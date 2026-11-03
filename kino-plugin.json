@@ -1,9 +1,9 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "creator": "Susejing",
-  "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni).",
+  "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni) y descubre manga con el catálogo de AniList.",
   "apiVersion": 14,
   "entry": "plugin.js",
   "hosts": [
@@ -26,7 +26,9 @@
     "manga-oni.com",
     "www.manga-oni.com",
     "*.manga-oni.com",
-    "oni.ntr-files.online"
+    "oni.ntr-files.online",
+    "graphql.anilist.co",
+    "s4.anilist.co"
   ],
   "capabilities": [
     "screen",

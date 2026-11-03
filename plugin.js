@@ -1,4 +1,4 @@
-// MangaTrack v0.4.2 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.3 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.2";
+const VERSION = "0.4.3";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1582,6 +1582,7 @@ async function homeTree() {
           ? fuenteCard(x.nombre, "Activa", "fuenteActual", x.nombre)
           : fuenteCard(x.nombre, "Toca para cambiar", "cambiarFuente", x.id)
       ).concat([
+        fuenteCard("AniList", "Buscar y descubrir manga", "alOpen", "anilist"),
         fuenteCard("Mangas.in", "Bloqueada (firewall)", "fuentePronto", "Mangas.in"),
       ]) }] },
   ];
@@ -1956,6 +1957,10 @@ const ESTADOS_MD = [["", "Todos"], ["ongoing", "En curso"], ["completed", "Compl
 const ORDEN_MO = [["visitas", "Populares"], ["id", "Novedades"]];
 const CAT_POR_PAG = 30;
 const CAT_TOPE = 90;
+// v0.4.3 — el catálogo guarda hasta CAT_ALMACEN series y enseña una
+// ventana de CAT_TOPE: los botones "‹ / ›" mueven la ventana sin
+// pedirle nada al sitio y "Cargar más" trae otra página del sitio.
+const CAT_ALMACEN = 240;
 
 function catalogoUrlDe(f, cat, page) {
   if (f.id !== "lectorxd") return catalogoUrl(cat, page);
@@ -1981,10 +1986,12 @@ function catDrop(label, key, opciones, valor, evento) {
 
 function catalogTree(c) {
   const f = fuentePorId(c.f || "leercapitulo");
-  const items = Array.isArray(c.items) ? c.items : [];
+  const todos = Array.isArray(c.items) ? c.items : [];
+  const start = Math.max(0, parseInt(c.start, 10) || 0);
+  const items = todos.slice(start, start + CAT_TOPE);
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
   const hayMas = c.mas === undefined || c.mas === null
-    ? (items.length < total && items.length < CAT_TOPE)
+    ? (todos.length < total)
     : !!c.mas;
   let drops = [];
   if (f.id === "lectorxd") {
@@ -2025,12 +2032,17 @@ function catalogTree(c) {
         items.length ? gridOf(items, VACIO_SERIES) :
           { type: "Text", text: "Sin resultados con estos filtros.",
             textEn: "No results with these filters.", color: "muted", padding: 16 },
-        items.length >= CAT_TOPE && total > CAT_TOPE ?
-          { type: "Text", text: "Mostrando " + CAT_TOPE + " series: afina los filtros para ver otras.",
-            textEn: "Showing " + CAT_TOPE + " series: narrow the filters to see others.",
+        items.length && (todos.length > CAT_TOPE || start > 0) ?
+          { type: "Text", text: "Mostrando " + (start + 1) + "–" + (start + items.length) + " de " +
+              (c.totalTxt || todos.length + " series") + ".",
+            textEn: "Showing " + (start + 1) + "–" + (start + items.length) + ".",
             style: "caption", color: "muted", padding: 16 } : null,
+        start > 0 ? { type: "ElevatedButton", key: "catPrevW", icon: "arrow_back",
+          labelText: "‹ Series anteriores", labelTextEn: "Previous series", onPressed: "catPrevW" } : null,
+        start + CAT_TOPE < todos.length ? { type: "ElevatedButton", key: "catNextW", icon: "expand_more",
+          labelText: "Series siguientes ›", labelTextEn: "Next series", onPressed: "catNextW" } : null,
         hayMas ? { type: "ElevatedButton", key: "catMore", icon: "expand_more",
-          labelText: "Cargar más", labelTextEn: "Load more", onPressed: "catMore" } : null,
+          labelText: "Cargar más del sitio", labelTextEn: "Load more from site", onPressed: "catMore" } : null,
       ].filter(Boolean) }] },
   };
 }
@@ -2075,17 +2087,24 @@ async function cargarCatalogo(cat, page, conRuta) {
   const vistos = {};
   const items = prev.concat(nuevos)
     .filter((x) => (!vistos[x.url] && (vistos[x.url] = 1)))
-    .slice(0, CAT_TOPE);
+    .slice(0, CAT_ALMACEN);
   // Guardia: si una página siguiente no trajo ni una serie nueva (el
   // sitio ignoró el salto o la lista se acabó), no se ofrece otro
   // "Cargar más" en bucle.
-  if (page1 > 1 && prev.length && items.length <= prev.length) {
+  const sinNuevas = page1 > 1 && prev.length && items.length <= prev.length;
+  if (sinNuevas) {
     mas = false;
     log("catálogo " + f.nombre + ": la pág. " + page1 + " no trajo series nuevas; fin de la lista");
   }
-  setJson("cat", { f: f.id, items: items, page: page1, genre: cat.genre || "",
+  if (mas === undefined || mas === null) mas = nuevos.length > 0 && !sinNuevas;
+  const capLleno = sinNuevas && nuevos.length > 0 && items.length >= CAT_ALMACEN;
+  // v0.4.3 — la ventana salta a lo recién cargado: tras "Cargar más" se
+  // ven las últimas CAT_TOPE series y "‹ / ›" recorre las más viejas.
+  const start = Math.max(0, items.length - CAT_TOPE);
+  setJson("cat", { f: f.id, items: items, start: start, page: page1, genre: cat.genre || "",
     type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt,
-    mas: mas === undefined ? null : mas });
+    mas: mas === undefined ? null : mas, lleno: capLleno ? 1 : 0,
+    ultimos: page1 > 1 ? Math.max(0, items.length - prev.length) : 0 });
   log("catálogo " + f.nombre + " pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
     " series, filtros " + (cat.genre || cat.type || "-") + "/" + (cat.status || "-") + "/" + (cat.order || "-"));
   const resp = { state: { catTk: Date.now() } };
@@ -2113,6 +2132,9 @@ export async function screen(ev) {
       const c = getJson("cat", null);
       if (!c || typeof c !== "object") return loadingTree("Cargando catálogo…");
       return catalogTree(c);
+    }
+    if (route.name === "anilist") {
+      return anilistTree(getJson("al", null));
     }
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
@@ -2156,6 +2178,91 @@ export async function screenEvent(ev) {
     if (name === "openCatalog") {
       return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
     }
+    if (name === "alOpen") {
+      try {
+        const r = await alBuscar("", 1, "TRENDING_DESC", true, false);
+        return r.resp;
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "alSearch") {
+      const q = String((ev.value && (ev.value.alQ || ev.value.q)) || "").trim();
+      if (!q) return { toast: "Escribe un título." };
+      const a = getJson("al", null) || {};
+      try {
+        const r = await alBuscar(q, 1, a.order || "TRENDING_DESC", false, false);
+        return { state: r.resp.state, toast: r.n > 0
+          ? r.n + (r.n === 1 ? " resultado en AniList" : " resultados en AniList")
+          : "Sin resultados en AniList." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "alOrder") {
+      const v = String(ev.value || "");
+      const a = getJson("al", null) || {};
+      try {
+        const r = await alBuscar(a.q || "", 1, v, false, false);
+        return { state: r.resp.state, toast: "Orden cambiado." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "alMore") {
+      const a = getJson("al", null);
+      if (!a || !Array.isArray(a.items) || !a.items.length) return null;
+      if (a.info && a.info.has === false) return { toast: "No hay más resultados en AniList." };
+      try {
+        const r = await alBuscar(a.q || "", (a.page || 1) + 1, a.order || "TRENDING_DESC", false, true);
+        return { state: r.resp.state, toast: r.n > 0
+          ? "+" + r.n + " series de AniList"
+          : "No hay más resultados en AniList." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "alAbrir") {
+      const a = getJson("al", null);
+      const id = parseInt(String(ev.arg || ""), 10) || 0;
+      const m = a && Array.isArray(a.items) ? a.items.filter((x) => x && x.id === id)[0] : null;
+      if (!m) return null;
+      const tituloAL = alTitulo(m);
+      if (!tituloAL) return { toast: "Esa serie no tiene título en AniList." };
+      const f = fuenteActiva();
+      let results = [];
+      if (f.id === "mangadex") results = await mdSearch(tituloAL);
+      else if (f.id === "inmanga") results = await imBuscar(tituloAL);
+      else if (f.id === "mangaoni") results = await moBuscar(tituloAL);
+      else {
+        const ruta = f.id === "lectorxd"
+          ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(tituloAL)
+          : "/?s=" + encodeURIComponent(tituloAL);
+        const html = await getHtmlDe(f, ruta);
+        results = cardsDe(f, html, 30);
+      }
+      // Vínculo exacto: solo si la fuente tiene la serie con el MISMO
+      // título (normalizado) se guardan los ids de AniList/MAL con la
+      // clave "alId:<url>": el registro pasa a ser exacto, nunca por
+      // parecido.
+      let vinculada = "";
+      const qAL = normTituloMD(tituloAL);
+      if (qAL) {
+        for (let i = 0; i < results.length; i++) {
+          const it = results[i];
+          if (it && it.url && normTituloMD(it.title) === qAL) {
+            setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
+            vinculada = " · ✓ serie vinculada a AniList";
+            break;
+          }
+        }
+      }
+      return { state: { results: results, resultsQ: tituloAL },
+        route: { push: "search" },
+        toast: results.length
+          ? results.length + " resultados en " + f.nombre + vinculada
+          : "Sin resultados en " + f.nombre + ": prueba con otra fuente." };
+    }
     if (name === "fuentePronto") {
       return { toast: String(ev.arg || "Esa fuente") + " está bloqueada por su protección anti-bots: no se puede leer desde Kino." };
     }
@@ -2181,9 +2288,31 @@ export async function screenEvent(ev) {
     }
     if (name === "catMore") {
       const c = getJson("cat", null);
-      if (!c || !Array.isArray(c.items) || !c.items.length) return null;
-      return await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" },
+      if (!c || !Array.isArray(c.items) || !c.items.length) {
+        return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
+      }
+      const antes = c.items.length;
+      const r = await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" },
         (c.page || 1) + 1, false);
+      const c2 = getJson("cat", null) || {};
+      const ahora = Array.isArray(c2.items) ? c2.items.length : 0;
+      const nuevosN = Math.max(0, ahora - antes);
+      return { state: (r && r.state) || {}, toast: nuevosN > 0
+        ? "+" + nuevosN + " series (" + ahora + " en el catálogo)"
+        : (c2.lleno ? "Catálogo lleno (" + CAT_ALMACEN + " series): recórrelo con ‹ / ›."
+          : "El sitio no trajo series nuevas: fin de la lista.") };
+    }
+    if (name === "catPrevW" || name === "catNextW") {
+      // Ventanas del catálogo: mueven la vista por lo ya cargado, sin
+      // pedirle nada al sitio (instantáneo).
+      const c = getJson("cat", null);
+      if (!c || !Array.isArray(c.items) || !c.items.length) return null;
+      const start = Math.max(0, parseInt(c.start, 10) || 0);
+      const tope = Math.max(0, c.items.length - CAT_TOPE);
+      const ns = name === "catPrevW" ? Math.max(0, start - CAT_TOPE)
+        : Math.min(tope, start + CAT_TOPE);
+      setJson("cat", Object.assign({}, c, { start: ns }));
+      return { state: { catTk: Date.now() } };
     }
     if (name === "popBack") return { route: { pop: true } };
     if (name === "openSeries") {
@@ -2374,6 +2503,125 @@ export async function screenEvent(ev) {
   }
 }
 
+// ---------------------------------------------------------------- AniList
+// v0.4.3 — sección AniList: su catálogo sirve para DESCUBRIR manga
+// (tendencia, populares, mejor valorados, A-Z o por búsqueda). AniList
+// no aloja capítulos: al tocar una serie se busca su título en la
+// fuente activa y, si el título coincide exacto, la serie queda
+// vinculada con los ids de AniList/MAL (clave "alId:<url>") para que
+// el registro de capítulos sea exacto. Ante la duda no se vincula
+// nada: nunca se marca una serie equivocada.
+
+const ANI_POR_PAG = 20;
+const ANI_TOPE = 60;
+const AL_ORDEN = [["TRENDING_DESC", "Tendencia"], ["POPULARITY_DESC", "Populares"],
+  ["SCORE_DESC", "Mejor valorados"], ["TITLE_ROMAJI_ASC", "A → Z"]];
+
+const AL_QUERY = "query ($p: Int, $s: String, $sort: [MediaSort]) { Page(page: $p, perPage: " + ANI_POR_PAG + ") " +
+  "{ pageInfo { hasNextPage } media(type: MANGA, isAdult: false, search: $s, sort: $sort) " +
+  "{ id idMal title { romaji english } coverImage { extraLarge } format chapters averageScore } } }";
+
+async function alJson(q, page, sort) {
+  const r = await kino.fetch("https://graphql.anilist.co", { method: "POST",
+    body: { json: { query: AL_QUERY, variables: { p: page, s: q || null, sort: [sort] } } } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con AniList. Inténtalo de nuevo.",
+  });
+  return await r.json();
+}
+
+function alItemsDe(j) {
+  const media = (j && j.data && j.data.Page && j.data.Page.media) || [];
+  return media.map((m) => {
+    const t = (m && m.title) || {};
+    return {
+      id: m.id, mal: m.idMal || 0,
+      romaji: String(t.romaji || ""), english: String(t.english || ""),
+      cover: ((m.coverImage && m.coverImage.extraLarge) || ""),
+      nota: typeof m.averageScore === "number" ? m.averageScore : null,
+      formato: String(m.format || ""), caps: (typeof m.chapters === "number" && m.chapters) || 0,
+    };
+  });
+}
+
+function alTitulo(m) { return m.english || m.romaji || ""; }
+
+function alCard(m) {
+  const titulo = alTitulo(m);
+  const fmt = { MANGA: "Manga", NOVEL: "Novela", ONE_SHOT: "One-shot" }[m.formato] || m.formato;
+  const notaTxt = m.nota === null ? "-" : (m.nota / 10).toFixed(1);
+  return { type: "Card", key: "al-" + m.id, flush: true,
+    onTap: { event: "alAbrir", arg: String(m.id) },
+    children: [
+      { type: "Image", url: m.cover, aspect: "2:3", alt: titulo, altEn: titulo,
+        fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+          children: [{ type: "Icon", name: "list", color: "muted" }] } },
+    ].concat(twoLines(titulo).map((ln) => (
+      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+      .concat([{ type: "Text",
+        text: "★ " + notaTxt + " · " + fmt + (m.caps ? " · " + m.caps + " caps" : ""),
+        textEn: "★ " + notaTxt + " · " + fmt + (m.caps ? " · " + m.caps + " ch." : ""),
+        style: "caption", color: "muted", padding: 8 }]),
+  };
+}
+
+function anilistTree(a) {
+  if (!a || typeof a !== "object" || !Array.isArray(a.items)) {
+    return loadingTree("Cargando AniList…");
+  }
+  const hasNext = !!(a.info && a.info.has);
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barAnilist",
+      title: "AniList · " + (a.q ? "«" + a.q + "»" : (a.ordTxt || "Tendencia")),
+      leading: { type: "IconButton", key: "backFromAnilist", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "alBody", children: [{
+      type: "Column", children: [
+        { type: "Text", text: "Descubre manga en AniList y tócalo para buscarlo en " + fuenteActiva().nombre + ".",
+          textEn: "Discover manga on AniList and tap to search your source.",
+          style: "caption", color: "muted", padding: 16 },
+        { type: "Form", key: "alForm", onSubmitted: "alSearch", gap: 8, padding: 16, children: [
+          { type: "TextField", key: "alQ", kind: "search", value: a.q || "",
+            labelText: "Título en AniList", labelTextEn: "AniList title",
+            hintText: "P. ej. one piece", hintEn: "e.g. one piece" },
+          { type: "ElevatedButton", icon: "search", labelText: "Buscar", labelTextEn: "Search", submit: true },
+        ] },
+        { type: "Row", gap: 8, padding: 16, children: [
+          catDrop("Ordenar", "alOrder", AL_ORDEN, a.order, "alOrder"),
+        ] },
+        a.items.length ? { type: "ListView", key: "alGrid",
+          columns: { compact: 3, medium: 4, expanded: 6 },
+          items: a.items.map((m) => alCard(m)) } :
+          { type: "Text", text: "Sin resultados en AniList.", textEn: "No AniList results.",
+            color: "muted", padding: 16 },
+        hasNext ? { type: "ElevatedButton", key: "alMore", icon: "expand_more",
+          labelText: "Cargar más", labelTextEn: "Load more", onPressed: "alMore" } : null,
+      ].filter(Boolean) }] },
+  };
+}
+
+async function alBuscar(q, page, order, conRuta, anadir) {
+  const ord = order || "TRENDING_DESC";
+  const prev = anadir ? (getJson("al", null) || {}) : {};
+  const prevItems = Array.isArray(prev.items) ? prev.items : [];
+  const page1 = Math.max(1, parseInt(page, 10) || 1);
+  const j = await alJson(q, page1, ord);
+  const nuevos = alItemsDe(j);
+  const vistos = {};
+  const items = prevItems.concat(nuevos)
+    .filter((x) => (x && !vistos[x.id] && (vistos[x.id] = 1)))
+    .slice(0, ANI_TOPE);
+  let ordTxt = "";
+  for (let i = 0; i < AL_ORDEN.length; i++) if (AL_ORDEN[i][0] === ord) ordTxt = AL_ORDEN[i][1];
+  setJson("al", { items: items, q: q || "", page: page1, order: ord, ordTxt: ordTxt,
+    info: { has: !!(j && j.data && j.data.Page && j.data.Page.pageInfo && j.data.Page.pageInfo.hasNextPage) } });
+  const resp = { state: { alTk: Date.now() } };
+  if (conRuta) resp.route = { push: "anilist" };
+  return { resp: resp, n: nuevos.length };
+}
+
 // v0.4.2 — Título normalizado para comparar (minúsculas, sin
 // acentos, solo letras y números): el mismo criterio que usa
 // AniTrack para emparejar series.
@@ -2399,7 +2647,7 @@ async function idsPorTitulo(titulo) {
   const clave = "idsMd:" + titulo.slice(0, 80);
   const cache = getJson(clave, null);
   if (cache && (cache.al || cache.mal)) return cache;
-  if (cache && cache.fallo && Date.now() - cache.fallo < 3 * 86400000) return null;
+  if (cache && cache.fallo && Date.now() - cache.fallo < 6 * 3600000) return null;
   try {
     const j = await mdJson("/manga?limit=5&title=" + encodeURIComponent(titulo)
       + "&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica");
@@ -2456,6 +2704,16 @@ function avisarAnitrack(d, ch, fSer) {
     const arg = { title: titulo.slice(0, 200), chapter: num, source: (fSer && fSer.id) || "" };
     if (d.meta.anilistId) arg.anilistId = d.meta.anilistId;
     if (d.meta.malId) arg.malId = d.meta.malId;
+    // v0.4.3 — vínculo AniList: si esta serie se vinculó desde la
+    // sección de AniList, sus ids son exactos y no hace falta buscar
+    // por título (prioridad: ids de la serie > vínculo > búsqueda).
+    if (!arg.anilistId && !arg.malId) {
+      const alV = getJson("alId:" + ((d && d.url) || ""), null);
+      if (alV && (alV.al || alV.mal)) {
+        if (alV.al) arg.anilistId = alV.al;
+        if (alV.mal) arg.malId = alV.mal;
+      }
+    }
     // v0.4.2 — rescate de títulos en español: si la serie no viene de
     // MangaDex (sin ids), se buscan sus ids en MangaDex POR TÍTULO —
     // MangaDex guarda títulos en español (altTitles) y publica los
