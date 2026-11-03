@@ -1,4 +1,7 @@
-// MangaTrack v0.4.6 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.7 — lector de mangas para Kino con pantalla propia.
+// v0.4.7 — el filtro anti-bots de LectorXd y MangaOni entra y sale: las
+// peticiones ahora se reintentan (otro disfraz de navegador, la dirección
+// www del sitio y una pequeña espera entre intentos) antes de rendirse.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +10,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.6";
+const VERSION = "0.4.7";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -64,52 +67,109 @@ function fuenteDeUrl(url) {
 
 // ------------------------------------------------------------------ red
 
+// Disfraces de navegador: LectorXd atiende mejor a un celular y MangaOni
+// a un escritorio; cuando el filtro anti-bots se activa, el reintento los
+// intercambia para darle al sitio otra cara distinta.
+const UA_MOVIL = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36";
+const UA_ESCRITORIO = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
 async function getHtmlDe(f, path) {
   // Cloudflare (LectorXd y MangaOni) rechaza peticiones sin User-Agent:
   // se envían cabeceras de navegador para que no las confunda con bots
   // (receta verificada en la app de escritorio KageView, que lee ambos).
+  const esNube = f.id === "lectorxd" || f.id === "mangaoni";
   const hdrs = f.id === "lectorxd"
     ? {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "es-419,es;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        "User-Agent": UA_MOVIL,
         Referer: f.base + "/",
       }
     : f.id === "mangaoni"
     ? {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "es-419,es;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": UA_ESCRITORIO,
         Referer: f.base + "/",
       }
     : { Accept: "text/html" };
   // MangaOni guarda sus series con el prefijo /oni: al pedir se quita.
   const ruta = f.id === "mangaoni" ? moPath(path) : path;
-  let r;
-  try {
-    r = await kino.fetch(f.base + ruta, { headers: hdrs });
-  } catch (e) {
-    // La petición ni siquiera recibió respuesta (conexión rechazada,
-    // TLS cortado por el filtro anti-bots): queda en el log con su
-    // causa y la persona recibe un mensaje honesto.
-    log(f.id + " conexión fallida en " + path + ": " + ((e && e.message) || e));
-    throw kino.error("network", "conexión: " + ((e && e.message) || e), {
-      userMessage: "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
-    });
+  // v0.4.7 — el 403 del filtro anti-bots de Cloudflare entra y sale (en
+  // el registro de la persona LectorXd a veces cargaba y a veces no):
+  // ahora se reintenta hasta 3 veces — el 2º intento con el disfraz del
+  // otro navegador y el 3º con la dirección alternativa del sitio (www),
+  // esperando un poco entre intentos para no parecer un bombardeo. Las
+  // demás fuentes siguen con un solo intento, igual que siempre, y un
+  // sitio que no responde (timeout) tampoco se martilla.
+  let ultimo = 0;   // el último estado que el sitio dio (0: conexión cortada)
+  for (let intento = 1; intento <= 3; intento++) {
+    const h = intento === 2 && esNube
+      ? Object.assign({}, hdrs, { "User-Agent": f.id === "lectorxd" ? UA_ESCRITORIO : UA_MOVIL })
+      : hdrs;
+    const base = intento === 3 && esNube
+      ? (f.id === "lectorxd" ? "https://www.lectorxd.com" : "https://www.manga-oni.com")
+      : f.base;
+    const ops = { headers: h };
+    if (intento > 1) ops.timeoutMs = 7000;
+    let r = null;
+    try {
+      r = await kino.fetch(base + ruta, ops);
+    } catch (e) {
+      // La petición ni siquiera recibió respuesta (conexión rechazada,
+      // TLS cortado por el filtro anti-bots): queda en el log con su
+      // causa y la persona recibe un mensaje honesto. Solo se reintenta
+      // el corte rápido (code "network"): un timeout es un sitio caído
+      // y no se desbloquea insistiendo.
+      log(f.id + " conexión fallida en " + path + " (intento " + intento + "): " + ((e && e.message) || e));
+      if (!esNube || !e || e.code !== "network") {
+        throw kino.error("network", "conexión: " + ((e && e.message) || e), {
+          userMessage: "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
+        });
+      }
+      ultimo = 0;
+    }
+    if (r && r.ok) {
+      const txt = await r.text();
+      // Cloudflare a veces responde 200 con su página de revisión («Just
+      // a moment…»): cuenta como bloqueo, no como página buena.
+      if (esNube && /just a moment|cf-chl|checking your browser|attention required/i.test(txt.slice(0, 4000))) {
+        log(f.id + " página de revisión en " + path + " (intento " + intento + ")");
+        ultimo = 403;
+      } else {
+        if (intento > 1) log(f.id + " cargó en el intento " + intento + ": " + path);
+        return txt;
+      }
+    } else if (r) {
+      // El estado se anota en el log: con él se distingue un bloqueo +18
+      // (403/451) de una caída real de la red.
+      log(f.id + " HTTP " + r.status + " en " + path + " (intento " + intento + ")");
+      ultimo = r.status;
+      // Solo se reintentan el 403 y el 429 (el filtro anti-bots que va y
+      // viene y el «demasiadas peticiones»); el 451 es el bloqueo +18 o
+      // legal, y ningún otro estado se desbloquea insistiendo.
+      if (!esNube || (r.status !== 403 && r.status !== 429)) {
+        throw kino.error("network", "HTTP " + r.status, {
+          userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
+            ? "LectorXd bloqueó la página (HTTP " + r.status + "). Si es una serie +18, la cierra sin cuenta; si no, es su filtro anti-bots. Prueba otra serie."
+            : f.id === "mangaoni" && r.status === 403
+            ? "MangaOni bloqueó la página (HTTP 403): es su protección anti-bots. Vuelve a intentarlo o prueba otra serie."
+            : "No se pudo conectar con " + f.nombre + " (HTTP " + r.status + "). Inténtalo de nuevo.",
+        });
+      }
+    }
+    if (intento < 3) await kino.sleep(intento === 1 ? 1200 : 1800);
   }
-  if (!r.ok) {
-    // El estado se anota en el log: con él se distingue un bloqueo +18
-    // (403/451) de una caída real de la red.
-    log(f.id + " HTTP " + r.status + " en " + path);
-    throw kino.error("network", "HTTP " + r.status, {
-      userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
-        ? "LectorXd bloqueó la página (HTTP " + r.status + "). Si es una serie +18, la cierra sin cuenta; si no, es su filtro anti-bots. Prueba otra serie."
-        : f.id === "mangaoni" && r.status === 403
-        ? "MangaOni bloqueó la página (HTTP 403): es su protección anti-bots. Vuelve a intentarlo o prueba otra serie."
-        : "No se pudo conectar con " + f.nombre + " (HTTP " + r.status + "). Inténtalo de nuevo.",
-    });
-  }
-  return await r.text();
+  // Se agotaron los intentos: queda el mensaje honesto con el último
+  // estado que el sitio dio.
+  const est = ultimo ? "HTTP " + ultimo : "sin respuesta";
+  throw kino.error("network", ultimo ? "HTTP " + ultimo : "conexión cortada", {
+    userMessage: f.id === "lectorxd"
+      ? "LectorXd bloqueó la página (" + est + ") aunque se reintentó con otro disfraz de navegador. Si es una serie +18, la cierra sin cuenta; si no, su filtro anti-bots está activo ahora mismo: prueba otra serie o vuelve en un rato."
+      : f.id === "mangaoni"
+      ? "MangaOni bloqueó la página (" + est + ") aunque se reintentó: su protección anti-bots está activa ahora mismo. Vuelve en un rato o prueba otra serie."
+      : "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
+  });
 }
 
 async function getHtml(path) {
