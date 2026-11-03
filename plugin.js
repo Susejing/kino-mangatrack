@@ -1,4 +1,4 @@
-// MangaTrack v0.4.1 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.2 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.1";
+const VERSION = "0.4.2";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1214,7 +1214,8 @@ async function moSerie(url) {
     if (!num) num = String(caps.length + 1);
     caps.push({ url: chUrl, num: num });
   }
-  // Del más nuevo al más viejo, como en las demás fuentes.
+  // Del más nuevo al más viejo; cargarSerie luego voltaea la lista al
+  // orden ascendente común (del capítulo 1 al último).
   caps.sort((a, b) => (parseFloat(b.num) || 0) - (parseFloat(a.num) || 0) ||
     String(b.num).localeCompare(String(a.num)));
   if (!caps.length) log("MO 0 capítulos — html " + html.length + (html.indexOf("c_list") >= 0 ? ", c_list presente" : ", SIN c_list"));
@@ -1808,8 +1809,9 @@ function readerTree(state) {
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
   const modo = modoLectorEfectivo(r.images.length);
-  // Modo inmersivo (v0.4.1): esconde la barra azul de arriba y la de
-  // controles de abajo; queda un botón flotante para traerlas de
+  // Modo inmersivo (v0.4.2): el OJO de la barra esconde la barra de
+  // arriba y la de controles de abajo — quedan solo las páginas y un
+  // botoncito flotante discreto (el mismo ojo) para traerlas de
   // vuelta. La preferencia vive en el almacén ("lectorInm"), igual
   // que el modo tira/páginas.
   const inm = getJson("lectorInm", 0) ? true : false;
@@ -1857,21 +1859,19 @@ function readerTree(state) {
         style: "caption", color: "muted" },
     ]) },
   ];
-  // Modo inmersivo: un botón flotante trae las barras de vuelta.
-  if (inm) body.push({ type: "FloatingActionButton", key: "verBarras", icon: "expand_more",
-    labelText: "Mostrar barras", labelTextEn: "Show bars",
+  // Modo inmersivo: el botoncito flotante (sin etiqueta, discreto)
+  // trae las barras de vuelta.
+  if (inm) body.push({ type: "FloatingActionButton", key: "verBarras", icon: "visibility",
+    tooltip: "Mostrar barras", tooltipEn: "Show bars",
     onPressed: { event: "lectorInm" } });
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: inm ? undefined : { type: "AppBar", dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
+    appBar: inm ? undefined : { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
-        labelText: "Ocultar o mostrar controles", labelTextEn: "Hide or show controls",
-        onPressed: { ui: [{ toggle: "barraLector" }] } },
-        { type: "IconButton", key: "btnInm", icon: "expand_less",
-        labelText: "Modo inmersivo", labelTextEn: "Immersive mode",
+        labelText: "Modo inmersivo (ocultar barras)", labelTextEn: "Immersive mode (hide bars)",
         onPressed: { event: "lectorInm" } }] },
     body: { type: "Column", children: body },
   };
@@ -2218,8 +2218,23 @@ export async function screenEvent(ev) {
       if (name === "seguirLeyendo") {
         // Capítulo por índice ABSOLUTO (botón "Continuar"): si está en
         // otra ventana, se carga su ventana y se abre directo al lector.
-        const abs = parseInt(String(ev.arg || ""), 10);
+        let abs = parseInt(String(ev.arg || ""), 10);
         if (!(abs >= 0)) return null;
+        // v0.4.2 — guarda anti-desfase: MangaOni listaba sus capítulos
+        // al revés y un índice guardado antes de esta versión puede
+        // apuntar a otro capítulo; si no cuadra, manda el número que
+        // guardó el historial.
+        const hInfo2 = hist()[d.url];
+        const hNum = hInfo2 && hInfo2.num;
+        if (hNum !== undefined && hNum !== null && String(((d.chapters || [])[abs] || {}).num) !== String(hNum)) {
+          const enVentana = (d.chapters || []).findIndex((c) => String(c.num) === String(hNum));
+          if (enVentana >= 0) abs = (d.capStart || 0) + enVentana;
+          else {
+            const fullG = getJson("caps:" + d.url, null);
+            const enFull = Array.isArray(fullG) ? fullG.findIndex((c) => String(c.num) === String(hNum)) : -1;
+            if (enFull >= 0) abs = enFull;
+          }
+        }
         const cs = d.capStart || 0;
         let d2 = d;
         if (abs < cs || abs >= cs + d.chapters.length) {
@@ -2359,6 +2374,72 @@ export async function screenEvent(ev) {
   }
 }
 
+// v0.4.2 — Título normalizado para comparar (minúsculas, sin
+// acentos, solo letras y números): el mismo criterio que usa
+// AniTrack para emparejar series.
+function normTituloMD(s) {
+  const conA = "áàäâãéèëêíìïîóòöôõúùüûñç";
+  const sinA = "aaaaaeeeeiiiiooooouuuunc";
+  const t = String(s || "").toLowerCase();
+  let out = "";
+  for (let i = 0; i < t.length; i++) {
+    const j = conA.indexOf(t[i]);
+    out += j >= 0 ? sinA[j] : t[i];
+  }
+  return out.replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+// Busca en MangaDex (por título, en cualquier idioma — guarda
+// títulos en español) los ids de AniList y MAL de una serie, y los
+// guarda en el almacén para no repetir la búsqueda. Solo devuelve ids
+// si el parecido es claro: ante la duda, nada — AniTrack seguirá con
+// su búsqueda por título, como siempre, y nunca se marca una serie
+// equivocada.
+async function idsPorTitulo(titulo) {
+  const clave = "idsMd:" + titulo.slice(0, 80);
+  const cache = getJson(clave, null);
+  if (cache && (cache.al || cache.mal)) return cache;
+  if (cache && cache.fallo && Date.now() - cache.fallo < 3 * 86400000) return null;
+  try {
+    const j = await mdJson("/manga?limit=5&title=" + encodeURIComponent(titulo)
+      + "&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica");
+    const datos = (j && j.data) || [];
+    const q = normTituloMD(titulo);
+    if (!q) return null;
+    let mejor = null, mejorP = 0, empate = false;
+    for (let i = 0; i < datos.length; i++) {
+      const m = datos[i];
+      if (!m || !m.attributes) continue;
+      const a = m.attributes;
+      const nombres = Object.keys(a.title || {}).map((k) => a.title[k])
+        .concat((a.altTitles || []).map((o) => o && Object.keys(o).length ? o[Object.keys(o)[0]] : ""));
+      let p = 0;
+      for (let t = 0; t < nombres.length; t++) {
+        const nt = normTituloMD(nombres[t]);
+        if (!nt) continue;
+        if (nt === q) { p = 3; break; }
+        if (nt.length >= 10 && q.length >= 10 && (nt.indexOf(q) >= 0 || q.indexOf(nt) >= 0)) p = Math.max(p, 2);
+      }
+      if (p > mejorP) { mejorP = p; mejor = m; empate = false; }
+      else if (p > 0 && p === mejorP) empate = true;
+    }
+    if (mejor && mejorP >= 2 && !empate) {
+      const Lk = (mejor.attributes && mejor.attributes.links) || {};
+      const idDe = (v) => { const mm = String(v || "").match(/(\d+)\D*$/); return mm ? parseInt(mm[1], 10) : 0; };
+      const ids = { al: idDe(Lk.al), mal: idDe(Lk.mal) };
+      if (ids.al || ids.mal) {
+        setJson(clave, ids);
+        log("ids de MangaDex para «" + titulo.slice(0, 40) + "»: al " + ids.al + ", mal " + ids.mal);
+        return ids;
+      }
+    }
+    setJson(clave, { fallo: Date.now() });
+  } catch (e) {
+    log("ids MangaDex: " + ((e && e.message) || e));
+  }
+  return null;
+}
+
 // Aviso de progreso a AniTrack por la puerta "manga" del protocolo
 // entre plugins (Kino 0.9.81+; MangaTrack declara la puerta en
 // enhancements["20"], invisible para los Kino viejos). Cada capítulo
@@ -2375,12 +2456,23 @@ function avisarAnitrack(d, ch, fSer) {
     const arg = { title: titulo.slice(0, 200), chapter: num, source: (fSer && fSer.id) || "" };
     if (d.meta.anilistId) arg.anilistId = d.meta.anilistId;
     if (d.meta.malId) arg.malId = d.meta.malId;
-    return kino.plugins.call("anitrack", "markChapter", arg)
+    // v0.4.2 — rescate de títulos en español: si la serie no viene de
+    // MangaDex (sin ids), se buscan sus ids en MangaDex POR TÍTULO —
+    // MangaDex guarda títulos en español (altTitles) y publica los
+    // enlaces exactos a AniList y MAL de cada serie. Con esos ids el
+    // registro es exacto, no un parecido de título.
+    const idsP = (arg.anilistId || arg.malId) ? Promise.resolve(null) : idsPorTitulo(titulo);
+    return idsP
+      .then(function (ids) {
+        if (ids && ids.al) arg.anilistId = ids.al;
+        if (ids && ids.mal) arg.malId = ids.mal;
+        return kino.plugins.call("anitrack", "markChapter", arg);
+      })
       .then(function (r) {
         if (!r || r.marked !== true) {
           const motivo = (r && r.reason) || "";
           if (motivo === "sin-sesion") return "AniTrack no tiene sesión: entra a sus Ajustes e inicia sesión para registrar lo que lees.";
-          if (motivo === "no-encontrada") return "AniTrack no encontró «" + titulo.slice(0, 60) + "» en AniList: este capítulo no se marcó.";
+          if (motivo === "no-encontrada") return "AniTrack no encontró «" + titulo.slice(0, 60) + "» en AniList ni en MAL: este capítulo no se marcó.";
           if (motivo) return "AniTrack no registró el capítulo (" + motivo + ").";
           return null;
         }
@@ -2466,7 +2558,7 @@ async function cargarSerie(url, conRuta) {
   const f = fuenteDeUrl(url);
   if (!f) return { toast: "Esa serie no es de ninguna fuente conocida." };
   let meta;
-  let full = null;   // lista COMPLETA (desc: lo más nuevo primero), hasta 1200
+  let full = null;   // lista COMPLETA (asc: del capítulo 1 al más nuevo), hasta 1200
   if (f.id === "mangadex") {
     const id = url.replace(/^[/]title[/]/, "").replace(/[/]$/, "");
     meta = await mdMeta(id);
@@ -2482,7 +2574,10 @@ async function cargarSerie(url, conRuta) {
     const s = await moSerie(url);
     meta = s.meta;
     meta.totalCaps = s.chapters.length;
-    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
+    // v0.4.2 — MangaOni venía al revés (del capítulo más nuevo al 1):
+    // con el volteo queda en el orden ascendente común y "Empezar a
+    // leer" abre el capítulo 1, no el último.
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE).slice().reverse();
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
