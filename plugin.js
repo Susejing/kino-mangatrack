@@ -23,6 +23,20 @@
 // llave cambiada (se renueva) o revisión del sitio pidiendo paso. Y el
 // destapador quedó comprobado contra los vectores oficiales del
 // estándar de cifrado, número por número.
+// v0.4.15 — el lector de Mangas.in abre de verdad: las imágenes de los
+// capítulos vienen a veces con comillas simples (invisibles para el
+// rastreo de antes: de ahí el «1 página» que no cargaba), la dirección
+// falsa «https://<base64>» de los capítulos viejos se destapa ahora
+// del todo (antes quedaba a medias y la página moría), el loading.gif
+// del tema ya no se cuela por página y la dirección de datos (data-src)
+// manda sobre la de relleno (src). El título de la serie sale de la
+// cabecera del tema (.listmanga-header / .widget-title, el orden que
+// dicta el tema oficial): el respaldo genérico de antes agarraba el
+// logo del sitio («M440.in» como título de TODAS las series). La
+// portada prefiere la imagen que el tema guarda en /cover/. Y cuando
+// el sitio contesta con su revisión (403) al catálogo por visitas,
+// las mismas tarjetas se sirven del catálogo público de siempre
+// (/manga-list, la página enlazada en el propio sitio).
 // v0.4.12 — vincular a mano: los títulos de traductor no se acaban
 // nunca (cada serie nueva trae el suyo), así que el toque en una
 // serie de AniList abre una pantalla de vinculación: se elige la
@@ -67,7 +81,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.14";
+const VERSION = "0.4.15";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2115,28 +2129,44 @@ async function msCaps(html, slug) {
 // del enlace, a veces justo antes). El título puede venir como texto
 // del enlace o en el alt de la imagen; la portada que falte se
 // adivina por el slug (la guarda el propio tema del sitio).
+
+// v0.4.15 — El valor de un atributo, con comillas dobles O simples: el
+// sitio mezcla los dos estilos y un atributo con comillas simples es
+// invisible para quien solo busque comillas dobles (el fallo del
+// «1 página» del lector venía de ahí). Los nombres se prueban en
+// orden: vale el primero que exista y no venga vacío.
+function msAttrDe(tag, nombres) {
+  for (let i = 0; i < nombres.length; i++) {
+    const m = String(tag).match(new RegExp("\\b" + nombres[i] + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')", "i"));
+    if (m) return m[1] !== undefined ? m[1] : m[2];
+  }
+  return "";
+}
+
 function msCards(html, max) {
   const out = [];
   const seen = {};
-  const re = /<a\b[^>]*href="([^"]*[/]manga[/][a-z0-9-]+(?:[/])?)"[^>]*>([\s\S]{0,800}?)<\/a>/gi;
+  const re = /<a\b[^>]*href=(?:"([^"]*[/]manga[/][a-z0-9-]+(?:[/])?)"|'([^']*[/]manga[/][a-z0-9-]+(?:[/])?)')[^>]*>([\s\S]{0,800}?)<\/a>/gi;
   let m;
   while ((m = re.exec(html)) !== null && out.length < max) {
-    const mm = m[1].match(/[/]manga[/]([a-z0-9-]+)/i);
+    const href = m[1] !== undefined ? m[1] : m[2];
+    const mm = href.match(/[/]manga[/]([a-z0-9-]+)/i);
     if (!mm) continue;
     const url = "/ms/manga/" + mm[1] + "/";
-    const inner = m[2];
+    const inner = m[3];
     let title = clean(inner.replace(/<[^>]*>/g, " "));
     if (title.length > 120) title = "";
     if (/^(manga|manhwa|manhua|leer)$/i.test(title)) title = "";
     let poster = "";
     const im = inner.match(/<img\b[^>]*>/i);
     const tag = im ? im[0] : "";
+    let deAlt = false;
     if (tag) {
-      const p = tag.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
-      if (p) poster = msAbs(p[1]);
+      const p = msAttrDe(tag, ["data-background-image", "data-cfsrc", "data-lazy-src", "data-src", "src"]);
+      if (p) poster = msAbs(p);
       if (!title) {
-        const a = tag.match(/\balt="([^"]*)"/i);
-        if (a) title = clean(a[1]).replace(/^portada de\s+/i, "");
+        const a = msAttrDe(tag, ["alt"]);
+        if (a) { title = clean(a).replace(/^portada de\s+/i, ""); deAlt = true; }
       }
     }
     if (!poster) {
@@ -2149,23 +2179,26 @@ function msCards(html, max) {
         // tarjeta anterior (y la de esta, si el sitio no la trajo,
         // la adivina el slug, que el propio tema guarda siempre igual).
         const medio = antes.slice(antes.lastIndexOf(ult) + ult.length);
-        const p2 = ult.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
-        if (p2 && !/<a\b/i.test(medio) && !/no-image|placeholder|logo|banner|avatar|icon/i.test(p2[1])) poster = msAbs(p2[1]);
+        const p2 = msAttrDe(ult, ["data-background-image", "data-cfsrc", "data-lazy-src", "data-src", "src"]);
+        if (p2 && !/<a\b/i.test(medio) && !/no-image|placeholder|logo|banner|avatar|icon/i.test(p2)) poster = msAbs(p2);
       }
     }
     if (poster && /no-image|placeholder|logo|banner|avatar|icon/i.test(poster)) poster = "";
     const c = seen[url];
     if (!c) {
-      seen[url] = { url: url, title: title || mm[1], poster: poster, slug: mm[1] };
+      seen[url] = { url: url, title: title || mm[1], poster: poster, slug: mm[1], alt: deAlt && !!title };
       out.push(seen[url]);
     } else {
-      if (title && (!c.title || c.title === c.slug)) c.title = title;
+      // El título del texto del enlace manda sobre el del alt de la
+      // imagen (el alt viene en minúsculas a veces).
+      if (title && (!c.title || c.title === c.slug || c.alt)) { c.title = title; c.alt = deAlt && !!title; }
       if (poster && !c.poster) c.poster = poster;
     }
   }
   for (let i = 0; i < out.length; i++) {
     if (!out[i].poster) out[i].poster = msCover(out[i].slug);
     delete out[i].slug;
+    delete out[i].alt;
   }
   log("MS tarjetas: " + out.length);
   return out;
@@ -2196,38 +2229,77 @@ async function msBuscar(q) {
   return out;
 }
 
-// El catálogo (/filterList) ordena por visitas o por nombre.
+// El catálogo (/filterList) ordena por visitas o por nombre. Si el
+// sitio le contesta con su revisión (el 403 de la prueba real en el
+// teléfono), las mismas tarjetas se sirven del catálogo público de
+// siempre (/manga-list, la página enlazada en el propio sitio) — sin
+// orden por visitas, pero de verdad.
 async function msCatalog(cat, page1) {
   const f = fuentePorId("mangasin");
   const orden = (cat && cat.order) === "name" ? "name" : "views";
-  // La dirección LIMPIA, sin huecos vacíos: la otra forma le olía a
-  // robot al sitio y contestaba con su revisión (403 en el Registro).
-  const html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
-    "&asc=" + (orden === "name" ? "true" : "false"));
+  let html = "";
+  try {
+    html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
+      "&asc=" + (orden === "name" ? "true" : "false"));
+  } catch (e) {
+    log("MS catálogo filterList bloqueado (" + ((e && e.message) || e) + "): probando /manga-list");
+    html = await getHtmlDe(f, "/manga-list?page=" + page1);
+  }
   const items = msCards(html, CAT_POR_PAG);
   return { items: items, mas: items.length > 0 };
 }
 
-// Metadatos de la página de una serie: título (h1 o el título del
-// tema), sinopsis (el bloque «well» del tema o la etiqueta
-// description) y portada (la del tema, adivinable por el slug).
+// Metadatos de la página de una serie: título, sinopsis y portada.
+// v0.4.15 — el título sale de la cabecera del tema oficial
+// (.listmanga-header o .widget-title, en ese orden): el respaldo
+// genérico de antes agarraba el primer <h1> de la página, que es el
+// LOGO del sitio — por eso TODAS las series salían como «M440.in».
 function msMeta(html, slug) {
   const h = String(html || "");
   const pick = (re) => { const m = h.match(re); return m ? clean(m[1]) : ""; };
   let title = "";
-  // El título vive en la cabecera del tema del sitio (listmanga-header);
-  // si el sitio cambia de ropa, vale cualquier <h1> de la página.
-  const hTem = h.match(/class="[^"]*listmanga-header[^"]*"[\s\S]{0,200}?<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
-  const h1 = hTem || h.match(/<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
-  if (h1) title = clean(h1[1].replace(/<[^>]*>/g, " "));
+  // 1) La cabecera del tema: un bloque listmanga-header con el título
+  //    dentro (en un <h1>/<h2> o como texto directo).
+  const hTem = h.match(/class="[^"]*listmanga-header[^"]*"[^>]*>([\s\S]{2,1600}?)<\/div>/i);
+  if (hTem) {
+    const inH = hTem[1].match(/<h[1-3]\b[^>]*>([\s\S]{2,300}?)<\/h[1-3]>/i);
+    if (inH) title = clean(inH[1].replace(/<[^>]*>/g, " "));
+    else {
+      const tx = hTem[1].replace(/<[^>]*>/g, "\n");
+      const l1 = tx.split("\n").map(function (x) { return clean(x); }).filter(Boolean)[0];
+      if (l1) title = l1;
+    }
+  }
+  // 2) La otra forma del tema: un encabezado con clase widget-title.
+  if (!title) {
+    const hWid = h.match(/<h[1-3]\b[^>]*class="[^"]*widget-title[^"]*"[^>]*>([\s\S]{2,300}?)<\/h[1-3]>/i);
+    if (hWid) title = clean(hWid[1].replace(/<[^>]*>/g, " "));
+  }
+  // 3) La etiqueta og:title del sitio.
   if (!title) title = pick(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i) ||
     pick(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/i);
+  // 4) Último recurso: cualquier <h1>/<h2> que NO sea el logo del sitio.
+  if (!title) {
+    const h1s = h.match(/<h[12]\b[^>]*>([\s\S]{2,200}?)<\/h[12]>/gi) || [];
+    for (let i = 0; i < h1s.length && !title; i++) {
+      const t = clean(h1s[i].replace(/<[^>]*>/g, " "));
+      if (t && !/m440\.in/i.test(t) && !/^mangas?\.?\s*in$/i.test(t)) title = t;
+    }
+  }
   title = title.replace(/\s*[|–—]+\s*(mangas[.]in|m440[.]in).*$/i, "").trim();
+  if (/^(?:mangas?\.?\s*in|m440\.in)$/i.test(title)) title = "";
   let poster = "";
-  const im = h.match(/<img\b[^>]*class="[^"]*img-responsive[^"]*"[^>]*>/i);
-  if (im) {
-    const p = im[0].match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
-    if (p) poster = msAbs(p[1]);
+  // La portada: entre las img-responsive de la página, la que apunte
+  // al /cover/ del tema (la receta del tema oficial); de no estar, la
+  // primera que no sea adorno. La de relleno (no-image) no vale.
+  const ims = h.match(/<img\b[^>]*img-responsive[^>]*>/gi) || [];
+  for (let i = 0; i < ims.length && !poster; i++) {
+    const u = msAttrDe(ims[i], ["data-background-image", "data-cfsrc", "data-lazy-src", "data-src", "src"]);
+    if (u && /cover/i.test(u) && !/no-image|placeholder/i.test(u)) poster = msAbs(u);
+  }
+  for (let i = 0; i < ims.length && !poster; i++) {
+    const u = msAttrDe(ims[i], ["data-background-image", "data-cfsrc", "data-lazy-src", "data-src", "src"]);
+    if (u && !/no-image|placeholder|logo|banner|icon|avatar/i.test(u)) poster = msAbs(u);
   }
   if (!poster) poster = pick(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i) ||
     pick(/<meta[^>]*content="([^"]*)"[^>]*property="og:image"/i);
@@ -2239,6 +2311,7 @@ function msMeta(html, slug) {
     pick(/<meta[^>]*content="([^"]*)"[^>]*name="description"/i);
   return { title: title || "Serie", poster: poster, overview: overview.slice(0, 600) };
 }
+
 
 // La serie completa: metadatos + capítulos (la lista cifrada). Si la
 // lista no se puede abrir, se devuelve el aviso honesto en vez de
@@ -2269,37 +2342,58 @@ async function msSerie(url) {
   return { meta: meta, chapters: caps.slice(0, MAX_CAPS_MS) };
 }
 
-// Las páginas del capítulo: las <img> de la zona «#all» (con clase
-// img-responsive), respetando el orden del sitio. Algunas imágenes
-// esconden su dirección en base64 («https://<base64>»): se destapa
-// y se descodifica, como hacen las apps que leen el sitio.
+// Las páginas del capítulo: las <img> de la zona «#all» del lector del
+// tema (con clase img-responsive), respetando el orden del sitio.
+// v0.4.15 — tres arreglos de la prueba real: (1) los atributos pueden
+// venir con comillas simples y el rastreo de antes solo veía dobles
+// (de ahí el «1 página» que además no cargaba); (2) la dirección falsa
+// «https://<base64>» de los capítulos viejos guarda la dirección real
+// codificada porcentaje a porcentaje — se destapa y se descodifica las
+// dos veces, como hacen las apps que leen el sitio; (3) el loading.gif
+// del tema (el src de relleno mientras carga) ya no se cuela por
+// página: la dirección de datos (data-src) manda sobre la de relleno.
 function imgsMS(html) {
   const h = String(html || "");
   let zona = h;
-  const iAll = h.search(/id="all"/i);
+  const iAll = h.search(/id=(?:"all"|'all')/i);
   if (iAll >= 0) zona = h.slice(iAll);
   const out = [];
   const seen = {};
   const re = /<img\b[^>]*>/gi;
   let m;
+  let nImgs = 0;
+  let nResp = 0;
   while ((m = re.exec(zona)) !== null && out.length < 250) {
     const tag = m[0];
-    if (!/img-responsive/i.test(tag)) continue;
-    const p = tag.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
-    if (!p) continue;
-    let u = p[1].trim();
-    if (/^https?:\/\/[A-Za-z0-9+/=]{12,}$/i.test(u)) {
+    nImgs++;
+    const resp = /img-responsive/i.test(tag);
+    if (resp) nResp++;
+    // La dirección de datos primero (la que el tema carga de verdad);
+    // el src de puro relleno, al final.
+    let u = msAttrDe(tag, ["data-src", "data-lazy-src", "data-background-image", "data-cfsrc", "src"]).trim();
+    if (!u || /^data:/i.test(u)) continue;
+    // Capítulo viejo: «https://» falso + base64 de la dirección real
+    // (de Blogspot) codificada porcentaje a porcentaje.
+    if (/^https?:\/\/[A-Za-z0-9+/_=-]{20,8192}$/.test(u)) {
       try {
         const dec = msStrDeBytes(deB64(u.replace(/^https?:\/\//, "")));
-        if (dec && /^https?/i.test(dec)) u = decodeURIComponent(dec);
+        if (dec) {
+          let d2 = dec;
+          try { d2 = decodeURIComponent(dec); } catch (e) { d2 = dec; }
+          if (/^https?:\/\//i.test(d2) || /^https?%/i.test(dec)) u = d2;
+        }
       } catch (e) { }
     }
     if (!/^https?:/i.test(u)) u = msAbs(u);
-    if (seen[u] || /logo|banner|icon|avatar|placeholder|1x1/i.test(u)) continue;
+    // Página de verdad: la marca del tema (/chapters/, donde guarda
+    // TODAS las páginas de sus capítulos) o el Blogspot de los
+    // capítulos viejos. Anillos de anuncios y logos se quedan fuera.
+    if (!/\/chapters\/|\.bp\.blogspot\.com/i.test(u)) continue;
+    if (seen[u] || /loading\.gif|logo|banner|icon|avatar|placeholder|1x1/i.test(u)) continue;
     seen[u] = 1;
     out.push(u);
   }
-  log("MS lector: " + out.length + " páginas");
+  log("MS lector: " + out.length + " páginas (" + nResp + " resp de " + nImgs + " imgs en la zona)");
   return out;
 }
 
@@ -2569,7 +2663,13 @@ async function homeTree() {
     titRec = "Novedades de Mangas.in"; titRecEn = "New on Mangas.in";
     try {
       populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20);
-    } catch (e) { log("MS home pop: " + e); }
+    } catch (e) {
+      // v0.4.15 — el sitio le contestó con su revisión al catálogo por
+      // visitas (el 403 de la prueba real): las mismas tarjetas se
+      // sirven del catálogo público de siempre (/manga-list).
+      log("MS home pop filterList bloqueado (" + ((e && e.message) || e) + "): probando /manga-list");
+      try { populares = msCards(await getHtmlDe(f, "/manga-list?page=1"), 20); } catch (e2) { log("MS home pop: " + e2); }
+    }
     try {
       // Pausa entre las dos preguntas de la portada: el sitio atiende
       // mejor a quien no se las mete seguidas (así lo hacen sus otras apps).
@@ -4297,4 +4397,5 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 

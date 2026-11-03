@@ -1,7 +1,7 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "creator": "Susejing",
   "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni y Mangas.in) y descubre manga con el catálogo de AniList.",
   "apiVersion": 14,
@@ -29,6 +29,11 @@
     "oni.ntr-files.online",
     "m440.in",
     "www.m440.in",
+    "*.m440.in",
+    "1.bp.blogspot.com",
+    "2.bp.blogspot.com",
+    "3.bp.blogspot.com",
+    "4.bp.blogspot.com",
     "graphql.anilist.co",
     "s4.anilist.co"
   ],
@@ -36,7 +41,9 @@
     "screen",
     "shared"
   ],
-  "recommends": ["Susejing/kino-anitrack"],
+  "recommends": [
+    "Susejing/kino-anitrack"
+  ],
   "enhancements": {
     "20": {
       "visualBrowser": true,
@@ -44,7 +51,9 @@
         "anitrack": {
           "repo": "Susejing/kino-anitrack",
           "door": "manga",
-          "calls": ["markChapter"]
+          "calls": [
+            "markChapter"
+          ]
         }
       }
     }
