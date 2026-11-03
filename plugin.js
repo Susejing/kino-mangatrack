@@ -1,4 +1,12 @@
-// MangaTrack v0.4.10 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.11 — lector de mangas para Kino con pantalla propia.
+// v0.4.11 — títulos de traductor: las fuentes en español bautizan sus
+// series a su manera («La Academia está condenada») y ese nombre no
+// existe en AniList ni en MAL, aunque la serie sí esté allí con su
+// nombre original. Ahora el aviso a AniTrack consulta un mapa de
+// equivalencias verificado a mano (solo ids comprobados, serie por
+// serie) antes de buscar por título; y las series +18 también se
+// buscan en MangaDex, que las guarda aparte pero con los mismos
+// enlaces exactos a los catálogos.
 // v0.4.10 — el catálogo y el buscador de LectorXd sirven sus tarjetas en
 // una cuadrícula propia ("manga-grid", el marcado que leen las demás
 // apps del sitio): ahora también se leen así, con el cierre de cada
@@ -27,7 +35,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.10";
+const VERSION = "0.4.11";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3174,7 +3182,7 @@ async function idsPorTitulo(titulo) {
   if (cache && cache.fallo && Date.now() - cache.fallo < 6 * 3600000) return null;
   try {
     const j = await mdJson("/manga?limit=5&title=" + encodeURIComponent(titulo)
-      + "&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica");
+      + "&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic");
     const datos = (j && j.data) || [];
     const q = normTituloMD(titulo);
     if (!q) return null;
@@ -3212,6 +3220,48 @@ async function idsPorTitulo(titulo) {
   return null;
 }
 
+// v0.4.11 — mapa de títulos de traductor: cada fuente en español pone
+// sus propios títulos («La Academia está condenada», «El regreso del
+// genio despreciado»…) y esos nombres no existen en AniList, MAL ni
+// MangaDex, aunque las series sí estén allí con su nombre original.
+// Este mapa se armó verificando serie por serie la identidad real de
+// cada una y sus ids exactos; solo entra lo comprobado: ante la duda,
+// una serie no entra y AniTrack sigue con su búsqueda por título —
+// nunca se marca una serie equivocada.
+const IDS_ESPECIALES = {
+  "La Academia está condenada": { al: 0, mal: 172907 },
+  "Conquistando La Academia Con Solo Un Cuchillo De Sashimi": { al: 184502, mal: 174162 },
+  "El regreso del genio despreciado": { al: 170554, mal: 165084 },
+  "Las amigas de mi madrastra": { al: 119648, mal: 0 },
+  "Obligado a ser Demonio Celestial": { al: 198252, mal: 0 },
+};
+// Series de título tan largo que el propio sitio lo corta: se casan por
+// prefijo, y el prefijo es lo bastante largo para no confundirse con
+// otra serie.
+const PREFIJOS_ESPECIALES = [
+  { p: "Hazure Skill Soine ga Kakuseishi", ids: { al: 175861, mal: 0 } },
+];
+function idsEspeciales(titulo, limpio) {
+  const t = String(titulo || "").trim();
+  const l = String(limpio || "").trim();
+  let e = IDS_ESPECIALES[t] || IDS_ESPECIALES[l];
+  if (!e) {
+    const tl = t.toLowerCase();
+    const ll = l.toLowerCase();
+    for (const k in IDS_ESPECIALES) {
+      if (k.toLowerCase() === tl || k.toLowerCase() === ll) { e = IDS_ESPECIALES[k]; break; }
+    }
+  }
+  if (!e) {
+    for (let i = 0; i < PREFIJOS_ESPECIALES.length; i++) {
+      const pref = PREFIJOS_ESPECIALES[i].p;
+      if (t.slice(0, pref.length) === pref || l.slice(0, pref.length) === pref) { e = PREFIJOS_ESPECIALES[i].ids; break; }
+    }
+  }
+  if (e) log("ids del mapa para «" + t.slice(0, 40) + "»: al " + (e.al || 0) + ", mal " + (e.mal || 0));
+  return e || null;
+}
+
 // Aviso de progreso a AniTrack por la puerta "manga" del protocolo
 // entre plugins (Kino 0.9.81+; MangaTrack declara la puerta en
 // enhancements["20"], invisible para los Kino viejos). Cada capítulo
@@ -3246,7 +3296,13 @@ function avisarAnitrack(d, ch, fSer) {
     // v0.4.10 — segunda oportunidad: los adornos «(Sin Censura)» y
     // parecidos no los conoce MangaDex, pero el título limpio sí.
     const limpio = tituloLimpioMD(titulo);
-    const idsP = (arg.anilistId || arg.malId) ? Promise.resolve(null) : idsPorTitulo(titulo)
+    // v0.4.11 — mapa de títulos de traductor: si esta serie vive en
+    // AniList y MAL con otro nombre, se usan sus ids verificados sin
+    // más búsquedas (el vínculo de la sección AniList sigue mandando).
+    const esp = (arg.anilistId || arg.malId) ? null : idsEspeciales(titulo, limpio);
+    const idsP = esp
+      ? Promise.resolve(esp)
+      : (arg.anilistId || arg.malId) ? Promise.resolve(null) : idsPorTitulo(titulo)
       .then(function (ids) {
         if (ids || !limpio || limpio === titulo) return ids;
         return idsPorTitulo(limpio);
