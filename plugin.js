@@ -1,4 +1,4 @@
-// MangaTrack v0.4.3 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.4 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,15 +7,18 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.3";
+const VERSION = "0.4.4";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
 // serie larga no cabe entera. Con la lista completa guardada en el
 // almacén, los botones "más antiguos/recientes" van pasando de ventana
-// en ventana (VENTANA_CAPS por vez), hasta 1200 capítulos guardados.
+// en ventana (VENTANA_CAPS por vez), hasta 600 capítulos guardados:
+// v0.4.4 — el almacén del plugin tiene tope (256 KB) y 1200 capítulos
+// por serie lo llenaba sin aviso; 600 cabe holgado y el resto se
+// pagina desde el sitio igual que siempre.
 const VENTANA_CAPS = 300;
-const TOPE_CAPS_SERIE = 1200;
+const TOPE_CAPS_SERIE = 600;
 const MAX_CAPS = 490;              // capítulos por serie en LeerCapitulo
 const MAX_CAPS_LX = 300;           // en LectorXd (URLs más largas, estado 64 KB)
 
@@ -339,7 +342,99 @@ function getJson(key, fallback) {
   } catch (e) { return fallback; }
 }
 function setJson(key, val) {
-  try { kino.storage.set(key, JSON.stringify(val)); } catch (e) { log("storage: " + e); }
+  try { kino.storage.set(key, JSON.stringify(val)); return true; } catch (e) { log("storage: " + e); return false; }
+}
+
+// ---------------------------------------------------------------- v0.4.4
+// Guardián del almacén. El almacén del plugin tiene un tope (256 KB) y
+// las cachés grandes (capítulos completos "caps:", catálogo "cat",
+// resultados de AniList "al") lo llenaban SIN aviso: el catálogo dejaba
+// de avanzar páginas y la sección de AniList quedaba "cargando" para
+// siempre. Ahora las cachés desechables se escriben con setJsonCache:
+// si el almacén se llena, se BORRAN las cachés más viejas (siempre se
+// pueden volver a pedir al sitio) y se reintenta una vez. Los datos
+// personales —favoritos, historial, vínculos de AniList— no se tocan.
+const CACHE_TOPE = 160000;   // presupuesto estimado de cachés, en bytes
+
+function setJsonTxt(clave, txt) {
+  try { kino.storage.set(clave, txt); return true; } catch (e) { log("storage: " + e); return false; }
+}
+
+function cacheIdx() { return getJson("cacheIdx", {}); }
+
+function regCache(clave, bytes) {
+  const idx = cacheIdx();
+  idx[clave] = { t: Date.now(), b: bytes };
+  setJsonTxt("cacheIdx", JSON.stringify(idx));
+}
+
+function setJsonCache(clave, val) {
+  let txt = "";
+  try { txt = JSON.stringify(val); } catch (e) { return false; }
+  if (setJsonTxt(clave, txt)) { regCache(clave, txt.length); return true; }
+  // Lleno: liberar las cachés más viejas (nunca la clave que se
+  // escribe) — al menos una, aunque el presupuesto no se pase, porque
+  // el almacén puede estar lleno por otras cosas — y reintentar una
+  // vez. Si aun así no cabe, se devuelve false para que el llamador
+  // avise en lugar de fingir que guardó.
+  const idx = cacheIdx();
+  const entradas = Object.keys(idx)
+    .filter(function (k) { return k !== clave; })
+    .map(function (k) { return { k: k, t: (idx[k] && idx[k].t) || 0, b: (idx[k] && idx[k].b) || 0 }; })
+    .sort(function (a, b) { return a.t - b.t; });
+  let total = txt.length;
+  for (let i = 0; i < entradas.length; i++) total += entradas[i].b;
+  let liberadas = 0;
+  for (let i = 0; i < entradas.length; i++) {
+    if (liberadas >= 1 && total <= CACHE_TOPE) break;
+    if (setJsonTxt(entradas[i].k, "")) { total -= entradas[i].b; delete idx[entradas[i].k]; liberadas++; }
+  }
+  setJsonTxt("cacheIdx", JSON.stringify(idx));
+  if (setJsonTxt(clave, txt)) { regCache(clave, txt.length); return true; }
+  return false;
+}
+
+// v0.4.4 — limpieza única (flag "limpia044"): las series viejas del
+// historial (más de 20 puestos atrás y que no sean favoritas) sueltan
+// su caché de capítulos. Es lo que despeja el almacén lleno heredado
+// de las versiones anteriores. Corre sola una vez, al abrir el plugin.
+function limpiaAlmacen() {
+  if (getJson("limpia044", 0)) return;
+  const h = hist();
+  const urls = Object.keys(h).sort(function (a, b) { return (h[b].ts || 0) - (h[a].ts || 0); });
+  const favUrls = favs().map(function (x) { return x.url; });
+  let n = 0;
+  for (let i = 20; i < urls.length; i++) {
+    if (favUrls.indexOf(urls[i]) >= 0) continue;
+    if (setJsonTxt("caps:" + urls[i], "")) n++;
+  }
+  setJson("limpia044", 1);
+  if (n) log("limpieza 0.4.4: " + n + " cachés de series viejas liberadas");
+}
+
+// v0.4.4 — la página donde quedó cada capítulo ya no es una clave por
+// capítulo (se acumulaban sin remedio): es UN mapa con tope de 120, de
+// lo más viejo afuera. Las claves viejas se siguen leyendo por si
+// acaso, pero ya no se escriben.
+function pgLeer(chUrl) {
+  const m = getJson("pgAtMap", {});
+  if (m && typeof m === "object" && (chUrl in m)) {
+    const v = parseInt(m[chUrl], 10);
+    if (isFinite(v) && v >= 0) return v;
+  }
+  const v = parseInt(getJson("pgAt:" + chUrl, 0), 10);
+  return isFinite(v) && v >= 0 ? v : 0;
+}
+
+function pgGuardar(chUrl, pg) {
+  if (!chUrl || !(pg >= 0)) return;
+  const m = getJson("pgAtMap", {});
+  if (!m || typeof m !== "object") return;
+  delete m[chUrl];
+  m[chUrl] = pg;
+  const ks = Object.keys(m);
+  while (ks.length > 120) delete m[ks.shift()];
+  setJson("pgAtMap", m);
 }
 function favs() { return getJson("favs", []); }
 function isFav(url) { return favs().some((f) => f.url === url); }
@@ -1558,12 +1653,20 @@ async function homeTree() {
   recientes = recientes.filter((x) => (!vr[x.url] && (vr[x.url] = 1)));
   if (!populares.length && !recientes.length && !mixtas.length) mixtas = cardsDe(f, html, 40);
   const mf = favs();
+  // v0.4.4 — favoritos en cuadrícula como el catálogo (antes: tira
+  // horizontal apretada), con el nombre de la fuente debajo y botón
+  // para verlos todos cuando son más de 12.
   const railFavs = mf.length ? [
-    { type: "Text", text: "Mis favoritos", textEn: "My favourites", style: "h3", padding: 16 },
-    { type: "SingleChildScrollView", key: "railFavs", direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8,
-        children: mf.slice(0, 40).map((it) => posterCard(it, "f-", true)) }] },
-  ] : [];
+    { type: "Text", text: "Mis favoritos (" + mf.length + ")",
+      textEn: "My favourites (" + mf.length + ")", style: "h3", padding: 16 },
+    { type: "ListView", key: "gridFavs", columns: { compact: 3, medium: 4, expanded: 6 },
+      items: mf.slice(0, 12).map(function (it) { return favCard(it); }) },
+    mf.length > 12
+      ? { type: "ElevatedButton", key: "favsTodos", icon: "expand_more",
+          labelText: "Ver todos los favoritos (" + mf.length + ")",
+          labelTextEn: "See all favourites (" + mf.length + ")", onPressed: "favsOpen" }
+      : null,
+  ].filter(Boolean) : [];
   const hh = hist();
   const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
       poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
@@ -2101,10 +2204,14 @@ async function cargarCatalogo(cat, page, conRuta) {
   // v0.4.3 — la ventana salta a lo recién cargado: tras "Cargar más" se
   // ven las últimas CAT_TOPE series y "‹ / ›" recorre las más viejas.
   const start = Math.max(0, items.length - CAT_TOPE);
-  setJson("cat", { f: f.id, items: items, start: start, page: page1, genre: cat.genre || "",
+  // v0.4.4 — con el guardián del almacén; si no se puede guardar, se
+  // avisa y NO se abre la pantalla (antes quedaba "cargando" para
+  // siempre o el botón "Cargar más" fingía que no pasaba nada).
+  const catOk = setJsonCache("cat", { f: f.id, items: items, start: start, page: page1, genre: cat.genre || "",
     type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt,
     mas: mas === undefined ? null : mas, lleno: capLleno ? 1 : 0,
     ultimos: page1 > 1 ? Math.max(0, items.length - prev.length) : 0 });
+  if (!catOk) return { toast: "El almacén del plugin está lleno: no pude guardar el catálogo." };
   log("catálogo " + f.nombre + " pág. " + page1 + ": +" + nuevos.length + " → " + items.length +
     " series, filtros " + (cat.genre || cat.type || "-") + "/" + (cat.status || "-") + "/" + (cat.order || "-"));
   const resp = { state: { catTk: Date.now() } };
@@ -2136,6 +2243,7 @@ export async function screen(ev) {
     if (route.name === "anilist") {
       return anilistTree(getJson("al", null));
     }
+    if (route.name === "favs") return favsTree();
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
     return errorTree((e && e.userMessage) ||
@@ -2158,6 +2266,7 @@ export async function screenEvent(ev) {
   const state = ev.state || {};
   try {
     if (name === "open") {
+      limpiaAlmacen();
       syncPullFavs();
       syncPullHist();
       const r = ev.route || {};
@@ -2175,12 +2284,26 @@ export async function screenEvent(ev) {
       return null;
     }
     if (name === "goSearch") return { route: { push: "search" } };
+    if (name === "favsOpen") return { route: { push: "favs" } };
+    if (name === "alRetry") {
+      // v0.4.4 — reintentar la carga de AniList sin cambiar de pantalla.
+      try {
+        const r = await alBuscar("", 1, "TRENDING_DESC", false, false);
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude cargar AniList." };
+        return { state: r.resp.state };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
     if (name === "openCatalog") {
       return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
     }
     if (name === "alOpen") {
       try {
         const r = await alBuscar("", 1, "TRENDING_DESC", true, false);
+        // v0.4.4 — si no se pudo guardar, no abrir la pantalla: se
+        // quedaría "cargando" para siempre.
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude abrir AniList." };
         return r.resp;
       } catch (e) {
         return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
@@ -2192,6 +2315,7 @@ export async function screenEvent(ev) {
       const a = getJson("al", null) || {};
       try {
         const r = await alBuscar(q, 1, a.order || "TRENDING_DESC", false, false);
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar la búsqueda." };
         return { state: r.resp.state, toast: r.n > 0
           ? r.n + (r.n === 1 ? " resultado en AniList" : " resultados en AniList")
           : "Sin resultados en AniList." };
@@ -2204,6 +2328,7 @@ export async function screenEvent(ev) {
       const a = getJson("al", null) || {};
       try {
         const r = await alBuscar(a.q || "", 1, v, false, false);
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar el orden." };
         return { state: r.resp.state, toast: "Orden cambiado." };
       } catch (e) {
         return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
@@ -2215,6 +2340,7 @@ export async function screenEvent(ev) {
       if (a.info && a.info.has === false) return { toast: "No hay más resultados en AniList." };
       try {
         const r = await alBuscar(a.q || "", (a.page || 1) + 1, a.order || "TRENDING_DESC", false, true);
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude cargar más." };
         return { state: r.resp.state, toast: r.n > 0
           ? "+" + r.n + " series de AniList"
           : "No hay más resultados en AniList." };
@@ -2297,7 +2423,13 @@ export async function screenEvent(ev) {
       const c2 = getJson("cat", null) || {};
       const ahora = Array.isArray(c2.items) ? c2.items.length : 0;
       const nuevosN = Math.max(0, ahora - antes);
-      return { state: (r && r.state) || {}, toast: nuevosN > 0
+      // v0.4.4 — guarda honesta: si la página guardada no avanzó, la
+      // escritura falló (almacén lleno) y se avisa en vez de fingir
+      // que cargó.
+      const falloGuardado = (c2.page || 1) <= (c.page || 1);
+      return { state: (r && r.state) || {}, toast: falloGuardado
+        ? "El almacén del plugin está lleno: no pude guardar más series."
+        : nuevosN > 0
         ? "+" + nuevosN + " series (" + ahora + " en el catálogo)"
         : (c2.lleno ? "Catálogo lleno (" + CAT_ALMACEN + " series): recórrelo con ‹ / ›."
           : "El sitio no trajo series nuevas: fin de la lista.") };
@@ -2413,7 +2545,7 @@ export async function screenEvent(ev) {
       if (nuevo === "paginas") {
         const d = state.detail;
         const ch = d && Array.isArray(d.chapters) ? d.chapters[r.idx || 0] : null;
-        let at = ch ? getJson("pgAt:" + ch.url, 0) : 0;
+        let at = ch ? pgLeer(ch.url) : 0;
         at = parseInt(at, 10);
         if (!(at >= 0) || at >= r.images.length) at = 0;
         resp.ui = [{ set: { key: "pgs", value: at } }];
@@ -2429,7 +2561,7 @@ export async function screenEvent(ev) {
       const ch = d.chapters[r.idx || 0];
       if (!ch) return null;
       const pg = parseInt(String(ev.value), 10);
-      if (pg >= 0) setJson("pgAt:" + ch.url, pg);
+      if (pg >= 0) pgGuardar(ch.url, pg);
       return null;
     }
     if (name === "search") {
@@ -2503,6 +2635,49 @@ export async function screenEvent(ev) {
   }
 }
 
+// ---------------------------------------------------------------- v0.4.4
+// Mis favoritos: cuadrícula con el nombre de la fuente debajo (antes
+// eran una tira horizontal apretada) y pantalla completa para verlos
+// todos cuando son más de 12.
+function favCard(it) {
+  const titulo = String(it.title || "");
+  const fSer = fuenteDeUrl(it.url);
+  return {
+    type: "Card", key: serieKey("f-", it.url), flush: true,
+    onTap: { event: "openSeries", arg: it.url },
+    children: [{ type: "Image", url: it.poster || "", aspect: "2:3", alt: titulo, altEn: titulo,
+        fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+          children: [{ type: "Icon", name: "list", color: "muted" }] } }]
+      .concat(twoLines(titulo).map(function (ln) {
+        return { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 };
+      }))
+      .concat([{ type: "Text", text: (fSer && fSer.nombre) || "",
+        textEn: (fSer && fSer.nombre) || "", style: "caption", color: "muted", padding: 8 }]),
+  };
+}
+
+function favsTree() {
+  const mf = favs();
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barFavs", title: "Mis favoritos (" + mf.length + ")",
+      leading: { type: "IconButton", key: "backFromFavs", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "favsBody", children: [{ type: "Column", children: [
+      mf.length
+        ? { type: "ListView", key: "gridFavsT", columns: { compact: 3, medium: 4, expanded: 6 },
+            items: mf.map(function (it) { return favCard(it); }) }
+        : { type: "Column", children: [
+            { type: "emptyState", icon: "list", title: "Sin favoritos todavía.", titleEn: "No favourites yet." },
+            { type: "Text", text: "Abre una serie y toca el corazón para guardarla aquí.",
+              textEn: "Open a series and tap the heart to save it here.",
+              style: "caption", color: "muted", padding: 16 },
+          ] },
+    ] }] },
+  };
+}
+
 // ---------------------------------------------------------------- AniList
 // v0.4.3 — sección AniList: su catálogo sirve para DESCUBRIR manga
 // (tendencia, populares, mejor valorados, A-Z o por búsqueda). AniList
@@ -2567,7 +2742,14 @@ function alCard(m) {
 
 function anilistTree(a) {
   if (!a || typeof a !== "object" || !Array.isArray(a.items)) {
-    return loadingTree("Cargando AniList…");
+    // v0.4.4 — si la carga falla, no girar para siempre: botón para
+    // reintentar.
+    return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+      { type: "CircularProgressIndicator" },
+      { type: "Text", text: "Cargando AniList…", textEn: "Loading AniList…", color: "muted" },
+      { type: "ElevatedButton", key: "alRetry", icon: "refresh",
+        labelText: "Reintentar", labelTextEn: "Retry", onPressed: "alRetry" },
+    ] };
   }
   const hasNext = !!(a.info && a.info.has);
   return {
@@ -2615,11 +2797,13 @@ async function alBuscar(q, page, order, conRuta, anadir) {
     .slice(0, ANI_TOPE);
   let ordTxt = "";
   for (let i = 0; i < AL_ORDEN.length; i++) if (AL_ORDEN[i][0] === ord) ordTxt = AL_ORDEN[i][1];
-  setJson("al", { items: items, q: q || "", page: page1, order: ord, ordTxt: ordTxt,
+  // v0.4.4 — con el guardián: si no se puede guardar, se avisa al
+  // llamador para que NO abra la pantalla (nada de "cargando" eterno).
+  const alOk = setJsonCache("al", { items: items, q: q || "", page: page1, order: ord, ordTxt: ordTxt,
     info: { has: !!(j && j.data && j.data.Page && j.data.Page.pageInfo && j.data.Page.pageInfo.hasNextPage) } });
   const resp = { state: { alTk: Date.now() } };
   if (conRuta) resp.route = { push: "anilist" };
-  return { resp: resp, n: nuevos.length };
+  return { resp: resp, n: nuevos.length, ok: alOk };
 }
 
 // v0.4.2 — Título normalizado para comparar (minúsculas, sin
@@ -2795,7 +2979,7 @@ async function abrirCapitulo(d, idx, conRuta) {
   // lector de la docs: un `set` de ui sobre la key del pages en la
   // respuesta que abre el capítulo).
   if (modoLectorEfectivo(images.length) === "paginas") {
-    let at = getJson("pgAt:" + ch.url, 0);
+    let at = pgLeer(ch.url);
     at = parseInt(at, 10);
     if (!(at >= 0) || at >= images.length) at = 0;
     resp.ui = [{ set: { key: "pgs", value: at } }];
@@ -2862,7 +3046,7 @@ async function cargarSerie(url, conRuta) {
   const chapters = full.slice(0, VENTANA_CAPS);
   let capsTotal = full.length;
   if (full.length > chapters.length) {
-    try { setJson("caps:" + url, full); } catch (e) { log("caps sin guardar: " + e); }
+    try { if (!setJsonCache("caps:" + url, full)) log("caps sin guardar: almacén lleno"); } catch (e) { log("caps sin guardar: " + e); }
   }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " de " + capsTotal + " capítulos");
   // Con 0 capítulos también se abre el detalle: ahí explica por qué
