@@ -11,6 +11,18 @@
 // propio del sitio), lector (con sus imágenes escondidas en base64
 // destapadas) y la galleta de acceso de la ventanita anti-revisión,
 // con llave propia para esta fuente.
+// v0.4.14 — Mangas.in afinado a la luz de la prueba real: la lista
+// cifrada de capítulos mide MILES de caracteres y el rastreo la
+// buscaba dentro de una ventana corta (nunca daba con ella: el
+// «bloque ausente» del Registro); ahora la página entera se rastrea
+// por sus marcas. El buscador lee la lista plana que el sitio
+// devuelve, el catálogo y la portada van con la dirección limpia (la
+// de antes, con huecos vacíos, le olía a robot al sitio y contestaba
+// con su revisión), y entre las dos preguntas de la portada media una
+// pausa corta. El aviso cuando una lista no se abre ahora DISTINGUE:
+// llave cambiada (se renueva) o revisión del sitio pidiendo paso. Y el
+// destapador quedó comprobado contra los vectores oficiales del
+// estándar de cifrado, número por número.
 // v0.4.12 — vincular a mano: los títulos de traductor no se acaban
 // nunca (cada serie nueva trae el suyo), así que el toque en una
 // serie de AniList abre una pantalla de vinculación: se elige la
@@ -55,7 +67,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.13";
+const VERSION = "0.4.14";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1948,20 +1960,48 @@ function msQuitaRelleno(b) {
 }
 
 // El bloque cifrado viaja dentro de un script de la página con sus
-// comillas ESCAPADAS ({\"ct\":…,\"iv\":…,\"s\":…}). Se coge tal cual
-// y se le quita la barra a cada carácter escapado. Por si el sitio
-// algún día lo manda sin escapes, también se prueba la forma plana.
+// comillas ESCAPADAS ({\"ct\":…,\"iv\":…,\"s\":…}) y la lista real
+// mide MILES de caracteres: el rastreo de ventana corta nunca daba
+// con ella (el «bloque ausente» del Registro). Ahora la página se
+// mira entera: primero la forma clásica (receivedData = "…";) y, si
+// no está, se escanean las marcas de \"ct\" (escapadas y planas)
+// buscando hacia atrás el abrazo { } que las contiene. Solo vale el
+// candidato con los tres campos (ct, iv y s) de verdad.
 function msBlobDe(html) {
   const h = String(html || "");
-  const reEsc = /\{(?=[\s\S]{0,600}?\\"ct\\")(?=[\s\S]{0,600}?\\"iv\\")(?=[\s\S]{0,600}?\\"s\\")[\s\S]{0,40000}?\}/;
-  const m = h.match(reEsc) || h.match(/\{(?=[\s\S]{0,600}?"ct")(?=[\s\S]{0,600}?"iv")(?=[\s\S]{0,600}?"s")[\s\S]{0,40000}?\}/);
-  if (!m) return null;
-  try {
-    return JSON.parse(m[0].replace(/\\(.)/g, "$1"));
-  } catch (e) {
-    log("MS bloque cifrado sin parsear: " + ((e && e.message) || e));
+  const bs = String.fromCharCode(92);
+  const pr = (cad) => cad.replace(new RegExp(bs + bs + "(.)", "g"), "$1");
+  const validar = (cad) => {
+    try {
+      const o = JSON.parse(cad);
+      if (o && typeof o.ct === "string" && typeof o.iv === "string" && typeof o.s === "string") return o;
+    } catch (e) { }
     return null;
+  };
+  const mRD = /receivedData\s*=\s*(['"])([\s\S]*?)\1\s*;/.exec(h);
+  if (mRD) {
+    const o = validar(pr(mRD[2]));
+    if (o) return o;
   }
+  const marcaEsc = bs + '"ct' + bs + '"';
+  const marcas = [];
+  let p = h.indexOf(marcaEsc);
+  while (p >= 0 && marcas.length < 8) { marcas.push(p); p = h.indexOf(marcaEsc, p + 1); }
+  p = h.indexOf('"ct"');
+  while (p >= 0 && marcas.length < 16) { marcas.push(p); p = h.indexOf('"ct"', p + 1); }
+  for (const m of marcas) {
+    const fin = h.indexOf("}", m);
+    if (fin < 0) continue;
+    let q = m;
+    for (let n = 0; n < 6; n++) {
+      const a = h.lastIndexOf("{", q);
+      if (a < 0) break;
+      const o = validar(pr(h.slice(a, fin + 1)));
+      if (o) return o;
+      q = a - 1;
+    }
+  }
+  return null;
 }
 
 // La lista descifrada llega como una tira JSON, a veces metida entre
@@ -2143,7 +2183,9 @@ async function msBuscar(q) {
     log("MS búsqueda sin JSON (" + txt.length + "): " + txt.slice(0, 80));
     return [];
   }
-  const sug = (j && (j.suggestions || j.data)) || [];
+  // El sitio devuelve la LISTA PLANA [{value,data}]; otras veces la
+  // trae envuelta ({suggestions:[…]}): se aceptan las dos formas.
+  const sug = Array.isArray(j) ? j : (j && (j.suggestions || j.data)) || [];
   const out = [];
   for (let i = 0; i < sug.length && out.length < 30; i++) {
     const s = sug[i];
@@ -2158,8 +2200,10 @@ async function msBuscar(q) {
 async function msCatalog(cat, page1) {
   const f = fuentePorId("mangasin");
   const orden = (cat && cat.order) === "name" ? "name" : "views";
-  const html = await getHtmlDe(f, "/filterList?page=" + page1 + "&cat=&alpha=&sortBy=" + orden +
-    "&asc=" + (orden === "name" ? "true" : "false") + "&author=&tag=&artist=");
+  // La dirección LIMPIA, sin huecos vacíos: la otra forma le olía a
+  // robot al sitio y contestaba con su revisión (403 en el Registro).
+  const html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
+    "&asc=" + (orden === "name" ? "true" : "false"));
   const items = msCards(html, CAT_POR_PAG);
   return { items: items, mas: items.length > 0 };
 }
@@ -2171,7 +2215,10 @@ function msMeta(html, slug) {
   const h = String(html || "");
   const pick = (re) => { const m = h.match(re); return m ? clean(m[1]) : ""; };
   let title = "";
-  const h1 = h.match(/<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
+  // El título vive en la cabecera del tema del sitio (listmanga-header);
+  // si el sitio cambia de ropa, vale cualquier <h1> de la página.
+  const hTem = h.match(/class="[^"]*listmanga-header[^"]*"[\s\S]{0,200}?<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
+  const h1 = hTem || h.match(/<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
   if (h1) title = clean(h1[1].replace(/<[^>]*>/g, " "));
   if (!title) title = pick(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i) ||
     pick(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/i);
@@ -2204,8 +2251,14 @@ async function msSerie(url) {
   const meta = msMeta(html, slug);
   const caps = await msCaps(html, slug);
   if (!caps) {
-    log("MS sin capítulos para " + url + " (bloque " + (msBlobDe(html) ? "cifrado presente" : "ausente") + ")");
-    return { meta: meta, chapters: [], aviso: "Mangas.in trae su lista de capítulos cifrada y esta vez no pude abrirla. Si tu internet va bien, el sitio cambió su llave: mándame una captura del Registro y la renuevo." };
+    // El aviso DISTINGUE los dos casos (se ve en el Registro):
+    // bloque presente pero indescifrable = el sitio cambió la llave;
+    // bloque ausente = la revisión del sitio tapando la página.
+    const blob = msBlobDe(html);
+    log("MS sin capítulos para " + url + " (bloque " + (blob ? "cifrado presente" : "ausente") + ")");
+    return { meta: meta, chapters: [], aviso: blob
+      ? "Mangas.in trae su lista de capítulos cifrada y esta vez no pude abrirla: el sitio cambió su llave. Mándame una captura del Registro y la renuevo."
+      : "Mangas.in no entregó la página de esta serie con su lista (parece su revisión anti-robot tapándola). Prueba de nuevo en un rato y, si sigue igual, mándame una captura del Registro." };
   }
   caps.sort(function (a, b) {
     const fa = parseFloat(a.num), fb = parseFloat(b.num);
@@ -2515,9 +2568,12 @@ async function homeTree() {
     titPop = "Populares de Mangas.in"; titPopEn = "Popular on Mangas.in";
     titRec = "Novedades de Mangas.in"; titRecEn = "New on Mangas.in";
     try {
-      populares = msCards(await getHtmlDe(f, "/filterList?page=1&cat=&alpha=&sortBy=views&asc=false&author=&tag=&artist="), 20);
+      populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20);
     } catch (e) { log("MS home pop: " + e); }
     try {
+      // Pausa entre las dos preguntas de la portada: el sitio atiende
+      // mejor a quien no se las mete seguidas (así lo hacen sus otras apps).
+      await kino.sleep(900);
       const j = JSON.parse(await getHtmlDe(f, "/lasted?p=1"));
       const datos = (j && j.data) || [];
       recientes = [];
