@@ -37,6 +37,21 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.19 — la sexta prueba real trajo la primera victoria grande: la
+// ventana de rescate abrió el catálogo bloqueado, la revisión se pasó,
+// la galleta llegó («galletas cf_clearance, html 108472 chars») y el
+// catálogo se llenó con 30 series de verdad; las populares salieron de
+// la portada del sitio sin ventanita ninguna. Pero el Registro enseñó
+// dos cosas más: la galleta ganada NO abre las listas en las peticiones
+// del plugin (el sitio la amarra a algo más que al disfraz del
+// navegador — cada portada repetía los seis intentos fallidos), y el
+// catálogo rescatado no se guardaba (cada entrada empezaba de cero).
+// Ahora el catálogo rescatado vive 30 minutos en el almacén, la galleta
+// «inútil» se recuerda una hora (sin reintentos vanos: directo a la
+// caché, a la portada o a la ventanita), y una vez por hora el plugin
+// pregunta al sitio si sus imágenes se sirven a un pedido SIN
+// presentarse — la prueba que separa «el sitio niega la imagen al
+// pintor de Kino» de cualquier otra causa del lector en blanco.
 // v0.4.18 — la quinta prueba enseñó dónde vive el candado y dónde no:
 // la ventanita de v0.4.17 cargó la portada del sitio COMPLETA (portadas
 // y todo, sin pedir revisión) y no dejó galleta ninguna — en la portada
@@ -116,7 +131,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.18";
+const VERSION = "0.4.19";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -383,6 +398,7 @@ async function msVentanaRescate(f, manual, ruta) {
     const g = {};
     const crudas = r && r.cookies;
     if (typeof crudas === "string" && crudas) {
+
       crudas.split(";").forEach(function (p) {
         const i = p.indexOf("=");
         if (i > 0) g[p.slice(0, i).trim()] = p.slice(i + 1).trim();
@@ -412,6 +428,35 @@ async function msVentanaRescate(f, manual, ruta) {
     log("ventana mangasin falló: " + ((e && e.message) || e));
     return null;
   }
+}
+
+// v0.4.19 — La galleta de Mangas.in ganada en la ventanita demostró (sexta
+// prueba real: «galletas cf_clearance» en el Registro y las listas
+// siguieron contestando 403 una y otra vez) NO abrir las puertas en las
+// peticiones del plugin: el sitio la amarra a algo más que al disfraz del
+// navegador. Se anota la hora y durante una hora las listas van directo
+// a sus atajos (caché, portada del sitio o ventanita), sin repetir los
+// seis intentos que ya se saben fallidos.
+function msGalletaInutilFresca() {
+  return Date.now() - (getJson("msGalletaInutil", 0) || 0) < 3600000;
+}
+
+// v0.4.19 — Una pregunta al sitio, una vez por hora: ¿sus imágenes se
+// sirven a un pedido SIN presentarse (sin Referer ni disfraz)? El pintor
+// de pantalla de Kino no puede presentarse ante el sitio y las páginas
+// del lector salen en blanco aunque el plugin las descargue y mida
+// perfectamente. Esta prueba separa «el sitio niega la imagen al pintor»
+// de cualquier otra causa — lo que decida el Registro irá al reporte.
+function msDiagPresentacion(f, etiqueta, url) {
+  if (!url || Date.now() - (getJson("msDiag", 0) || 0) < 3600000) return Promise.resolve();
+  setJson("msDiag", Date.now());
+  return kino.fetch(url, {})
+    .then(function (r) {
+      log("MS " + etiqueta + " al desnudo: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
+    })
+    .catch(function (e) {
+      log("MS " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
+    });
 }
 
 function log(msg) {
@@ -754,6 +799,7 @@ function setJsonCache(clave, val) {
   if (ok) { regCache(clave, txt.length); return true; }
   setJsonTxt("cacheIdx", JSON.stringify(idx));
   return false;
+
 }
 
 // v0.4.6 — limpieza única (flag "limpia046"). Las limpiezas
@@ -1154,6 +1200,7 @@ function mdTitulo(m) {
 }
 
 function mdPortada(m) {
+
   const rel = (m && m.relationships) || [];
   for (let i = 0; i < rel.length; i++) {
     const r = rel[i];
@@ -1553,6 +1600,7 @@ async function mwSerie(url) {
   log("MW capítulos: " + caps2.length);
   return { meta: meta, chapters: caps2 };
 }
+
 
 async function mwImages(chUrl) {
   const slug = String(chUrl).replace(/^[/]leer[/]/, "").replace(/[/]$/, "");
@@ -1954,6 +2002,7 @@ function msStrDeBytes(b) {
 // aritmética GF(2^8), no copiadas a mano; verificado con el vector
 // del propio estándar (C.3) y contra una segunda implementación de
 // control, byte a byte.
+
 function msAesTablas() {
   if (msAesTablas._t) return msAesTablas._t;
   const alog = [];
@@ -2349,8 +2398,44 @@ async function msBuscar(q) {
 async function msCatalog(cat, page1) {
   const f = fuentePorId("mangasin");
   const orden = (cat && cat.order) === "name" ? "name" : "views";
+  // v0.4.19 — el catálogo rescatado en la ventanita se guarda 30 min:
+  // si las listas siguen cerradas, la próxima entrada al catálogo sale
+  // del almacén, sin repetir intentos ni abrir otra ventanita. Y si la
+  // galleta ya demostró no abrir estas puertas, no se martilla con
+  // reintentos vanos: directo a la ventanita.
+
+  const clave = "msCat:" + orden + ":" + page1;
+  const inutil = msGalletaInutilFresca();
+  const cache = getJson(clave, null);
+  if (cache && Array.isArray(cache.items) && cache.items.length &&
+      Date.now() - (cache.ts || 0) < 1800000 && (inutil || !getJson("msCookies", null))) {
+    log("MS catálogo desde caché de rescate: " + cache.items.length);
+    return { items: cache.items, mas: true };
+  }
   let html = "";
-  try {
+  if (inutil) {
+    // La galleta ganada no sirve (probado en vivo): la página sale de
+    // la ventanita y punto — los seis intentos de siempre solo gastan
+    // doce segundos de la persona.
+    const res = await msVentanaRescate(f, true, "/manga-list?page=" + page1);
+    if (res && res.html) {
+      html = res.html;
+      log("MS catálogo desde la ventana de rescate");
+    } else if (res && res.galleta) {
+      try {
+        html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
+          "&asc=" + (orden === "name" ? "true" : "false"));
+      } catch (e3) {
+        log("MS catálogo tras revisión: " + ((e3 && e3.message) || e3));
+        setJson("msGalletaInutil", Date.now());
+        throw e3;
+      }
+    } else {
+      throw kino.error("network", "HTTP 403", {
+        userMessage: "La ventanita no entregó la página del catálogo. Vuelve a entrar al catálogo en un rato.",
+      });
+    }
+  } else try {
     html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
       "&asc=" + (orden === "name" ? "true" : "false"));
   } catch (e) {
@@ -2363,6 +2448,9 @@ async function msCatalog(cat, page1) {
       // el HTML que Kino entrega de la página cargada, y si el sitio
       // pidió revisión allí, la galleta para reintentar.
       log("MS catálogo /manga-list también bloqueado (" + ((e2 && e2.message) || e2) + ")");
+      // v0.4.19 — con galleta en la mano y las puertas aún cerradas,
+      // queda anotado: esta galleta no abre las listas.
+      if (getJson("msCookies", null)) setJson("msGalletaInutil", Date.now());
       const res = await msVentanaRescate(f, true, "/manga-list?page=" + page1);
       if (res && res.html) {
         html = res.html;
@@ -2373,12 +2461,16 @@ async function msCatalog(cat, page1) {
             "&asc=" + (orden === "name" ? "true" : "false"));
         } catch (e3) {
           log("MS catálogo tras revisión: " + ((e3 && e3.message) || e3));
+          setJson("msGalletaInutil", Date.now());
           throw e3;
         }
       } else throw e2;
     }
   }
   const items = msCards(html, CAT_POR_PAG);
+  // v0.4.19 — lo rescatado se guarda: 30 minutos de catálogo sin
+  // ventanita y sin intentos.
+  if (items.length) setJsonCache(clave, { ts: Date.now(), items: items });
   return { items: items, mas: items.length > 0 };
 }
 
@@ -2712,6 +2804,7 @@ async function medirImagenes(images, presupuesto) {
   return listas;
 }
 
+
 // ------------------------------------------------------------- interfaz
 
 function loadingTree(msg) {
@@ -2840,15 +2933,33 @@ async function homeTree() {
     // novedades (el servicio «lasted» que alimenta la propia web).
     titPop = "Populares de Mangas.in"; titPopEn = "Popular on Mangas.in";
     titRec = "Novedades de Mangas.in"; titRecEn = "New on Mangas.in";
-    // v0.4.18 — si las listas están cerradas y hay populares de la
-    // portada del sitio guardadas (menos de media hora), se usan sin
-    // repetir los seis intentos bloqueados: no hay que llamar a la
-    // puerta que ya sabemos que no abre.
+    // v0.4.19 — atajos honestos: si hay populares guardadas de la
+    // portada del sitio (menos de media hora) Y la galleta no sirve (o
+    // no hay), se usan sin repetir los seis intentos que ya se saben
+    // fallidos; si la galleta no sirve y no hay nada guardado, directo
+    // a la portada del sitio, que la sexta prueba demostró que SÍ
+    // carga. Aquí nunca se abre ventanita: es una carga de fondo.
     const cachePop = getJson("msPopHome", null);
-    if (!getJson("msCookies", null) && cachePop && cachePop.items && cachePop.items.length &&
-        Date.now() - (cachePop.ts || 0) < 1800000) {
+    const inutil = msGalletaInutilFresca();
+    const cacheFresca = !!(cachePop && Array.isArray(cachePop.items) && cachePop.items.length &&
+      Date.now() - (cachePop.ts || 0) < 1800000);
+    if (cacheFresca && (inutil || !getJson("msCookies", null))) {
       populares = cachePop.items.slice(0, 20);
       log("MS home pop desde caché: " + populares.length);
+    } else if (inutil) {
+      try {
+        populares = msPopularesHome(await getHtmlDe(f, "/"), 20);
+        if (populares.length) setJson("msPopHome", { ts: Date.now(), items: populares });
+      } catch (e3) {
+        log("MS home pop portada también falló: " + ((e3 && e3.message) || e3));
+      }
+      if (!populares.length && cachePop && Array.isArray(cachePop.items) && cachePop.items.length) {
+        populares = cachePop.items.slice(0, 20);
+        log("MS home pop desde caché vieja: " + populares.length);
+      } else if (!populares.length) {
+        msPopBloqueada = true;
+        log("MS home pop portada sin tarjetas: botón de rescate en la portada");
+      }
     } else try {
       populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20);
     } catch (e) {
@@ -2866,6 +2977,9 @@ async function homeTree() {
         // solo la abre cuando la PERSONA toca algo y esta es una
         // carga de fondo; si la portada tampoco da tarjetas, el botón
         // de rescate queda plantado en la portada de Kino.
+        // v0.4.19 — con galleta en la mano y las puertas aún cerradas,
+        // queda anotado: esta galleta no abre las listas.
+        if (getJson("msCookies", null)) setJson("msGalletaInutil", Date.now());
         try {
           populares = msPopularesHome(await getHtmlDe(f, "/"), 20);
           if (populares.length) setJson("msPopHome", { ts: Date.now(), items: populares });
@@ -3091,6 +3205,7 @@ function detailTree(state) {
           ],
         },
       ].filter(Boolean) },
+
     ],
   };
   // Lista única estilo Yuri Online: un ListView con head + contador + un
@@ -3491,6 +3606,7 @@ async function cargarCatalogo(cat, page, conRuta) {
   if (f.id === "mangadex") {
     const r2 = await mdCatalog(cat, page1);
     nuevos = r2.items; totalTxt = r2.totalTxt; mas = r2.mas;
+
   } else if (f.id === "inmanga") {
     const r2 = await imCatalog(page1);
     nuevos = r2.items; mas = r2.mas;
@@ -3625,20 +3741,27 @@ export async function screenEvent(ev) {
       const r = await msVentanaRescate(fMs, true, "/manga-list?page=1");
       if (r) {
         let pop = r.html ? msCards(r.html, 20) : [];
+        let inutilAhora = false;
         if (!pop.length && r.galleta) {
           try { pop = msCards(await getHtmlDe(fMs, "/filterList?page=1&sortBy=views&asc=false"), 20); }
           catch (e4) {
             try { pop = msCards(await getHtmlDe(fMs, "/manga-list?page=1"), 20); }
             catch (e5) { log("MS revisión: listas aún bloqueadas: " + ((e5 && e5.message) || e5)); }
           }
+          // v0.4.19 — la revisión se pasó, la galleta llegó, pero las
+          // listas siguen cerradas para el plugin: queda anotado para
+          // no repetir el intento en cada portada.
+          if (!pop.length) { setJson("msGalletaInutil", Date.now()); inutilAhora = true; }
         }
         if (pop.length) setJson("msPopHome", { ts: Date.now(), items: pop });
         return { state: { detail: null, reader: null, results: null, resultsQ: null },
           toast: pop.length
             ? "✓ Mangas.in desbloqueado: " + pop.length + " populares."
-            : (r.galleta
-              ? "✓ Revisión superada: Mangas.in desbloqueado."
-              : "La página cargó pero sin series: manda el Registro.") };
+            : (inutilAhora
+              ? "La revisión pasó, pero su galleta no abre las listas del sitio: las series saldrán de la portada y del catálogo en ventanita."
+              : (r.galleta
+                ? "✓ Revisión superada: Mangas.in desbloqueado."
+                : "La página cargó pero sin series: manda el Registro.")) };
       }
       return { toast: "La ventanita no entregó la página: vuelve a tocar el botón en un rato." };
     }
@@ -3884,6 +4007,7 @@ export async function screenEvent(ev) {
       if (!Array.isArray(full) || !full.length) return { toast: "No hay más capítulos de esta serie." };
       const cs = d.capStart || 0;
       let start = 0;
+
       if (name === "capsPrev") {
         if (cs <= 0) return null;
         start = Math.max(0, cs - VENTANA_CAPS);
@@ -4284,6 +4408,7 @@ function vinCard(it, i) {
     children: [img].concat(twoLines(it.title).map((ln) => (
       { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 }))),
   };
+
 }
 
 function vincularTree() {
@@ -4570,6 +4695,14 @@ async function abrirCapitulo(d, idx, conRuta) {
   await medirImagenes(images, 9000);
   const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
   log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+  // v0.4.19 — una vez por hora, el diagnóstico que separa las causas del
+  // lector en blanco: ¿el sitio de Mangas.in sirve sus imágenes a un
+  // pedido SIN presentarse (como el pintor de pantalla de Kino)? Lo que
+  // diga el Registro de ESTA prueba es la evidencia para el reporte.
+  if (fSer.id === "mangasin") {
+    msDiagPresentacion(fSer, "imagen del capítulo", images[0] && images[0].url);
+    msDiagPresentacion(fSer, "portada", (d.meta && d.meta.poster) || msCover(msSlugDe(d.url)));
+  }
   // Historial: el último capítulo abierto de la serie (para
   // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
   const h = hist();
@@ -4676,6 +4809,8 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
+
 
 
 
