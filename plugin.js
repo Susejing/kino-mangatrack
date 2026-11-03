@@ -37,6 +37,18 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.20 — la séptima prueba dejó el diagnóstico cerrado: las páginas
+// de Mangas.in bajan todas cuando quien las pide se presenta (26/26,
+// 38/38, 57/57 medidas) y el sitio las NIEGA al pedido sin
+// presentación («HTTP 403 la niega»); el pintor de imágenes de Kino
+// no puede presentarse → lector en blanco sin remedio desde el
+// plugin (la solución de verdad es de Kino y ya está pedida en el
+// repositorio oficial). Mientras eso llega, «leer en ventanita»: el
+// lector de Mangas.in muestra el capítulo en la ventanita de
+// navegador del propio sitio (el navegador SÍ se presenta y las
+// imágenes se ven). El botón vive en la barra del lector y en la
+// nota honesta de arriba; abre el capítulo ya cargado y espera
+// hasta que la persona cierre (10 minutos por ventana).
 // v0.4.19 — la sexta prueba real trajo la primera victoria grande: la
 // ventana de rescate abrió el catálogo bloqueado, la revisión se pasó,
 // la galleta llegó («galletas cf_clearance, html 108472 chars») y el
@@ -131,7 +143,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.19";
+const VERSION = "0.4.20";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -430,6 +442,33 @@ async function msVentanaRescate(f, manual, ruta) {
   }
 }
 
+// v0.4.20 — «Leer en ventanita»: el diagnóstico de la séptima prueba
+// cerró el caso — el sitio de Mangas.in niega sus imágenes a todo
+// pedido sin presentación, y el pintor de imágenes de Kino no puede
+// presentarse (la solución de verdad le toca a Kino; ya está pedida
+// en su repositorio oficial). Mientras llega, el capítulo se puede
+// leer en la ventanita de navegador: el navegador del propio sitio
+// SÍ se presenta y las imágenes se ven. Abre la dirección real del
+// capítulo (quitando el prefijo /ms interno) y espera a que la
+// persona termine y cierre; 10 minutos por ventana.
+async function msVentanaLeer(ch, f) {
+  if (!kino.visualBrowser || !kino.visualBrowser.available) return { st: "sin-ventanita" };
+  const urlMs = MS_BASE + msPath(ch.url);
+  try {
+    const r = await kino.visualBrowser.open({
+      url: urlMs,
+      title: f.nombre + " · cap. " + ch.num,
+      timeoutMs: 600000,
+    });
+    const st = (r && r.status) || "sin-respuesta";
+    log("ventana leer mangasin: " + st);
+    return { st: st };
+  } catch (e) {
+    log("ventana leer mangasin falló: " + ((e && e.message) || e));
+    return { st: "error" };
+  }
+}
+
 // v0.4.19 — La galleta de Mangas.in ganada en la ventanita demostró (sexta
 // prueba real: «galletas cf_clearance» en el Registro y las listas
 // siguieron contestando 403 una y otra vez) NO abrir las puertas en las
@@ -458,6 +497,7 @@ function msDiagPresentacion(f, etiqueta, url) {
       log("MS " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
     });
 }
+
 
 function log(msg) {
   try { kino.log("[MangaTrack] " + msg); } catch (e) {}
@@ -959,6 +999,7 @@ function syncPullFavs() {
   if (!Array.isArray(sf)) return;
   const local = favs();
   const have = new Set(local.map((f) => f.url));
+
   let changed = false;
   for (const f of sf.slice(0, 200)) {
     if (!favValido(f) || have.has(f.url)) continue;
@@ -1459,6 +1500,7 @@ async function imSerie(url) {
       caps.push({ url: u, num: seg[3] || "" });
     }
     log("IM caps por HTML: " + caps.length);
+
   }
   const vnum = {};
   const caps2 = caps.filter(function (x) {
@@ -1959,6 +2001,7 @@ function msMd5(msg) {
 // CryptoJS.AES.decrypt(mensaje, contraseña) que usa el sitio.
 function msEvp(pw, salt) {
   const d1 = msMd5(pw.concat(salt));
+
   const d2 = msMd5(d1.concat(pw).concat(salt));
   const d3 = msMd5(d2.concat(pw).concat(salt));
   return { key: d1.concat(d2), iv: d3 };
@@ -2459,6 +2502,7 @@ async function msCatalog(cat, page1) {
         try {
           html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
             "&asc=" + (orden === "name" ? "true" : "false"));
+
         } catch (e3) {
           log("MS catálogo tras revisión: " + ((e3 && e3.message) || e3));
           setJson("msGalletaInutil", Date.now());
@@ -2959,6 +3003,7 @@ async function homeTree() {
       } else if (!populares.length) {
         msPopBloqueada = true;
         log("MS home pop portada sin tarjetas: botón de rescate en la portada");
+
       }
     } else try {
       populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20);
@@ -3336,10 +3381,26 @@ function readerTree(state) {
   const medidas = r.images.filter((p) => p && p.w > 0 && p.h > 0).map((p) => p.h / p.w);
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
-  // v0.4.17 — capítulo de Mangas.in sin NINGUNA página entregada (el
-  // sitio negó hasta la medida): en vez de un silencio blanco, el
-  // lector dice qué pasó y qué puede hacer la persona.
-  const avisoMs = (d && d.url && d.url.indexOf("/ms/") === 0 && !medidas.length) ? [
+  // v0.4.20 — el diagnóstico de la séptima prueba cerró el caso: Kino
+  // no puede DIBUJAR las páginas de Mangas.in (el sitio las niega a su
+  // pintor de imágenes porque no sabe presentarse). La nota honesta lo
+  // dice arriba, con el botón «leer en ventanita» al lado (el lector
+  // del propio sitio SÍ las enseña). Si el sitio no entregó ninguna
+  // página ni siquiera para medir, el aviso de v0.4.17 sigue mandando
+  // — ahora con el mismo botón.
+  const esMs = d && d.url && d.url.indexOf("/ms/") === 0;
+  const btnVentanaLeer = { type: "TextButton", key: "btnLeerVentana", labelText: "Leer en ventanita",
+    labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
+  const notaMs = (esMs && medidas.length) ? [
+    { type: "Column", padding: 12, gap: 8, crossAxisAlignment: "center", children: [
+      { type: "Text",
+        text: "Kino no puede dibujar las páginas de Mangas.in: el sitio solo las sirve a quien sabe presentarse, y su pintor de imágenes no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio.",
+        textEn: "Kino cannot draw Mangas.in's pages: the site only serves them to identified requests, and its image painter cannot identify itself. Tap «Read in the small window» and they open on the site's own reader.",
+        style: "caption", color: "muted" },
+      Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaNota" }),
+    ] },
+  ] : [];
+  const avisoMs = (esMs && !medidas.length) ? [
     { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text", text: "El sitio no entregó ninguna de las " + r.images.length + " páginas.",
         textEn: "The site served none of the " + r.images.length + " pages.", style: "h4" },
@@ -3347,6 +3408,7 @@ function readerTree(state) {
         text: "Si las listas de Mangas.in siguen cerradas, ábrelas desde la portada (el botón «Mangas.in tiene sus listas cerradas») y vuelve a abrir el capítulo. Si ya lo hiciste, manda el Registro: dirá el motivo exacto.",
         textEn: "If Mangas.in's lists are still closed, open them from home (the «Mangas.in has its lists closed» button) and reopen the chapter. If already done, send the log: it will say the exact reason.",
         style: "caption", color: "muted" },
+      Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaAviso" }),
     ] },
   ] : [];
   const modo = modoLectorEfectivo(r.images.length);
@@ -3381,7 +3443,7 @@ function readerTree(state) {
     : "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
       + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
       + " · pellizca para acercar";
-  const body = avisoMs.concat([
+  const body = notaMs.concat(avisoMs).concat([
     cuerpo,
     { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
@@ -3392,7 +3454,7 @@ function readerTree(state) {
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-    ].concat(pagesDisponible() ? [
+    ].concat(esMs ? [btnVentanaLeer] : []).concat(pagesDisponible() ? [
       { type: "TextButton", key: "btnModo", labelText: modo === "paginas" ? "Modo tira" : "Modo páginas",
         labelTextEn: modo === "paginas" ? "Strip mode" : "Page mode", onPressed: "modoLector" },
     ] : []).concat([
@@ -3442,6 +3504,7 @@ function searchTree(state) {
       ] },
     ] },
   };
+
 }
 
 // ------------------------------------------------------------- los exports
@@ -3765,6 +3828,29 @@ export async function screenEvent(ev) {
       }
       return { toast: "La ventanita no entregó la página: vuelve a tocar el botón en un rato." };
     }
+    // v0.4.20 — «leer en ventanita»: la PERSONA toca (contexto legal
+    // para la ventana) y el capítulo abierto en el lector se muestra
+    // en la ventanita de navegador, donde el sitio SÍ sirve sus
+    // imágenes. No se recoge nada: solo se lee. Al cerrar, el lector
+    // sigue donde estaba (el capítulo ya quedó registrado en
+    // AniTrack al abrirlo).
+    if (name === "msLeerVentana") {
+      const d = state.detail;
+      const rS = state.reader || {};
+      const idx = parseInt(rS.idx, 10) || 0;
+      const ch = d && Array.isArray(d.chapters) ? d.chapters[idx] : null;
+      if (!ch || !ch.url || String(ch.url).indexOf("/ms/") !== 0)
+        return { toast: "No hay un capítulo de Mangas.in abierto en el lector." };
+      const fMs = fuentePorId("mangasin");
+      const r = await msVentanaLeer(ch, fMs);
+      if (r.st === "sin-ventanita")
+        return { toast: "Este Kino no trae la ventanita de navegador: actualiza la app." };
+      if (r.st === "timeout")
+        return { toast: "La ventanita se cerró sola a los 10 minutos: vuelve a tocar «Leer en ventanita» para seguir donde ibas." };
+      if (r.st === "done" || r.st === "closed")
+        return { toast: "Ventanita cerrada. Toca «Leer en ventanita» si quieres seguir con otro capítulo." };
+      return { toast: "La ventanita no se pudo abrir: inténtalo de nuevo en un rato." };
+    }
     if (name === "alRetry") {
       // v0.4.4 — reintentar la carga de AniList sin cambiar de pantalla.
       try {
@@ -3919,6 +4005,7 @@ export async function screenEvent(ev) {
         toast: results.length
           ? results.length + " resultados en " + f.nombre + ": toca la serie que lees para vincularla."
           : "Sin resultados en " + f.nombre + ": prueba con otro título u otra fuente." };
+
     }
     if (name === "vinPick") {
       const v = getJson("vin", null);
@@ -4419,6 +4506,7 @@ function vincularTree() {
         textEn: "Go back to the AniList section and tap the series to link it.",
         color: "muted" },
     ] };
+
   }
   const fSel = fuentePorId(String(v.fuente || fuenteActiva().id));
   const res = Array.isArray(v.res) ? v.res : [];
@@ -4809,6 +4897,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
