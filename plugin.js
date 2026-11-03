@@ -1,4 +1,4 @@
-// MangaTrack v0.4.4 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.5 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.4";
+const VERSION = "0.4.5";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -345,16 +345,15 @@ function setJson(key, val) {
   try { kino.storage.set(key, JSON.stringify(val)); return true; } catch (e) { log("storage: " + e); return false; }
 }
 
-// ---------------------------------------------------------------- v0.4.4
+// ---------------------------------------------------------------- v0.4.5
 // Guardián del almacén. El almacén del plugin tiene un tope (256 KB) y
 // las cachés grandes (capítulos completos "caps:", catálogo "cat",
-// resultados de AniList "al") lo llenaban SIN aviso: el catálogo dejaba
-// de avanzar páginas y la sección de AniList quedaba "cargando" para
-// siempre. Ahora las cachés desechables se escriben con setJsonCache:
-// si el almacén se llena, se BORRAN las cachés más viejas (siempre se
-// pueden volver a pedir al sitio) y se reintenta una vez. Los datos
-// personales —favoritos, historial, vínculos de AniList— no se tocan.
-const CACHE_TOPE = 160000;   // presupuesto estimado de cachés, en bytes
+// resultados de AniList "al", dimensiones "dims") lo llenaban SIN
+// aviso. Las cachés desechables se escriben con setJsonCache: si no
+// caben, se BORRA la caché registrada más vieja (siempre se pueden
+// volver a pedir al sitio) y se reintenta, una por una, hasta que
+// quepa. Los datos personales —favoritos, historial, vínculos de
+// AniList— no se tocan.
 
 function setJsonTxt(clave, txt) {
   try { kino.storage.set(clave, txt); return true; } catch (e) { log("storage: " + e); return false; }
@@ -372,44 +371,81 @@ function setJsonCache(clave, val) {
   let txt = "";
   try { txt = JSON.stringify(val); } catch (e) { return false; }
   if (setJsonTxt(clave, txt)) { regCache(clave, txt.length); return true; }
-  // Lleno: liberar las cachés más viejas (nunca la clave que se
-  // escribe) — al menos una, aunque el presupuesto no se pase, porque
-  // el almacén puede estar lleno por otras cosas — y reintentar una
-  // vez. Si aun así no cabe, se devuelve false para que el llamador
-  // avise en lugar de fingir que guardó.
+  // v0.4.5 — Lleno: liberar las cachés registradas de una en una (la
+  // más vieja primero, nunca la clave que se escribe) y REINTENTAR la
+  // escritura tras cada una. Así, si el almacén está lleno de cachés
+  // viejas, la escritura termina pasando: cada intento libera espacio
+  // de verdad. Solo si no queda ninguna caché registrada se devuelve
+  // false para que el llamador avise en vez de fingir que guardó.
   const idx = cacheIdx();
-  const entradas = Object.keys(idx)
+  const ks = Object.keys(idx)
     .filter(function (k) { return k !== clave; })
-    .map(function (k) { return { k: k, t: (idx[k] && idx[k].t) || 0, b: (idx[k] && idx[k].b) || 0 }; })
-    .sort(function (a, b) { return a.t - b.t; });
-  let total = txt.length;
-  for (let i = 0; i < entradas.length; i++) total += entradas[i].b;
-  let liberadas = 0;
-  for (let i = 0; i < entradas.length; i++) {
-    if (liberadas >= 1 && total <= CACHE_TOPE) break;
-    if (setJsonTxt(entradas[i].k, "")) { total -= entradas[i].b; delete idx[entradas[i].k]; liberadas++; }
+    .sort(function (a, b) { return ((idx[a] && idx[a].t) || 0) - ((idx[b] && idx[b].t) || 0); });
+  let ok = false;
+  for (let i = 0; i < ks.length && !ok; i++) {
+    if (setJsonTxt(ks[i], "")) delete idx[ks[i]];
+    else { delete idx[ks[i]]; continue; }
+    setJsonTxt("cacheIdx", JSON.stringify(idx));
+    if (setJsonTxt(clave, txt)) ok = true;
   }
+  if (ok) { regCache(clave, txt.length); return true; }
   setJsonTxt("cacheIdx", JSON.stringify(idx));
-  if (setJsonTxt(clave, txt)) { regCache(clave, txt.length); return true; }
   return false;
 }
 
-// v0.4.4 — limpieza única (flag "limpia044"): las series viejas del
-// historial (más de 20 puestos atrás y que no sean favoritas) sueltan
-// su caché de capítulos. Es lo que despeja el almacén lleno heredado
-// de las versiones anteriores. Corre sola una vez, al abrir el plugin.
+// v0.4.5 — limpieza única (flag "limpia045"). La de 0.4.4 liberó las
+// series viejas del historial pero el almacén siguió lleno: el guardián
+// solo puede liberar cachés REGISTRADAS y las heredadas de las
+// versiones anteriores nunca lo estaban. Esta pasada (1) REGISTRA lo
+// que ya hay —cachés de capítulos de todas las series del historial,
+// catálogo, AniList y dimensiones, con su tamaño real— para que el
+// guardián tenga con qué trabajar; (2) suelta las cachés de las series
+// viejas (más de 20 puestos atrás y no favoritas); y (3) suelta las
+// páginas leídas legadas (una clave "pgAt:" por capítulo), que se
+// enumeran desde las listas de capítulos guardadas. Corre sola una
+// vez, al abrir el plugin.
 function limpiaAlmacen() {
-  if (getJson("limpia044", 0)) return;
+  if (getJson("limpia045", 0)) return;
+  const idx = cacheIdx();
+  const ahora = Date.now();
+  let regN = 0;
+  ["cat", "al", "dims"].forEach(function (k) {
+    try {
+      const raw = kino.storage.get(k);
+      if (raw && raw.length > 2 && !idx[k]) { idx[k] = { t: ahora, b: raw.length }; regN++; }
+    } catch (e) {}
+  });
   const h = hist();
   const urls = Object.keys(h).sort(function (a, b) { return (h[b].ts || 0) - (h[a].ts || 0); });
+  const pgViejas = {};
+  for (let i = 0; i < urls.length; i++) {
+    const ck = "caps:" + urls[i];
+    try {
+      const raw = kino.storage.get(ck);
+      if (raw && raw.length > 2) {
+        if (!idx[ck]) { idx[ck] = { t: (h[urls[i]] && h[urls[i]].ts) || 0, b: raw.length }; regN++; }
+        try {
+          const caps = JSON.parse(raw);
+          if (Array.isArray(caps)) for (let j = 0; j < caps.length; j++) {
+            if (caps[j] && caps[j].url) pgViejas["pgAt:" + caps[j].url] = 1;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+  }
+  let pgN = 0;
+  Object.keys(pgViejas).forEach(function (k) { if (setJsonTxt(k, "")) pgN++; });
   const favUrls = favs().map(function (x) { return x.url; });
   let n = 0;
   for (let i = 20; i < urls.length; i++) {
     if (favUrls.indexOf(urls[i]) >= 0) continue;
-    if (setJsonTxt("caps:" + urls[i], "")) n++;
+    const ck = "caps:" + urls[i];
+    if (setJsonTxt(ck, "")) { n++; delete idx[ck]; }
   }
-  setJson("limpia044", 1);
-  if (n) log("limpieza 0.4.4: " + n + " cachés de series viejas liberadas");
+  setJsonTxt("cacheIdx", JSON.stringify(idx));
+  setJson("limpia045", 1);
+  log("limpieza 0.4.5: " + regN + " cachés registradas, " + n +
+    " series viejas liberadas, " + pgN + " páginas legadas sueltas");
 }
 
 // v0.4.4 — la página donde quedó cada capítulo ya no es una clave por
@@ -1434,7 +1470,7 @@ function dimPut(nuevos) {
     if (ks.length > DIMS_TOPE) {
       for (let i = 0; i < ks.length - DIMS_TOPE; i++) delete all[ks[i]];
     }
-    setJson("dims", all);
+    setJsonCache("dims", all);
   } catch (e) { log("dims: " + e); }
 }
 
@@ -2443,7 +2479,7 @@ export async function screenEvent(ev) {
       const tope = Math.max(0, c.items.length - CAT_TOPE);
       const ns = name === "catPrevW" ? Math.max(0, start - CAT_TOPE)
         : Math.min(tope, start + CAT_TOPE);
-      setJson("cat", Object.assign({}, c, { start: ns }));
+      setJsonCache("cat", Object.assign({}, c, { start: ns }));
       return { state: { catTk: Date.now() } };
     }
     if (name === "popBack") return { route: { pop: true } };
