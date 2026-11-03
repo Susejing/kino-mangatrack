@@ -37,6 +37,16 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.16 — la receta de LectorXd (v0.4.9) llega a Mangas.in: cuando el
+// sitio le cierra la puerta a esta conexión en sus páginas de listas
+// (el 403 del catálogo y de las populares en la prueba real), Kino abre
+// su ventanita de navegador para pasar la revisión una vez y las
+// peticiones viajan desde entonces con esa galleta de acceso. Y las
+// imágenes de los capítulos, que el sitio no entregaba ni para medirlas,
+// se piden ahora con cara de navegador (Referer de la casa, disfraz
+// móvil y la galleta si ya se ganó) y, si alguna no baja, el Registro
+// anota el PORQUÉ (permiso, 403, conexión…) y en qué casa vive: así se
+// afina con datos y no con adivinanzas.
 // v0.4.12 — vincular a mano: los títulos de traductor no se acaban
 // nunca (cada serie nueva trae el suyo), así que el toque en una
 // serie de AniList abre una pantalla de vinculación: se elige la
@@ -81,7 +91,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.15";
+const VERSION = "0.4.16";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -318,6 +328,16 @@ async function pasarRevision(f, path) {
 
 async function getHtml(path) {
   return getHtmlDe(fuenteActiva(), path);
+}
+
+// v0.4.16 — La ventanita de Mangas.in, con freno: una ventana por hora
+// como máximo, pase lo que pase dentro (si la revisión se pasa, la
+// galleta ya viaja sola en cada petición; si no, no se martilla a la
+// persona con ventanas).
+async function msPasarRevision(f) {
+  if (Date.now() - (getJson("msVentanaFallo", 0) || 0) < 3600000) return false;
+  setJson("msVentanaFallo", Date.now());
+  return await pasarRevision(f, "/");
 }
 
 function log(msg) {
@@ -2243,7 +2263,22 @@ async function msCatalog(cat, page1) {
       "&asc=" + (orden === "name" ? "true" : "false"));
   } catch (e) {
     log("MS catálogo filterList bloqueado (" + ((e && e.message) || e) + "): probando /manga-list");
-    html = await getHtmlDe(f, "/manga-list?page=" + page1);
+    try {
+      html = await getHtmlDe(f, "/manga-list?page=" + page1);
+    } catch (e2) {
+      // v0.4.16 — también el catálogo público cerrado: la receta de
+      // LectorXd — la ventanita de la persona y su galleta de acceso.
+      log("MS catálogo /manga-list también bloqueado (" + ((e2 && e2.message) || e2) + ")");
+      if (await msPasarRevision(f)) {
+        try {
+          html = await getHtmlDe(f, "/filterList?page=" + page1 + "&sortBy=" + orden +
+            "&asc=" + (orden === "name" ? "true" : "false"));
+        } catch (e3) {
+          log("MS catálogo tras revisión: " + ((e3 && e3.message) || e3));
+          throw e3;
+        }
+      } else throw e2;
+    }
   }
   const items = msCards(html, CAT_POR_PAG);
   return { items: items, mas: items.length > 0 };
@@ -2393,7 +2428,9 @@ function imgsMS(html) {
     seen[u] = 1;
     out.push(u);
   }
-  log("MS lector: " + out.length + " páginas (" + nResp + " resp de " + nImgs + " imgs en la zona)");
+  log("MS lector: " + out.length + " páginas en " +
+    (out.length ? out[0].replace(/^https?:\/\//, "").split("/")[0] : "-") +
+    " (" + nResp + " resp de " + nImgs + " imgs en la zona)");
   return out;
 }
 
@@ -2489,13 +2526,47 @@ function dimPut(nuevos) {
   } catch (e) { log("dims: " + e); }
 }
 
+// v0.4.16 — Las imágenes de Mangas.in (y las viejas de Blogspot) se
+// piden con cara de navegador: el sitio les niega el paso a las
+// peticiones desnudas (Referer de la casa, disfraz de navegador —el
+// mismo que ganó la galleta, si ya se ganó— y la galleta misma). Y si
+// una no baja, el Registro anota el PORQUÉ una sola vez por imagen:
+// permiso, 403, conexión cortada… con eso se afina, no se adivina.
+const msImgFalladas = {};
 async function dimsDeImagen(url) {
+  const u = String(url || "");
   try {
-    const r = await kino.fetch(url, { maxBytes: 16384, timeoutMs: 5000 });
-    if (!r.ok) return null;
+    const ops = { maxBytes: 16384, timeoutMs: 5000 };
+    if (/m440\.in|bp\.blogspot\.com/i.test(u)) {
+      ops.headers = {
+        Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+        "User-Agent": getJson("msUA", "") || UA_MOVIL,
+        Referer: MS_BASE + "/",
+      };
+      const g = getJson("msCookies", null);
+      if (g && typeof g === "object") {
+        const par = [];
+        for (const k in g) if (g[k]) par.push(k + "=" + g[k]);
+        if (par.length) ops.headers.Cookie = par.join("; ");
+      }
+    }
+    const r = await kino.fetch(url, ops);
+    if (!r.ok) {
+      if (/m440\.in|bp\.blogspot\.com/i.test(u) && !msImgFalladas[u]) {
+        msImgFalladas[u] = 1;
+        log("MS imagen respondió HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + u.slice(0, 120));
+      }
+      return null;
+    }
     const d = dimsDeBytes(deB64(r.base64()));
     return d && d.w > 0 && d.h > 0 ? d : null;
-  } catch (e) { return null; }
+  } catch (e) {
+    if (/m440\.in|bp\.blogspot\.com/i.test(u) && !msImgFalladas[u]) {
+      msImgFalladas[u] = 1;
+      log("MS imagen no bajó (" + u.replace(/^https?:\/\//, "").split("/")[0] + "): " + ((e && e.message) || e));
+    }
+    return null;
+  }
 }
 
 // Mide hasta DIMS_BATCH páginas sin dimensiones (el caché primero) y
@@ -2668,7 +2739,18 @@ async function homeTree() {
       // visitas (el 403 de la prueba real): las mismas tarjetas se
       // sirven del catálogo público de siempre (/manga-list).
       log("MS home pop filterList bloqueado (" + ((e && e.message) || e) + "): probando /manga-list");
-      try { populares = msCards(await getHtmlDe(f, "/manga-list?page=1"), 20); } catch (e2) { log("MS home pop: " + e2); }
+      try {
+        populares = msCards(await getHtmlDe(f, "/manga-list?page=1"), 20);
+      } catch (e2) {
+        // v0.4.16 — también el catálogo público cerrado: la receta de
+        // LectorXd — la ventanita de la persona para pasar la revisión
+        // una vez y reintentar ya con su galleta de acceso.
+        log("MS home pop /manga-list también bloqueado (" + ((e2 && e2.message) || e2) + ")");
+        if (await msPasarRevision(f)) {
+          try { populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20); }
+          catch (e3) { log("MS home pop tras revisión: " + ((e3 && e3.message) || e3)); }
+        }
+      }
     }
     try {
       // Pausa entre las dos preguntas de la portada: el sitio atiende
@@ -3803,6 +3885,23 @@ export async function screenEvent(ev) {
         }
       }
     }
+    // v0.4.16 — el 403 del catálogo de Mangas.in recibe la misma medicina
+    // que las series: la ventanita de la persona para pasar la revisión
+    // una vez y reintentar el catálogo ya con su galleta de acceso.
+    if (name === "openCatalog" && e && e.code === "network" && /^HTTP 403/.test(msg403)) {
+      const fAct = fuenteActiva();
+      if (fAct && fAct.id === "mangasin" && await msPasarRevision(fAct)) {
+        try {
+          const r2 = await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
+          if (r2 && r2.state && !r2.toast) r2.toast = "✓ Revisión superada: Mangas.in desbloqueado.";
+          return r2;
+        } catch (e2) {
+          log("catálogo tras revisión: " + ((e2 && e2.message) || e2));
+          const um2 = (e2 && e2.userMessage) || "";
+          return { toast: um2 || "La revisión pasó pero el catálogo no cargó: vuelve a tocarlo." };
+        }
+      }
+    }
     // Si el fallo traía un mensaje para la persona (bloqueo +18, HTTP,
     // conexión rechazada), ese mensaje gana al genérico: antes se
     // perdía aquí y la persona solo veía "Algo falló".
@@ -4397,5 +4496,6 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
