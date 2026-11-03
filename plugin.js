@@ -1,4 +1,16 @@
-// MangaTrack v0.4.12 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.13 — entra Mangas.in (m440.in): otra fuente en español con su
+// propio quiste: la lista de capítulos NO viene en la página, llega
+// CIFRADA (AES, la receta de CryptoJS) y la llave vive en un script
+// del sitio que va cambiando. El plugin descifra la lista dentro de
+// sí mismo (AES a mano, sin depender de nada del entorno), con la
+// llave conocida, la guardada y, si el sitio la cambia, candidatas
+// probadas una a una contra el mensaje cifrado: solo la correcta
+// produce una lista válida, así nunca se inventa un capítulo. El
+// resto es igual que las demás fuentes: catálogo, buscador (JSON
+// propio del sitio), lector (con sus imágenes escondidas en base64
+// destapadas) y la galleta de acceso de la ventanita anti-revisión,
+// con llave propia para esta fuente.
 // v0.4.12 — vincular a mano: los títulos de traductor no se acaban
 // nunca (cada serie nueva trae el suyo), así que el toque en una
 // serie de AniList abre una pantalla de vinculación: se elige la
@@ -43,7 +55,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.12";
+const VERSION = "0.4.13";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -68,6 +80,7 @@ const FUENTES = [
   { id: "mangadex", nombre: "MangaDex", base: "https://api.mangadex.org" },
   { id: "inmanga", nombre: "InManga", base: "https://inmanga.com" },
   { id: "mangaoni", nombre: "MangaOni", base: "https://manga-oni.com" },
+  { id: "mangasin", nombre: "Mangas.in", base: "https://m440.in" },
 ];
 
 function fuentePorId(id) {
@@ -95,6 +108,9 @@ function fuenteDeUrl(url) {
   // MangaOni: sus URL llevan el prefijo /oni para no chocar con las de
   // LectorXd, que también usa /manga/<slug>/.
   if (/^[/]oni[/]/.test(u)) return fuentePorId("mangaoni");
+  // Mangas.in: sus series se guardan con el prefijo /ms para no
+  // chocar con las /manga/<slug>/ de LectorXd y LeerCapitulo.
+  if (/^[/]ms[/]manga[/][a-z0-9-]+(?:[/][a-z0-9-]+)?[/]?$/.test(u)) return fuentePorId("mangasin");
   return null;
 }
 
@@ -110,8 +126,8 @@ async function getHtmlDe(f, path) {
   // Cloudflare (LectorXd y MangaOni) rechaza peticiones sin User-Agent:
   // se envían cabeceras de navegador para que no las confunda con bots
   // (receta verificada en la app de escritorio KageView, que lee ambos).
-  const esNube = f.id === "lectorxd" || f.id === "mangaoni";
-  const hdrs = f.id === "lectorxd"
+  const esNube = f.id === "lectorxd" || f.id === "mangaoni" || f.id === "mangasin";
+  const hdrs = (f.id === "lectorxd" || f.id === "mangasin")
     ? {
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "es-419,es;q=0.9",
@@ -127,21 +143,23 @@ async function getHtmlDe(f, path) {
       }
     : { Accept: "text/html" };
   // MangaOni guarda sus series con el prefijo /oni: al pedir se quita.
-  const ruta = f.id === "mangaoni" ? moPath(path) : path;
+  const ruta = f.id === "mangaoni" ? moPath(path) : f.id === "mangasin" ? msPath(path) : path;
   // v0.4.9 — si la persona ya pasó la revisión del filtro en la
   // ventanita de Kino, las peticiones de LectorXd viajan desde el
   // primer intento con esa galleta de acceso y con el disfraz exacto
   // del navegador que la ganó (Cloudflare amarra la galleta a él, así
   // que con galleta ya no se intercambian disfraces: la invalidaría).
   let hdrs0 = hdrs;
-  if (f.id === "lectorxd") {
-    const g = getJson("lxCookies", null);
+  // v0.4.13 — Mangas.in comparte con LectorXd la receta de la galleta
+  // de acceso, cada fuente con su llave propia del almacén.
+  if (f.id === "lectorxd" || f.id === "mangasin") {
+    const g = getJson(f.id === "mangasin" ? "msCookies" : "lxCookies", null);
     if (g && typeof g === "object") {
       const par = [];
       for (const k in g) if (g[k]) par.push(k + "=" + g[k]);
       if (par.length) {
         hdrs0 = Object.assign({}, hdrs, { Cookie: par.join("; ") });
-        const ua = getJson("lxUA", "");
+        const ua = getJson(f.id === "mangasin" ? "msUA" : "lxUA", "");
         if (ua) hdrs0["User-Agent"] = ua;
       }
     }
@@ -160,7 +178,7 @@ async function getHtmlDe(f, path) {
       ? Object.assign({}, hdrs, { "User-Agent": f.id === "lectorxd" ? UA_ESCRITORIO : UA_MOVIL })
       : hdrs0;
     const base = intento === 3 && esNube
-      ? (f.id === "lectorxd" ? "https://www.lectorxd.com" : "https://www.manga-oni.com")
+      ? (f.id === "lectorxd" ? "https://www.lectorxd.com" : f.id === "mangasin" ? f.base : "https://www.manga-oni.com")
       : f.base;
     const ops = { headers: h };
     if (intento > 1) ops.timeoutMs = 7000;
@@ -262,8 +280,9 @@ async function pasarRevision(f, path) {
     const nombres = Object.keys(g);
     log("ventana " + f.id + ": " + st + ", galletas " + (nombres.length ? nombres.join(",") : "ninguna"));
     if (st !== "done" || !nombres.length) return false;
-    if (!setJson("lxCookies", g)) return false;
-    if (r.userAgent) setJson("lxUA", r.userAgent);
+    const ck = f.id === "mangasin" ? "msCookies" : "lxCookies";
+    if (!setJson(ck, g)) return false;
+    if (r.userAgent) setJson(f.id === "mangasin" ? "msUA" : "lxUA", r.userAgent);
     return true;
   } catch (e) {
     log("ventana " + f.id + " falló: " + ((e && e.message) || e));
@@ -465,6 +484,7 @@ function cardsLXCat(html, max) {
 }
 
 function cardsDe(f, html, max) {
+  if (f.id === "mangasin") return msCards(html, max);
   if (f.id !== "lectorxd") return homeCards(html, max);
   const t = cardsLX(html, max);
   return t.length ? t : cardsLXCat(html, max);
@@ -977,6 +997,7 @@ function imgsLX(html) {
 function readerImagesDe(f, html) {
   if (f.id === "lectorxd") return imgsLX(html);
   if (f.id === "mangaoni") return moImages(html);
+  if (f.id === "mangasin") return imgsMS(html);
   return readerImages(html);
 }
 
@@ -1663,6 +1684,572 @@ function moImages(html) {
   return out;
 }
 
+// --------------------------------------------- Mangas.in (6ª fuente)
+// Mangas.in (dominio real: m440.in) usa el tema WordPress «Lector de
+// Manga Online», el mismo que leen las apps libres de Android y de
+// escritorio. Tiene dos rarezas que esas apps ya resolvieron y aquí
+// se replican igual:
+// 1) La lista de capítulos NO viene en la página: llega CIFRADA
+//    (AES-256-CBC, la receta de CryptoJS con sal OpenSSL: clave e
+//    vector derivados por MD5 de una contraseña y la sal del propio
+//    mensaje). La contraseña vive en un script del sitio que va
+//    cambiando; se prueban la guardada, la conocida y las candidatas
+//    del propio script, una a una contra el mensaje cifrado: solo la
+//    correcta produce una lista de capítulos válida, así nunca se
+//    inventa un capítulo falso.
+// 2) Algunas imágenes del lector viajan con la dirección escondida
+//    en base64 («https://<base64>»): se destapan igual que hacen
+//    esas apps.
+const MS_BASE = "https://m440.in";
+const MAX_CAPS_MS = 300;
+// Contraseña de las listas cifradas, destapada y publicada por los
+// lectores libres que ya la sacaron (Komikku). Si el sitio la
+// cambia, la búsqueda en su script la renueva y la nueva queda
+// guardada para la próxima.
+const MS_CLAVE_FIJA = "X^Ib1O*HLVh%3W2t";
+
+function msPath(url) {
+  let u = String(url || "");
+  if (u.indexOf("/ms") === 0) u = u.slice(3);
+  return u || "/";
+}
+
+// Portadas relativas del catálogo resueltas contra el dominio propio.
+function msAbs(u) {
+  if (!u) return "";
+  if (u.indexOf("//") === 0) return "https:" + u;
+  if (u.indexOf("/") === 0) return MS_BASE + u;
+  if (/^https?:/i.test(u)) return u;
+  return MS_BASE + "/" + u;
+}
+
+// La portada de una serie de Mangas.in es adivinable: el tema del
+// sitio la guarda siempre en /uploads/manga/<slug>/cover/.
+function msCover(slug) {
+  return MS_BASE + "/uploads/manga/" + String(slug || "") + "/cover/cover_250x350.jpg";
+}
+
+function msSlugDe(url) {
+  const seg = String(url || "").split("/").filter(Boolean);
+  return seg.length >= 3 && seg[0] === "ms" && seg[1] === "manga" ? seg[2] : "";
+}
+
+// ------------------------------------------------ cifrado a mano
+// MD5, AES-256-CBC y la derivación OpenSSL EVP en JS puro: la lista
+// de capítulos se descifra dentro del plugin, sin pedirle nada al
+// entorno (verificado contra los vectores del propio estándar).
+
+// MD5 de una tira de bytes → 16 bytes (receta RFC 1321).
+function msMd5(msg) {
+  const S = [7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21];
+  const K = [];
+  for (let i = 0; i < 64; i++) K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 4294967296);
+  const data = msg.slice();
+  const bl = msg.length * 8;
+  data.push(128);
+  while (data.length % 64 !== 56) data.push(0);
+  data.push(bl & 255, (bl >>> 8) & 255, (bl >>> 16) & 255, (bl >>> 24) & 255, 0, 0, 0, 0);
+  let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476;
+  for (let ch = 0; ch < data.length; ch += 64) {
+    const M = [];
+    for (let j = 0; j < 16; j++) {
+      const o = ch + j * 4;
+      M[j] = (data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (data[o + 3] << 24)) >>> 0;
+    }
+    let A = a0 >>> 0, B = b0 >>> 0, C = c0 >>> 0, D = d0 >>> 0;
+    for (let i = 0; i < 64; i++) {
+      let F = 0, g = 0;
+      if (i < 16) { F = (B & C) | (~B & D); g = i; }
+      else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) & 15; }
+      else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) & 15; }
+      else { F = C ^ (B | ~D); g = (7 * i) & 15; }
+      const tmp = D;
+      D = C;
+      C = B;
+      const s3 = ((((((A >>> 0) + (F >>> 0)) >>> 0) + K[i]) >>> 0) + M[g]) >>> 0;
+      B = (B + ((s3 << S[i]) | (s3 >>> (32 - S[i])))) >>> 0;
+      A = tmp;
+    }
+    a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0;
+  }
+  const out = [];
+  const ns = [a0, b0, c0, d0];
+  for (let i = 0; i < 4; i++) {
+    out.push(ns[i] & 255, (ns[i] >>> 8) & 255, (ns[i] >>> 16) & 255, (ns[i] >>> 24) & 255);
+  }
+  return out;
+}
+
+// Derivación OpenSSL (EVP_BytesToKey con MD5, 1 vuelta): la clave y
+// el vector salen de la contraseña + la sal. Es la receta interna de
+// CryptoJS.AES.decrypt(mensaje, contraseña) que usa el sitio.
+function msEvp(pw, salt) {
+  const d1 = msMd5(pw.concat(salt));
+  const d2 = msMd5(d1.concat(pw).concat(salt));
+  const d3 = msMd5(d2.concat(pw).concat(salt));
+  return { key: d1.concat(d2), iv: d3 };
+}
+
+function msHexBytes(h) {
+  const s = String(h || "");
+  const out = [];
+  for (let i = 0; i + 1 < s.length; i += 2) {
+    const v = parseInt(s.slice(i, i + 2), 16);
+    if (isFinite(v)) out.push(v & 255);
+  }
+  return out;
+}
+
+function msBytesDeStr(s) {
+  const out = [];
+  const t = String(s || "");
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c < 128) out.push(c);
+    else if (c < 2048) out.push(192 | (c >> 6), 128 | (c & 63));
+    else out.push(224 | (c >> 12), 128 | ((c >> 6) & 63), 128 | (c & 63));
+  }
+  return out;
+}
+
+function msStrDeBytes(b) {
+  let out = "";
+  let i = 0;
+  while (i < b.length) {
+    const c = b[i];
+    if (c < 128) { out += String.fromCharCode(c); i += 1; }
+    else if ((c & 224) === 192) { out += String.fromCharCode(((c & 31) << 6) | (b[i + 1] & 63)); i += 2; }
+    else { out += String.fromCharCode(((c & 15) << 12) | ((b[i + 1] & 63) << 6) | (b[i + 2] & 63)); i += 3; }
+  }
+  return out;
+}
+
+// AES: tablas del estándar (FIPS-197) generadas al vuelo con la
+// aritmética GF(2^8), no copiadas a mano; verificado con el vector
+// del propio estándar (C.3) y contra una segunda implementación de
+// control, byte a byte.
+function msAesTablas() {
+  if (msAesTablas._t) return msAesTablas._t;
+  const alog = [];
+  const log = [];
+  for (let i = 0; i < 256; i++) log[i] = 0;
+  let v = 1;
+  for (let i = 0; i < 255; i++) {
+    alog[i] = v;
+    log[v] = i;
+    const xt = ((v << 1) ^ ((v & 128) ? 0x11b : 0)) & 255;
+    v = (v ^ xt) & 255;
+  }
+  const mul = function (a, b) {
+    if (a === 0 || b === 0) return 0;
+    return alog[(log[a] + log[b]) % 255];
+  };
+  const inv = function (a) {
+    if (a === 0) return 0;
+    return alog[(255 - log[a]) % 255];
+  };
+  const S = [];
+  const iS = [];
+  for (let a = 0; a < 256; a++) {
+    const b = inv(a);
+    let s = b ^ (((b << 1) | (b >>> 7)) & 255) ^ (((b << 2) | (b >>> 6)) & 255) ^
+      (((b << 3) | (b >>> 5)) & 255) ^ (((b << 4) | (b >>> 4)) & 255);
+    s = (s ^ 0x63) & 255;
+    S[a] = s;
+    iS[s] = a;
+  }
+  const rcon = [0, 1, 2, 4, 8, 16, 32, 64, 128, 27, 54];
+  msAesTablas._t = { S: S, iS: iS, mul: mul, rcon: rcon };
+  return msAesTablas._t;
+}
+
+// Expansión de clave AES-256 (14 rondas, 60 palabras).
+function msAesExpand(key) {
+  const T = msAesTablas();
+  const S = T.S;
+  const w = [];
+  for (let i = 0; i < 8; i++) w.push([key[i * 4], key[i * 4 + 1], key[i * 4 + 2], key[i * 4 + 3]]);
+  for (let i = 8; i < 60; i++) {
+    let t = w[i - 1].slice();
+    if (i % 8 === 0) {
+      t = [t[1], t[2], t[3], t[0]];
+      t = [S[t[0]], S[t[1]], S[t[2]], S[t[3]]];
+      t[0] = (t[0] ^ T.rcon[i / 8]) & 255;
+    } else if (i % 8 === 4) {
+      t = [S[t[0]], S[t[1]], S[t[2]], S[t[3]]];
+    }
+    w.push([w[i - 8][0] ^ t[0], w[i - 8][1] ^ t[1], w[i - 8][2] ^ t[2], w[i - 8][3] ^ t[3]]);
+  }
+  return w;
+}
+
+// Descifrado de UN bloque de 16 bytes (ronda inversa del estándar).
+function msAesDecBloque(w, bl) {
+  const T = msAesTablas();
+  const iS = T.iS;
+  const mul = T.mul;
+  const s = bl.slice();
+  const ark = function (r) {
+    for (let c = 0; c < 4; c++) for (let i = 0; i < 4; i++) s[c * 4 + i] ^= w[r * 4 + c][i];
+  };
+  const invShift = function () {
+    const o = s.slice();
+    for (let i = 1; i < 4; i++)
+      for (let c = 0; c < 4; c++)
+        s[c * 4 + i] = o[((c + 4 - i) % 4) * 4 + i];
+  };
+  const invMix = function () {
+    for (let c = 0; c < 4; c++) {
+      const p = c * 4;
+      const a0 = s[p], a1 = s[p + 1], a2 = s[p + 2], a3 = s[p + 3];
+      s[p] = mul(14, a0) ^ mul(11, a1) ^ mul(13, a2) ^ mul(9, a3);
+      s[p + 1] = mul(9, a0) ^ mul(14, a1) ^ mul(11, a2) ^ mul(13, a3);
+      s[p + 2] = mul(13, a0) ^ mul(9, a1) ^ mul(14, a2) ^ mul(11, a3);
+      s[p + 3] = mul(11, a0) ^ mul(13, a1) ^ mul(9, a2) ^ mul(14, a3);
+    }
+  };
+  ark(14);
+  for (let r = 13; r >= 1; r--) {
+    invShift();
+    for (let i = 0; i < 16; i++) s[i] = iS[s[i]];
+    ark(r);
+    invMix();
+  }
+  invShift();
+  for (let i = 0; i < 16; i++) s[i] = iS[s[i]];
+  ark(0);
+  return s;
+}
+
+// AES-256-CBC: cada bloque descifrado se mezcla con el anterior.
+function msAesCbcDec(key, iv, datos) {
+  const w = msAesExpand(key);
+  const out = [];
+  let prev = iv;
+  for (let i = 0; i + 16 <= datos.length; i += 16) {
+    const bl = datos.slice(i, i + 16);
+    const dec = msAesDecBloque(w, bl);
+    for (let j = 0; j < 16; j++) out.push(dec[j] ^ prev[j]);
+    prev = bl;
+  }
+  return out;
+}
+
+// Quitar el relleno PKCS7; si no es válido, la clave era errada.
+function msQuitaRelleno(b) {
+  if (!b.length) return null;
+  const n = b[b.length - 1];
+  if (n < 1 || n > 16 || n > b.length) return null;
+  for (let i = b.length - n; i < b.length; i++) if (b[i] !== n) return null;
+  return b.slice(0, b.length - n);
+}
+
+// El bloque cifrado viaja dentro de un script de la página con sus
+// comillas ESCAPADAS ({\"ct\":…,\"iv\":…,\"s\":…}). Se coge tal cual
+// y se le quita la barra a cada carácter escapado. Por si el sitio
+// algún día lo manda sin escapes, también se prueba la forma plana.
+function msBlobDe(html) {
+  const h = String(html || "");
+  const reEsc = /\{(?=[\s\S]{0,600}?\\"ct\\")(?=[\s\S]{0,600}?\\"iv\\")(?=[\s\S]{0,600}?\\"s\\")[\s\S]{0,40000}?\}/;
+  const m = h.match(reEsc) || h.match(/\{(?=[\s\S]{0,600}?"ct")(?=[\s\S]{0,600}?"iv")(?=[\s\S]{0,600}?"s")[\s\S]{0,40000}?\}/);
+  if (!m) return null;
+  try {
+    return JSON.parse(m[0].replace(/\\(.)/g, "$1"));
+  } catch (e) {
+    log("MS bloque cifrado sin parsear: " + ((e && e.message) || e));
+    return null;
+  }
+}
+
+// La lista descifrada llega como una tira JSON, a veces metida entre
+// comillas y con \uXXXX: se destapa y se parte en capítulos con su
+// número real (1, 271.6…).
+function msCapsDeJson(txt, slug) {
+  let t = String(txt || "");
+  try {
+    t = t.replace(/\\u([0-9a-fA-F]{4})/g, function (mm, hh) {
+      return String.fromCharCode(parseInt(hh, 16));
+    });
+  } catch (e) { }
+  t = t.replace(/^"|"$/g, "");
+  t = t.replace(/\\(.)/g, "$1");
+  const ini = t.indexOf("[");
+  const fin = t.lastIndexOf("]");
+  if (ini < 0 || fin <= ini) return null;
+  let arr = null;
+  try { arr = JSON.parse(t.slice(ini, fin + 1)); } catch (e) { return null; }
+  if (!Array.isArray(arr) || !arr.length) return null;
+  const caps = [];
+  const seen = {};
+  const pre = "/ms/manga/" + String(slug || "") + "/";
+  for (let i = 0; i < arr.length && caps.length < TOPE_CAPS_SERIE; i++) {
+    const c = arr[i];
+    if (!c || typeof c !== "object" || !c.slug) continue;
+    const num = String((c.number === undefined || c.number === null) ? "" : c.number).trim();
+    const url = pre + String(c.slug) + "/";
+    if (seen[url]) continue;
+    seen[url] = 1;
+    caps.push({ url: url, num: num || String(caps.length + 1) });
+  }
+  return caps.length ? caps : null;
+}
+
+// Un intento completo: derivar clave/vector y descifrar. Solo la
+// contraseña correcta produce una lista válida; cualquier otra da
+// puro ruido (el relleno no cuadra o el JSON no sale).
+function msDesifrar(blob, clave, slug) {
+  try {
+    const ct = deB64(String((blob && blob.ct) || ""));
+    const salt = msHexBytes(blob && blob.s);
+    if (ct.length < 32 || ct.length % 16 !== 0 || salt.length !== 8) return null;
+    const pw = msBytesDeStr(clave);
+    const evp = msEvp(pw, salt);
+    const ivs = [evp.iv];
+    const ivBlob = msHexBytes(blob && blob.iv);
+    if (ivBlob.length === 16) ivs.push(ivBlob);
+    for (let k = 0; k < ivs.length; k++) {
+      const dec = msQuitaRelleno(msAesCbcDec(evp.key, ivs[k], ct));
+      if (!dec) continue;
+      const caps = msCapsDeJson(msStrDeBytes(dec), slug);
+      if (caps) return caps;
+    }
+  } catch (e) {
+    log("MS descifrado: " + ((e && e.message) || e));
+  }
+  return null;
+}
+
+// Capítulos de una serie: el bloque cifrado de la página + la
+// contraseña (la guardada → la conocida → candidatas del script del
+// sitio, probadas una a una). Si ninguna abre la lista, se devuelve
+// null y la persona recibe el aviso honesto.
+async function msCaps(html, slug) {
+  const blob = msBlobDe(html);
+  if (!blob) return null;
+  const claves = [];
+  const guardada = getJson("msKey", "");
+  if (guardada) claves.push(guardada);
+  if (MS_CLAVE_FIJA) claves.push(MS_CLAVE_FIJA);
+  for (let i = 0; i < claves.length; i++) {
+    const caps = msDesifrar(blob, claves[i], slug);
+    if (caps) return caps;
+  }
+  // El sitio cambió la contraseña: se buscan candidatas (literales
+  // entre comillas) en su propio script y se prueban contra el
+  // bloque cifrado. Si ya se acaba de fallar, no se martilla el
+  // script en cada apertura (un toque por hora).
+  const hacePoco = Date.now() - (getJson("msKeyFallo", 0) || 0) < 3600000;
+  if (!hacePoco) {
+    const base = claves.length;
+    try {
+      const js = await getHtmlDe(fuentePorId("mangasin"), "/js/ads2.js");
+      const vistos = {};
+      const re = /(['"])([^'"\r\n]{4,80})\1/g;
+      let m;
+      while ((m = re.exec(js)) !== null) {
+        if (!vistos[m[2]]) { vistos[m[2]] = 1; claves.push(m[2]); }
+        if (claves.length > 300) break;
+      }
+      log("MS candidatas del script: " + (claves.length - base));
+    } catch (e) {
+      log("MS script del sitio inalcanzable: " + ((e && e.message) || e));
+    }
+    for (let i = base; i < claves.length; i++) {
+      const caps = msDesifrar(blob, claves[i], slug);
+      if (caps) {
+        setJson("msKey", claves[i]);
+        log("MS contraseña renovada y guardada");
+        return caps;
+      }
+    }
+    setJson("msKeyFallo", Date.now());
+  }
+  return null;
+}
+
+// Tarjetas del catálogo de Mangas.in (/filterList): cada serie es un
+// enlace a /manga/<slug> con la portada en un <img> (a veces dentro
+// del enlace, a veces justo antes). El título puede venir como texto
+// del enlace o en el alt de la imagen; la portada que falte se
+// adivina por el slug (la guarda el propio tema del sitio).
+function msCards(html, max) {
+  const out = [];
+  const seen = {};
+  const re = /<a\b[^>]*href="([^"]*[/]manga[/][a-z0-9-]+(?:[/])?)"[^>]*>([\s\S]{0,800}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null && out.length < max) {
+    const mm = m[1].match(/[/]manga[/]([a-z0-9-]+)/i);
+    if (!mm) continue;
+    const url = "/ms/manga/" + mm[1] + "/";
+    const inner = m[2];
+    let title = clean(inner.replace(/<[^>]*>/g, " "));
+    if (title.length > 120) title = "";
+    if (/^(manga|manhwa|manhua|leer)$/i.test(title)) title = "";
+    let poster = "";
+    const im = inner.match(/<img\b[^>]*>/i);
+    const tag = im ? im[0] : "";
+    if (tag) {
+      const p = tag.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
+      if (p) poster = msAbs(p[1]);
+      if (!title) {
+        const a = tag.match(/\balt="([^"]*)"/i);
+        if (a) title = clean(a[1]).replace(/^portada de\s+/i, "");
+      }
+    }
+    if (!poster) {
+      const antes = html.slice(Math.max(0, m.index - 400), m.index);
+      const ims = antes.match(/<img\b[^>]*>/gi) || [];
+      const ult = ims.length ? ims[ims.length - 1] : "";
+      if (ult) {
+        // La portada de OTRA tarjeta no se roba: si entre esa imagen
+        // y este enlace se cuela otro enlace, la imagen era de la
+        // tarjeta anterior (y la de esta, si el sitio no la trajo,
+        // la adivina el slug, que el propio tema guarda siempre igual).
+        const medio = antes.slice(antes.lastIndexOf(ult) + ult.length);
+        const p2 = ult.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
+        if (p2 && !/<a\b/i.test(medio) && !/no-image|placeholder|logo|banner|avatar|icon/i.test(p2[1])) poster = msAbs(p2[1]);
+      }
+    }
+    if (poster && /no-image|placeholder|logo|banner|avatar|icon/i.test(poster)) poster = "";
+    const c = seen[url];
+    if (!c) {
+      seen[url] = { url: url, title: title || mm[1], poster: poster, slug: mm[1] };
+      out.push(seen[url]);
+    } else {
+      if (title && (!c.title || c.title === c.slug)) c.title = title;
+      if (poster && !c.poster) c.poster = poster;
+    }
+  }
+  for (let i = 0; i < out.length; i++) {
+    if (!out[i].poster) out[i].poster = msCover(out[i].slug);
+    delete out[i].slug;
+  }
+  log("MS tarjetas: " + out.length);
+  return out;
+}
+
+// El buscador de Mangas.in es un servicio JSON (/search?q=…):
+// devuelve sugerencias {value: título, data: slug}. El sitio exige
+// al menos 3 caracteres: con menos no responde nada.
+async function msBuscar(q) {
+  const qq = String(q || "").trim();
+  if (qq.length < 3) return [];
+  const txt = await getHtmlDe(fuentePorId("mangasin"), "/search?q=" + encodeURIComponent(qq));
+  let j = null;
+  try { j = JSON.parse(txt); } catch (e) {
+    log("MS búsqueda sin JSON (" + txt.length + "): " + txt.slice(0, 80));
+    return [];
+  }
+  const sug = (j && (j.suggestions || j.data)) || [];
+  const out = [];
+  for (let i = 0; i < sug.length && out.length < 30; i++) {
+    const s = sug[i];
+    if (!s || !s.data || !s.value) continue;
+    out.push({ url: "/ms/manga/" + s.data + "/", title: clean(s.value), poster: msCover(s.data) });
+  }
+  log("MS búsqueda «" + qq + "»: " + out.length);
+  return out;
+}
+
+// El catálogo (/filterList) ordena por visitas o por nombre.
+async function msCatalog(cat, page1) {
+  const f = fuentePorId("mangasin");
+  const orden = (cat && cat.order) === "name" ? "name" : "views";
+  const html = await getHtmlDe(f, "/filterList?page=" + page1 + "&cat=&alpha=&sortBy=" + orden +
+    "&asc=" + (orden === "name" ? "true" : "false") + "&author=&tag=&artist=");
+  const items = msCards(html, CAT_POR_PAG);
+  return { items: items, mas: items.length > 0 };
+}
+
+// Metadatos de la página de una serie: título (h1 o el título del
+// tema), sinopsis (el bloque «well» del tema o la etiqueta
+// description) y portada (la del tema, adivinable por el slug).
+function msMeta(html, slug) {
+  const h = String(html || "");
+  const pick = (re) => { const m = h.match(re); return m ? clean(m[1]) : ""; };
+  let title = "";
+  const h1 = h.match(/<h1\b[^>]*>([\s\S]{2,200}?)<\/h1>/i);
+  if (h1) title = clean(h1[1].replace(/<[^>]*>/g, " "));
+  if (!title) title = pick(/<meta[^>]*property="og:title"[^>]*content="([^"]*)"/i) ||
+    pick(/<meta[^>]*content="([^"]*)"[^>]*property="og:title"/i);
+  title = title.replace(/\s*[|–—]+\s*(mangas[.]in|m440[.]in).*$/i, "").trim();
+  let poster = "";
+  const im = h.match(/<img\b[^>]*class="[^"]*img-responsive[^"]*"[^>]*>/i);
+  if (im) {
+    const p = im[0].match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
+    if (p) poster = msAbs(p[1]);
+  }
+  if (!poster) poster = pick(/<meta[^>]*property="og:image"[^>]*content="([^"]*)"/i) ||
+    pick(/<meta[^>]*content="([^"]*)"[^>]*property="og:image"/i);
+  if (!poster || /no-image|placeholder/i.test(poster)) poster = msCover(slug);
+  let overview = "";
+  const well = h.match(/class="[^"]*well[^"]*"[^>]*>([\s\S]{0,4000}?)<\/div>/i);
+  if (well) overview = clean(well[1].replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, " ").replace(/<[^>]*>/g, " "));
+  if (!overview) overview = pick(/<meta[^>]*name="description"[^>]*content="([^"]*)"/i) ||
+    pick(/<meta[^>]*content="([^"]*)"[^>]*name="description"/i);
+  return { title: title || "Serie", poster: poster, overview: overview.slice(0, 600) };
+}
+
+// La serie completa: metadatos + capítulos (la lista cifrada). Si la
+// lista no se puede abrir, se devuelve el aviso honesto en vez de
+// fingir una serie vacía.
+async function msSerie(url) {
+  const f = fuentePorId("mangasin");
+  const slug = msSlugDe(url);
+  if (!slug) return { meta: { title: "Serie", poster: "", overview: "" }, chapters: [], aviso: "Esa serie de Mangas.in no tiene una dirección válida." };
+  const html = await getHtmlDe(f, "/manga/" + slug);
+  const meta = msMeta(html, slug);
+  const caps = await msCaps(html, slug);
+  if (!caps) {
+    log("MS sin capítulos para " + url + " (bloque " + (msBlobDe(html) ? "cifrado presente" : "ausente") + ")");
+    return { meta: meta, chapters: [], aviso: "Mangas.in trae su lista de capítulos cifrada y esta vez no pude abrirla. Si tu internet va bien, el sitio cambió su llave: mándame una captura del Registro y la renuevo." };
+  }
+  caps.sort(function (a, b) {
+    const fa = parseFloat(a.num), fb = parseFloat(b.num);
+    if (isFinite(fa) && isFinite(fb) && fa !== fb) return fa - fb;
+    return String(a.num).localeCompare(String(b.num));
+  });
+  log("MS capítulos: " + caps.length);
+  return { meta: meta, chapters: caps.slice(0, MAX_CAPS_MS) };
+}
+
+// Las páginas del capítulo: las <img> de la zona «#all» (con clase
+// img-responsive), respetando el orden del sitio. Algunas imágenes
+// esconden su dirección en base64 («https://<base64>»): se destapa
+// y se descodifica, como hacen las apps que leen el sitio.
+function imgsMS(html) {
+  const h = String(html || "");
+  let zona = h;
+  const iAll = h.search(/id="all"/i);
+  if (iAll >= 0) zona = h.slice(iAll);
+  const out = [];
+  const seen = {};
+  const re = /<img\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(zona)) !== null && out.length < 250) {
+    const tag = m[0];
+    if (!/img-responsive/i.test(tag)) continue;
+    const p = tag.match(/\b(?:data-background-image|data-cfsrc|data-lazy-src|data-src|src)="([^"]+)"/i);
+    if (!p) continue;
+    let u = p[1].trim();
+    if (/^https?:\/\/[A-Za-z0-9+/=]{12,}$/i.test(u)) {
+      try {
+        const dec = msStrDeBytes(deB64(u.replace(/^https?:\/\//, "")));
+        if (dec && /^https?/i.test(dec)) u = decodeURIComponent(dec);
+      } catch (e) { }
+    }
+    if (!/^https?:/i.test(u)) u = msAbs(u);
+    if (seen[u] || /logo|banner|icon|avatar|placeholder|1x1/i.test(u)) continue;
+    seen[u] = 1;
+    out.push(u);
+  }
+  log("MS lector: " + out.length + " páginas");
+  return out;
+}
+
 // --------------------------------------- dimensiones de las páginas
 // El contrato del Image (kino.d.ts de la galería oficial) solo admite
 // width/height de una escala fija de tamaños, y el Image SIEMPRE
@@ -1922,6 +2509,24 @@ async function homeTree() {
     try { populares = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home pop: " + e); }
     try { recientes = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home rec: " + e); }
     try { actualizados = moCards(await getHtmlDe(f, "/recientes"), 20); } catch (e) { log("MO home upd: " + e); }
+  } else if (f.id === "mangasin") {
+    // Portada de Mangas.in: populares (su catálogo por visitas) y
+    // novedades (el servicio «lasted» que alimenta la propia web).
+    titPop = "Populares de Mangas.in"; titPopEn = "Popular on Mangas.in";
+    titRec = "Novedades de Mangas.in"; titRecEn = "New on Mangas.in";
+    try {
+      populares = msCards(await getHtmlDe(f, "/filterList?page=1&cat=&alpha=&sortBy=views&asc=false&author=&tag=&artist="), 20);
+    } catch (e) { log("MS home pop: " + e); }
+    try {
+      const j = JSON.parse(await getHtmlDe(f, "/lasted?p=1"));
+      const datos = (j && j.data) || [];
+      recientes = [];
+      for (let i = 0; i < datos.length && i < 20; i++) {
+        const x = datos[i] || {};
+        if (!x.manga_slug) continue;
+        recientes.push({ url: "/ms/manga/" + x.manga_slug + "/", title: clean(x.manga_name), poster: msCover(x.manga_slug) });
+      }
+    } catch (e) { log("MS home rec: " + e); }
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
@@ -2003,7 +2608,6 @@ async function homeTree() {
           : fuenteCard(x.nombre, "Toca para cambiar", "cambiarFuente", x.id)
       ).concat([
         fuenteCard("AniList", "Buscar y descubrir manga", "alOpen", "anilist"),
-        fuenteCard("Mangas.in", "Bloqueada (firewall)", "fuentePronto", "Mangas.in"),
       ]) }] },
   ];
   const gridSeries = mixtas.length ? [
@@ -2375,6 +2979,7 @@ const TIPOS_MD = [["", "Todos"], ["ja", "Manga (Japón)"], ["ko", "Manhwa (Corea
 const ESTADOS_MD = [["", "Todos"], ["ongoing", "En curso"], ["completed", "Completado"], ["hiatus", "Pausado"], ["cancelled", "Cancelado"]];
 // Orden del catálogo de MangaOni (los "filtro" de su directorio).
 const ORDEN_MO = [["visitas", "Populares"], ["id", "Novedades"]];
+const ORDEN_MS = [["views", "Populares"], ["name", "A-Z"]];
 const CAT_POR_PAG = 30;
 const CAT_TOPE = 90;
 // v0.4.3 — el catálogo guarda hasta CAT_ALMACEN series y enseña una
@@ -2429,6 +3034,8 @@ function catalogTree(c) {
     ];
   } else if (f.id === "mangaoni") {
     drops = [catDrop("Orden", "catOrder", ORDEN_MO, c.order, "catOrder")];
+  } else if (f.id === "mangasin") {
+    drops = [catDrop("Orden", "catOrder", ORDEN_MS, c.order, "catOrder")];
   } else if (f.id === "leercapitulo") {
     drops = [
       catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
@@ -2488,6 +3095,9 @@ async function cargarCatalogo(cat, page, conRuta) {
     nuevos = r2.items; mas = r2.mas;
   } else if (f.id === "mangaoni") {
     const r2 = await moCatalog(cat, page1);
+    nuevos = r2.items; mas = r2.mas;
+  } else if (f.id === "mangasin") {
+    const r2 = await msCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
@@ -2679,6 +3289,7 @@ export async function screenEvent(ev) {
         if (f.id === "mangadex") results = await mdSearch(tituloAL);
         else if (f.id === "inmanga") results = await imBuscar(tituloAL);
         else if (f.id === "mangaoni") results = await moBuscar(tituloAL);
+        else if (f.id === "mangasin") results = await msBuscar(tituloAL);
         else {
           const ruta = f.id === "lectorxd"
             ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(tituloAL)
@@ -2737,6 +3348,7 @@ export async function screenEvent(ev) {
         if (f.id === "mangadex") results = await mdSearch(q);
         else if (f.id === "inmanga") results = await imBuscar(q);
         else if (f.id === "mangaoni") results = await moBuscar(q);
+        else if (f.id === "mangasin") results = await msBuscar(q);
         else {
           const ruta = f.id === "lectorxd"
             ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
@@ -2956,6 +3568,8 @@ export async function screenEvent(ev) {
         results = await imBuscar(q);
       } else if (f.id === "mangaoni") {
         results = await moBuscar(q);
+      } else if (f.id === "mangasin") {
+        results = await msBuscar(q);
       } else {
         const ruta = f.id === "lectorxd"
           ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
@@ -3018,12 +3632,12 @@ export async function screenEvent(ev) {
         (/^HTTP 403/.test(msg403) || msg403 === "conexión cortada")) {
       const url403 = String(ev.arg || "");
       const f403 = fuenteDeUrl(url403);
-      if (f403 && f403.id === "lectorxd") {
+      if (f403 && (f403.id === "lectorxd" || f403.id === "mangasin")) {
         const paso = await pasarRevision(f403, url403);
         if (paso) {
           try {
             const r2 = await cargarSerie(url403, true);
-            if (r2 && r2.state && !r2.toast) r2.toast = "✓ Revisión superada: LectorXd desbloqueado.";
+            if (r2 && r2.state && !r2.toast) r2.toast = "✓ Revisión superada: " + f403.nombre + " desbloqueado.";
             return r2;
           } catch (e2) {
             log("serie tras revisión: " + ((e2 && e2.message) || e2));
@@ -3578,6 +4192,13 @@ async function cargarSerie(url, conRuta) {
     // con el volteo queda en el orden ascendente común y "Empezar a
     // leer" abre el capítulo 1, no el último.
     full = s.chapters.slice(0, TOPE_CAPS_SERIE).slice().reverse();
+  } else if (f.id === "mangasin") {
+    const s = await msSerie(url);
+    if (s.aviso) return { toast: s.aviso };
+    meta = s.meta;
+    meta.totalCaps = s.chapters.length;
+    // msSerie ya entrega los capítulos del 1 al más nuevo.
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
