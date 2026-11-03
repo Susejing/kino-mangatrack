@@ -1,4 +1,10 @@
-// MangaTrack v0.4.8 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.9 — lector de mangas para Kino con pantalla propia.
+// v0.4.9 — cuando LectorXd le cierra la puerta a la conexión de la
+// persona (el 403 que no se va; la portada carga porque la sirve la
+// caché del propio filtro), Kino abre una ventanita de navegador real
+// sobre el sitio: la revisión se pasa una vez y la galleta de acceso
+// viaja desde entonces con cada petición, junto con el disfraz exacto
+// del navegador que la ganó (Cloudflare las amarra juntas).
 // v0.4.8 — el +18 de LectorXd es un aviso tapado: sin sesión el sitio ya
 // entrega la lista de capítulos y las páginas debajo del aviso (verificado
 // en una serie +18 real), y ahora el plugin las lee como hacen otras apps.
@@ -13,7 +19,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.8";
+const VERSION = "0.4.9";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -98,6 +104,24 @@ async function getHtmlDe(f, path) {
     : { Accept: "text/html" };
   // MangaOni guarda sus series con el prefijo /oni: al pedir se quita.
   const ruta = f.id === "mangaoni" ? moPath(path) : path;
+  // v0.4.9 — si la persona ya pasó la revisión del filtro en la
+  // ventanita de Kino, las peticiones de LectorXd viajan desde el
+  // primer intento con esa galleta de acceso y con el disfraz exacto
+  // del navegador que la ganó (Cloudflare amarra la galleta a él, así
+  // que con galleta ya no se intercambian disfraces: la invalidaría).
+  let hdrs0 = hdrs;
+  if (f.id === "lectorxd") {
+    const g = getJson("lxCookies", null);
+    if (g && typeof g === "object") {
+      const par = [];
+      for (const k in g) if (g[k]) par.push(k + "=" + g[k]);
+      if (par.length) {
+        hdrs0 = Object.assign({}, hdrs, { Cookie: par.join("; ") });
+        const ua = getJson("lxUA", "");
+        if (ua) hdrs0["User-Agent"] = ua;
+      }
+    }
+  }
   // v0.4.7 — el 403 del filtro anti-bots de Cloudflare entra y sale (en
   // el registro de la persona LectorXd a veces cargaba y a veces no):
   // ahora se reintenta hasta 3 veces — el 2º intento con el disfraz del
@@ -107,9 +131,10 @@ async function getHtmlDe(f, path) {
   // sitio que no responde (timeout) tampoco se martilla.
   let ultimo = 0;   // el último estado que el sitio dio (0: conexión cortada)
   for (let intento = 1; intento <= 3; intento++) {
-    const h = intento === 2 && esNube
+    const conGalleta = hdrs0 !== hdrs;
+    const h = intento === 2 && esNube && !conGalleta
       ? Object.assign({}, hdrs, { "User-Agent": f.id === "lectorxd" ? UA_ESCRITORIO : UA_MOVIL })
-      : hdrs;
+      : hdrs0;
     const base = intento === 3 && esNube
       ? (f.id === "lectorxd" ? "https://www.lectorxd.com" : "https://www.manga-oni.com")
       : f.base;
@@ -173,6 +198,53 @@ async function getHtmlDe(f, path) {
       ? "MangaOni bloqueó la página (" + est + ") aunque se reintentó: su protección anti-bots está activa ahora mismo. Vuelve en un rato o prueba otra serie."
       : "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
   });
+}
+
+// v0.4.9 — Pasar la revisión de Cloudflare con las manos de la persona.
+// Kino abre una ventanita de navegador real sobre la página de la serie:
+// la persona la ve, la revisión se resuelve sola o con un toque (a veces
+// es marcar un cuadrito), y al tocar "Listo" el plugin recibe la galleta
+// de acceso y el disfraz exacto del navegador que la ganó. Una ventana
+// por toque, solo tras un toque de la persona (requisito de Kino) y solo
+// si este Kino tiene la ventanita disponible. Si la ventana se cierra sin
+// resolver nada, devuelve false y sigue el mensaje honesto de siempre.
+async function pasarRevision(f, path) {
+  if (!kino.visualBrowser || !kino.visualBrowser.available) return false;
+  try {
+    const r = await kino.visualBrowser.open({
+      url: f.base + path,
+      title: f.nombre,
+      collect: { cookies: ["cf_clearance", "__cf_bm"] },
+      userAgent: "browser",
+      timeoutMs: 120000,
+    });
+    const st = (r && r.status) || "sin-respuesta";
+    // Las galletas pueden llegar de varias formas según el Kino: todas
+    // se normalizan a un objeto {nombre: valor}.
+    const g = {};
+    const crudas = r && r.cookies;
+    if (typeof crudas === "string" && crudas) {
+      crudas.split(";").forEach(function (p) {
+        const i = p.indexOf("=");
+        if (i > 0) g[p.slice(0, i).trim()] = p.slice(i + 1).trim();
+      });
+    } else if (Array.isArray(crudas)) {
+      crudas.forEach(function (c) {
+        if (c && c.name && c.value !== undefined) g[String(c.name)] = String(c.value);
+      });
+    } else if (crudas && typeof crudas === "object") {
+      for (const k in crudas) g[k] = String(crudas[k]);
+    }
+    const nombres = Object.keys(g);
+    log("ventana " + f.id + ": " + st + ", galletas " + (nombres.length ? nombres.join(",") : "ninguna"));
+    if (st !== "done" || !nombres.length) return false;
+    if (!setJson("lxCookies", g)) return false;
+    if (r.userAgent) setJson("lxUA", r.userAgent);
+    return true;
+  } catch (e) {
+    log("ventana " + f.id + " falló: " + ((e && e.message) || e));
+    return false;
+  }
 }
 
 async function getHtml(path) {
@@ -2797,6 +2869,32 @@ export async function screenEvent(ev) {
     return null;
   } catch (e) {
     log("error en evento " + name + ": " + ((e && e.message) || e));
+    // v0.4.9 — un 403 de LectorXd al tocar una serie es el filtro de
+    // Cloudflare cerrándole la puerta a ESTA conexión (la portada carga
+    // porque la sirve la caché del propio filtro). La llave la tiene la
+    // persona: una ventanita para pasar la revisión una vez y reintentar
+    // la serie ya con su galleta de acceso. Solo tras su toque (este
+    // evento lo es), una ventana por toque, solo LectorXd.
+    const msg403 = String((e && e.message) || "");
+    if (name === "openSeries" && e && e.code === "network" &&
+        (/^HTTP 403/.test(msg403) || msg403 === "conexión cortada")) {
+      const url403 = String(ev.arg || "");
+      const f403 = fuenteDeUrl(url403);
+      if (f403 && f403.id === "lectorxd") {
+        const paso = await pasarRevision(f403, url403);
+        if (paso) {
+          try {
+            const r2 = await cargarSerie(url403, true);
+            if (r2 && r2.state && !r2.toast) r2.toast = "✓ Revisión superada: LectorXd desbloqueado.";
+            return r2;
+          } catch (e2) {
+            log("serie tras revisión: " + ((e2 && e2.message) || e2));
+            const um2 = (e2 && e2.userMessage) || "";
+            return { toast: um2 || "La revisión pasó pero la serie no cargó: vuelve a tocarla." };
+          }
+        }
+      }
+    }
     // Si el fallo traía un mensaje para la persona (bloqueo +18, HTTP,
     // conexión rechazada), ese mensaje gana al genérico: antes se
     // perdía aquí y la persona solo veía "Algo falló".
