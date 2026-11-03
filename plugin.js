@@ -1,4 +1,4 @@
-// MangaTrack v0.4.0 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.1 — lector de mangas para Kino con pantalla propia.
 // Fuentes: LeerCapitulo, LectorXd, MangaDex, InManga y MangaOni.
 // Requiere Kino 0.9.74 o superior (apiVersion 14, capability "screen").
 // Lector nuevo para Kino 0.9.81: páginas a ancho completo sin recortes
@@ -7,7 +7,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1808,6 +1808,11 @@ function readerTree(state) {
   medidas.sort((a, b) => a - b);
   const ratioGuia = medidas.length ? medidas[parseInt((medidas.length - 1) / 2, 10)] : 0;
   const modo = modoLectorEfectivo(r.images.length);
+  // Modo inmersivo (v0.4.1): esconde la barra azul de arriba y la de
+  // controles de abajo; queda un botón flotante para traerlas de
+  // vuelta. La preferencia vive en el almacén ("lectorInm"), igual
+  // que el modo tira/páginas.
+  const inm = getJson("lectorInm", 0) ? true : false;
   const pg = state.inputs && typeof state.inputs.pgs === "number" && state.inputs.pgs >= 0
     ? state.inputs.pgs : 0;
   let cuerpo;
@@ -1835,7 +1840,7 @@ function readerTree(state) {
       + " · pellizca para acercar";
   const body = [
     cuerpo,
-    { type: "Row", key: "barraLector", gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
+    { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
       { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
@@ -1852,15 +1857,22 @@ function readerTree(state) {
         style: "caption", color: "muted" },
     ]) },
   ];
+  // Modo inmersivo: un botón flotante trae las barras de vuelta.
+  if (inm) body.push({ type: "FloatingActionButton", key: "verBarras", icon: "expand_more",
+    labelText: "Mostrar barras", labelTextEn: "Show bars",
+    onPressed: { event: "lectorInm" } });
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: { type: "AppBar", key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
+    appBar: inm ? undefined : { type: "AppBar", dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
       leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
         labelText: "Ocultar o mostrar controles", labelTextEn: "Hide or show controls",
-        onPressed: { ui: [{ toggle: "barraLector" }] } }] },
+        onPressed: { ui: [{ toggle: "barraLector" }] } },
+        { type: "IconButton", key: "btnInm", icon: "expand_less",
+        labelText: "Modo inmersivo", labelTextEn: "Immersive mode",
+        onPressed: { event: "lectorInm" } }] },
     body: { type: "Column", children: body },
   };
   return raiz;
@@ -2327,6 +2339,12 @@ export async function screenEvent(ev) {
       syncPushFavs();
       return { state: { favTk: Date.now() },
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
+    }
+    if (name === "lectorInm") {
+      const ya = getJson("lectorInm", 0);
+      setJson("lectorInm", ya ? 0 : 1);
+      return { state: { inmTk: Date.now() },
+        toast: ya ? "Barras visibles de nuevo." : "Modo inmersivo: el botón flotante trae las barras de vuelta." };
     }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
