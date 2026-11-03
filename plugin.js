@@ -1,4 +1,12 @@
-// MangaTrack v0.4.11 — lector de mangas para Kino con pantalla propia.
+// MangaTrack v0.4.12 — lector de mangas para Kino con pantalla propia.
+// v0.4.12 — vincular a mano: los títulos de traductor no se acaban
+// nunca (cada serie nueva trae el suyo), así que el toque en una
+// serie de AniList abre una pantalla de vinculación: se elige la
+// fuente, se busca con el título en español TAL COMO LO MUESTRA esa
+// fuente y al tocar la serie correcta queda vinculada para siempre
+// con los ids exactos de AniList y MAL. Y el buscador de LectorXd
+// deja de esconder las series +18: sin el filtro «adulto seguro» el
+// catálogo las entrega y se pueden encontrar, leer y vincular.
 // v0.4.11 — títulos de traductor: las fuentes en español bautizan sus
 // series a su manera («La Academia está condenada») y ese nombre no
 // existe en AniList ni en MAL, aunque la serie sí esté allí con su
@@ -35,7 +43,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.11";
+const VERSION = "0.4.12";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2552,6 +2560,7 @@ export async function screen(ev) {
     if (route.name === "anilist") {
       return anilistTree(getJson("al", null));
     }
+    if (route.name === "vincular") return vincularTree();
     if (route.name === "favs") return favsTree();
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
@@ -2666,37 +2675,100 @@ export async function screenEvent(ev) {
       if (!tituloAL) return { toast: "Esa serie no tiene título en AniList." };
       const f = fuenteActiva();
       let results = [];
-      if (f.id === "mangadex") results = await mdSearch(tituloAL);
-      else if (f.id === "inmanga") results = await imBuscar(tituloAL);
-      else if (f.id === "mangaoni") results = await moBuscar(tituloAL);
-      else {
-        const ruta = f.id === "lectorxd"
-          ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(tituloAL)
-          : "/?s=" + encodeURIComponent(tituloAL);
-        const html = await getHtmlDe(f, ruta);
-        results = cardsDe(f, html, 30);
+      try {
+        if (f.id === "mangadex") results = await mdSearch(tituloAL);
+        else if (f.id === "inmanga") results = await imBuscar(tituloAL);
+        else if (f.id === "mangaoni") results = await moBuscar(tituloAL);
+        else {
+          const ruta = f.id === "lectorxd"
+            ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(tituloAL)
+            : "/?s=" + encodeURIComponent(tituloAL);
+          const html = await getHtmlDe(f, ruta);
+          results = cardsDe(f, html, 30);
+        }
+      } catch (e) {
+        return { toast: (e && e.userMessage) || ("No se pudo buscar en " + f.nombre + ".") };
       }
       // Vínculo exacto: solo si la fuente tiene la serie con el MISMO
-      // título (normalizado) se guardan los ids de AniList/MAL con la
-      // clave "alId:<url>": el registro pasa a ser exacto, nunca por
-      // parecido.
-      let vinculada = "";
+      // título (normalizado) se guarda el vínculo ya, sin esperar a la
+      // mano — el registro pasa a ser exacto, nunca por parecido.
+      let vinUrl = "", vinTitulo = "";
       const qAL = normTituloMD(tituloAL);
       if (qAL) {
         for (let i = 0; i < results.length; i++) {
           const it = results[i];
           if (it && it.url && normTituloMD(it.title) === qAL) {
             setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
-            vinculada = " · ✓ serie vinculada a AniList";
+            vinUrl = it.url;
+            vinTitulo = it.title || "";
             break;
           }
         }
       }
-      return { state: { results: results, resultsQ: tituloAL },
-        route: { push: "search" },
+      // v0.4.12 — pantalla de vinculación: el título de AniList casi
+      // nunca es el que la fuente muestra en español; aquí la persona
+      // busca con SU título y toca la serie correcta.
+      const vin = { al: m.id, mal: m.mal || 0, titulo: tituloAL,
+        q: tituloAL, fuente: f.id, res: results.slice(0, 30),
+        linked: vinUrl, linkedTitle: vinTitulo };
+      if (!setJsonCache("vin", vin)) {
+        return { toast: "El almacén del plugin está lleno: no pude abrir la vinculación." };
+      }
+      return { state: { vinTk: Date.now() }, route: { push: "vincular" },
+        toast: vinUrl
+          ? "✓ Vinculada automáticamente: si no es la serie que lees, búscala abajo con el título en español."
+          : "Elige tu fuente, busca con el título en español y toca la serie correcta." };
+    
+    }
+    if (name === "vinFuente") {
+      const v = getJson("vin", null) || {};
+      v.fuente = fuentePorId(String(ev.value || "")).id;
+      if (!setJsonCache("vin", v)) return { toast: "El almacén del plugin está lleno: no pude guardar la fuente." };
+      return { state: { vinTk: Date.now() } };
+    }
+    if (name === "vinBuscar") {
+      const v = getJson("vin", null);
+      if (!v || typeof v !== "object" || !v.al) return { toast: "La vinculación expiró: vuelve a tocar la serie en AniList." };
+      const q = String((ev.value && (ev.value.vinQ || ev.value.q)) || "").trim();
+      if (!q) return { toast: "Escribe el título tal como aparece en la fuente." };
+      const f = fuentePorId(String(v.fuente || fuenteActiva().id));
+      let results = [];
+      try {
+        if (f.id === "mangadex") results = await mdSearch(q);
+        else if (f.id === "inmanga") results = await imBuscar(q);
+        else if (f.id === "mangaoni") results = await moBuscar(q);
+        else {
+          const ruta = f.id === "lectorxd"
+            ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
+            : "/?s=" + encodeURIComponent(q);
+          const html = await getHtmlDe(f, ruta);
+          results = cardsDe(f, html, 30);
+        }
+      } catch (e) {
+        return { toast: (e && e.userMessage) || ("No se pudo buscar en " + f.nombre + ".") };
+      }
+      v.q = q;
+      v.res = results.slice(0, 30);
+      v.fuente = f.id;
+      if (!setJsonCache("vin", v)) return { toast: "El almacén del plugin está lleno: no pude guardar los resultados." };
+      return { state: { vinTk: Date.now() },
         toast: results.length
-          ? results.length + " resultados en " + f.nombre + vinculada
-          : "Sin resultados en " + f.nombre + ": prueba con otra fuente." };
+          ? results.length + " resultados en " + f.nombre + ": toca la serie que lees para vincularla."
+          : "Sin resultados en " + f.nombre + ": prueba con otro título u otra fuente." };
+    }
+    if (name === "vinPick") {
+      const v = getJson("vin", null);
+      if (!v || typeof v !== "object" || !v.al) return { toast: "La vinculación expiró: vuelve a tocar la serie en AniList." };
+      const res = Array.isArray(v.res) ? v.res : [];
+      const it = res[parseInt(String(ev.arg || ""), 10) || -1];
+      if (!it || !it.url) return { toast: "Esa serie ya no está en la lista: busca de nuevo." };
+      setJson("alId:" + it.url, { al: v.al, mal: v.mal || 0 });
+      v.linked = it.url;
+      v.linkedTitle = it.title || "";
+      setJsonCache("vin", v);
+      return { state: { vinTk: Date.now() },
+        toast: "✓ «" + String(it.title || "").slice(0, 40) + "» vinculada con «" + String(v.titulo || "").slice(0, 40)
+          + "»: cada capítulo que leas se registrará en AniList" + (v.mal ? " y MAL" : "") + "." };
     }
     if (name === "fuentePronto") {
       return { toast: String(ev.arg || "Esa fuente") + " está bloqueada por su protección anti-bots: no se puede leer desde Kino." };
@@ -2886,7 +2958,7 @@ export async function screenEvent(ev) {
         results = await moBuscar(q);
       } else {
         const ruta = f.id === "lectorxd"
-          ? "/catalogo?filters=true&adult=safe&orderBy=recent&search=" + encodeURIComponent(q)
+          ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
           : "/?s=" + encodeURIComponent(q);
         const html = await getHtmlDe(f, ruta);
         results = cardsDe(f, html, 30);
@@ -3016,10 +3088,12 @@ function favsTree() {
 // ---------------------------------------------------------------- AniList
 // v0.4.3 — sección AniList: su catálogo sirve para DESCUBRIR manga
 // (tendencia, populares, mejor valorados, A-Z o por búsqueda). AniList
-// no aloja capítulos: al tocar una serie se busca su título en la
-// fuente activa y, si el título coincide exacto, la serie queda
-// vinculada con los ids de AniList/MAL (clave "alId:<url>") para que
-// el registro de capítulos sea exacto. Ante la duda no se vincula
+// no aloja capítulos: al tocar una serie se abre la pantalla de
+// VINCULACIÓN (v0.4.12) — se elige la fuente, se busca con el título
+// en español y al tocar la serie correcta queda vinculada con los
+// ids de AniList/MAL (clave "alId:<url>"): el registro pasa a ser
+// exacto porque lo confirma la persona, nunca un parecido. Ante la
+// duda no se vincula
 // nada: nunca se marca una serie equivocada.
 
 const ANI_POR_PAG = 20;
@@ -3096,8 +3170,8 @@ function anilistTree(a) {
       actions: [] },
     body: { type: "SingleChildScrollView", key: "alBody", children: [{
       type: "Column", children: [
-        { type: "Text", text: "Descubre manga en AniList y tócalo para buscarlo en " + fuenteActiva().nombre + ".",
-          textEn: "Discover manga on AniList and tap to search your source.",
+        { type: "Text", text: "Descubre manga en AniList y tócalo para vincularlo: en la pantalla que se abre, busca con el título en español de tu fuente y toca la serie correcta.",
+          textEn: "Discover manga on AniList and tap it to link: on the next screen, search with your source's Spanish title and tap the right series.",
           style: "caption", color: "muted", padding: 16 },
         { type: "Form", key: "alForm", onSubmitted: "alSearch", gap: 8, padding: 16, children: [
           { type: "TextField", key: "alQ", kind: "search", value: a.q || "",
@@ -3139,6 +3213,80 @@ async function alBuscar(q, page, order, conRuta, anadir) {
   const resp = { state: { alTk: Date.now() } };
   if (conRuta) resp.route = { push: "anilist" };
   return { resp: resp, n: nuevos.length, ok: alOk };
+}
+
+// v0.4.12 — VINCULACIÓN A MANO: los títulos de AniList son los
+// oficiales (inglés/romaji) y casi nunca coinciden con el título en
+// español que pone cada fuente. Esta pantalla (ruta "vincular") abre
+// al tocar una serie de AniList: abajo se elige la fuente, se busca
+// con el título TAL COMO LO MUESTRA la fuente y al tocar una serie
+// se guarda el vínculo "alId:<url>" con los ids de AniList/MAL.
+// Desde entonces cada capítulo leído se registra exacto — la
+// persona es la que confirma cuál es la serie, nunca un parecido.
+function vinCard(it, i) {
+  const img = {
+    type: "Image", url: it.poster || "", aspect: "2:3",
+    alt: it.title, altEn: it.title,
+    fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+      children: [{ type: "Icon", name: "list", color: "muted" }] },
+  };
+  return {
+    type: "Card", key: "vin-" + i, flush: true,
+    onTap: { event: "vinPick", arg: String(i) },
+    children: [img].concat(twoLines(it.title).map((ln) => (
+      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 }))),
+  };
+}
+
+function vincularTree() {
+  const v = getJson("vin", null);
+  if (!v || typeof v !== "object" || !v.al) {
+    return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+      { type: "Text", text: "Vuelve a la sección de AniList y toca la serie para vincularla.",
+        textEn: "Go back to the AniList section and tap the series to link it.",
+        color: "muted" },
+    ] };
+  }
+  const fSel = fuentePorId(String(v.fuente || fuenteActiva().id));
+  const res = Array.isArray(v.res) ? v.res : [];
+  const esc = (s) => String(s || "").slice(0, 60);
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barVin", title: "Vincular con AniList", titleEn: "Link to AniList",
+      leading: { type: "IconButton", key: "backFromVin", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "vinBody", children: [{
+      type: "Column", children: [
+        { type: "Text", text: "En AniList: «" + esc(v.titulo) + "»", textEn: "On AniList: “" + esc(v.titulo) + "”", padding: 16 },
+        v.linked
+          ? { type: "Text", text: "✓ Vinculada: «" + esc(v.linkedTitle) + "». Toca otra serie si quieres cambiarla.",
+              textEn: "✓ Linked: “" + esc(v.linkedTitle) + "”. Tap another series to change it.",
+              color: "muted", padding: 16 }
+          : { type: "Text", text: "Todavía sin vincular.", textEn: "Not linked yet.", color: "muted", padding: 16 },
+        { type: "Text",
+          text: "Cada capítulo que leas de la serie vinculada se registra exacto en AniList y MAL.",
+          textEn: "Every chapter you read of the linked series is tracked exactly on AniList and MAL.",
+          style: "caption", color: "muted", padding: 16 },
+        { type: "Row", gap: 8, padding: 16, children: [
+          catDrop("Buscar en", "vinFuente", FUENTES.map((x) => [x.id, x.nombre]), fSel.id, "vinFuente"),
+        ] },
+        { type: "Form", key: "vinForm", onSubmitted: "vinBuscar", gap: 8, padding: 16, children: [
+          { type: "TextField", key: "vinQ", kind: "search", value: v.q || "",
+            labelText: "Título en " + fSel.nombre, labelTextEn: "Title on " + fSel.nombre,
+            hintText: "Tal como aparece en la fuente", hintEn: "As shown on the source" },
+          { type: "ElevatedButton", icon: "search", labelText: "Buscar", labelTextEn: "Search", submit: true },
+        ] },
+        res.length
+          ? { type: "ListView", key: "vinGrid",
+              columns: { compact: 3, medium: 4, expanded: 6 },
+              items: res.map((it, i) => vinCard(it, i)) }
+          : { type: "Text",
+              text: "Toca una serie para vincularla. Si no aparece, prueba otro título u otra fuente.",
+              textEn: "Tap a series to link it. If it does not show up, try another title or source.",
+              color: "muted", padding: 16 },
+      ] }] },
+  };
 }
 
 // v0.4.2 — Título normalizado para comparar (minúsculas, sin
