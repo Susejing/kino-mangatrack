@@ -1,4 +1,18 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.29 — dos reportes de la persona. (1) «Ver más» faltaba en las
+// secciones chicas de LeerCapitulo y LectorXd: la tarjetita salía
+// solo con 10 series o más y muchas secciones traen menos; ahora sale
+// con 3 o más, igual en todos los rieles, y el tope de «Populares» de
+// LectorXd sube de 12 a 24. (2) ManhwaWeb cargaba todo menos las
+// imágenes (su casa img1mw/img2mw niega al pintor de Kino): Kino
+// acepta ahora imágenes incrustadas «data:image/…;base64,…» en las
+// pantallas, así que las PORTADAS se bajan con presentación
+// (Referer+UA, la receta de scancore), se convierten y se guardan en
+// el almacén (capacidad «storageLarge», 16 MiB) — el dibujado las lee
+// sin red. El lector de capítulos enteros sigue en la ventanita (una
+// página pesa más de lo que viaja en el estado) y la sonda por hora
+// ahora prueba también CON presentación, para saber si el muro
+// cede desde el teléfono y el lector integrado tiene camino.
 // v0.4.28 — dos peticiones de la persona. (1) Las secciones de «Ver más»
 // ahora PAGINAN: la cuadrícula enseña 24 series por ventana con
 // «‹ Series anteriores / Series siguientes ›» (el patrón del catálogo)
@@ -243,7 +257,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.28";
+const VERSION = "0.4.29";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -596,12 +610,27 @@ function msDiagPresentacion(f, etiqueta, url, clave) {
   if (!url || Date.now() - (getJson(kDiag, 0) || 0) < 3600000) return Promise.resolve();
   setJson(kDiag, Date.now());
   const pref = kDiag === "mwDiag" ? "MW" : "MS";
+  // v0.4.29 — dos sondas por hora: la desnuda (el pintor de Kino) y
+  // la presentada (Referer + UA móvil, la receta de scancore). Si la
+  // presentada pasa, el lector integrado tiene camino; el Registro lo
+  // dirá desde el teléfono.
+  const hdrs = { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+    "User-Agent": UA_MOVIL, Referer: (pref === "MW" ? MW_BASE : MS_BASE) + "/" };
   return kino.fetch(url, {})
     .then(function (r) {
       log(pref + " " + etiqueta + " al desnudo: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
     })
     .catch(function (e) {
       log(pref + " " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
+    })
+    .then(function () {
+      return kino.fetch(url, { headers: hdrs })
+        .then(function (r) {
+          log(pref + " " + etiqueta + " con presentación: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
+        })
+        .catch(function (e) {
+          log(pref + " " + etiqueta + " con presentación: no bajó (" + ((e && e.message) || e) + ")");
+        });
     });
 }
 
@@ -752,6 +781,75 @@ async function mwVentanaLeer(ch) {
     log("ventana leer manhwaweb falló: " + ((e && e.message) || e));
     return { st: "error" };
   }
+}
+
+// v0.4.29 — LAS PORTADAS DE MANHAWEB, DE VERDAD. Su casa de imágenes
+// (img1mw/img2mw) niega al pintor de Kino (pedidos sin presentación),
+// pero kino.fetch SÍ sabe presentarse (Referer + User-Agent móvil, la
+// lección de scancore) y el componente Image de las pantallas acepta
+// ahora datos incrustados «data:image/…;base64,…» de hasta 200.000
+// caracteres. Receta: bajar la portada con presentación, convertirla
+// a base64 y guardarla en el almacén (con «storageLarge» son 16 MiB);
+// el dibujado la lee de ahí SIN red. La que no baje, pese demasiado o
+// venga dañada se queda con su URL normal (el salvapantallas de
+// siempre) — una portada nunca rompe una pantalla.
+const MW_IMG_MAX = 140000; // bytes de imagen; en base64 cabe bajo el tope del Image
+
+async function mwImgData(url) {
+  const u = String(url || "");
+  if (!u || u.indexOf("data:") === 0) return u || null;
+  const ck = "dimg:" + u;
+  const hit = getJson(ck, null);
+  if (hit && typeof hit === "string") return hit;
+  try {
+    const r = await kino.fetch(u, { maxBytes: MW_IMG_MAX, timeoutMs: 10000,
+      headers: { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+        "User-Agent": UA_MOVIL, Referer: MW_BASE + "/" } });
+    if (!r.ok) { log("MW portada HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + ")"); return null; }
+    if (r.truncated) { log("MW portada muy grande: no se convierte"); return null; }
+    const ct = String((r.headers && r.headers["content-type"]) || "").toLowerCase();
+    const m = ct.match(/image[/](png|jpe?g|webp|gif)/);
+    if (!m) { log("MW portada con tipo raro: " + ct.slice(0, 40)); return null; }
+    const b64 = r.base64();
+    if (!b64 || b64.length < 100) return null;
+    const data = "data:image/" + (m[1] === "jpg" ? "jpeg" : m[1]) + ";base64," + b64;
+    if (data.length > 199000) { log("MW portada demasiado grande para el Image"); return null; }
+    if (!setJsonCache(ck, data)) log("MW portada sin guardar: almacén lleno");
+    return data;
+  } catch (e) {
+    log("MW portada no bajó: " + ((e && e.message) || e));
+    return null;
+  }
+}
+
+// Baja (si hace falta) las primeras «n» portadas de una lista MW al
+// almacén; no toca la lista, solo llena la caché para el dibujado.
+async function mwPrecarga(items, n) {
+  const arr = Array.isArray(items) ? items : [];
+  await Promise.all(arr.slice(0, n || 8).map(function (it) {
+    return mwImgData(it && it.poster).catch(function () { return null; });
+  }));
+}
+
+// La copia local de una portada MW si ya está en el almacén (lectura
+// sin red para el dibujado); si no hay, null.
+function mwDataDe(url) {
+  const u = String(url || "");
+  if (!u || u.indexOf("data:") === 0) return u || null;
+  const hit = getJson("dimg:" + u, null);
+  return hit && typeof hit === "string" ? hit : null;
+}
+
+// Cambia las portadas de las tarjetas MW por sus copias locales ya en
+// el almacén (las tarjetas de otras fuentes pasan igualitas).
+function mwDecora(items) {
+  const arr = Array.isArray(items) ? items : [];
+  const out = arr.map(function (it) {
+    if (!it || !it.poster || String(it.url || "").indexOf("/mw/") !== 0) return it;
+    const d = mwDataDe(it.poster);
+    return d ? Object.assign({}, it, { poster: d }) : it;
+  });
+  return out;
 }
 
 function log(msg) {
@@ -3220,10 +3318,10 @@ function railOf(titulo, tituloEn, items, key, prefix) {
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
         children: items.slice(0, 20).map((it) => posterCard(it, prefix, true))
-          // v0.4.27 — con 10 series o más, la tarjetita que abre la
-          // sección entera (menos riel para el pulgar, cuadrícula
-          // completa para los ojos).
-          .concat(items.length >= 10 ? [verMasCard(key)] : []) }] },
+          // v0.4.29 — con 3 series o más ya sale la tarjetita que abre
+          // la sección entera (antes pedía 10 y las secciones chicas
+          // de LeerCapitulo/LectorXd se quedaban sin su «Ver más»).
+          .concat(items.length >= 3 ? [verMasCard(key)] : []) }] },
   ];
 }
 
@@ -3398,6 +3496,11 @@ async function homeTree() {
     try { populares = mwCards(await mwGet(mwLib("", "", "", 0)), 20); } catch (e) { log("MW home pop: " + ((e && e.message) || e)); }
     try { recientes = mwCards(await mwGet(mwLib("publicandose", "", "", 0)), 20); } catch (e) { log("MW home rec: " + ((e && e.message) || e)); }
     masPop = true; masRec = true;
+    // v0.4.29 — portadas de verdad: se bajan con presentación y se
+    // guardan convertidas para el dibujado (caída suave si el muro las
+    // niega: quedan con su URL normal y su salvapantallas).
+    try { await mwPrecarga(populares, 8); await mwPrecarga(recientes, 8); }
+    catch (e) { log("MW portadas home: " + ((e && e.message) || e)); }
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
@@ -3415,7 +3518,7 @@ async function homeTree() {
     const posR = mR ? posP + 5 + mR.index : -1;
     log("LX portada: posP=" + posP + " posR=" + posR + " html=" + html.length);
     if (posP >= 0 && posR > posP) {
-      populares = cardsLX(html.slice(posP, posR), 12);
+      populares = cardsLX(html.slice(posP, posR), 24);
       recientes = cardsLX(html.slice(posR), 24);
     }
     if (!populares.length && !recientes.length) mixtas = cardsLX(html, 40);
@@ -3468,7 +3571,8 @@ async function homeTree() {
         children: hItems.map((it) => posterCard(it, "h-", true))
           // v0.4.27 — el riel enseña 15; «Ver más» abre el historial
           // entero (hasta 100 series) en cuadrícula.
-          .concat(hTodos.length >= 10 ? [verMasCard("railHist")] : []) }] },
+          // v0.4.29 — mismo umbral bajo que los demás rieles.
+          .concat(hTodos.length >= 3 ? [verMasCard("railHist")] : []) }] },
   ] : [];
   const fuentes = [
     { type: "Text", text: "Fuentes", textEn: "Sources", style: "h3", padding: 16 },
@@ -3531,6 +3635,13 @@ async function homeTree() {
     via: "", items: actualizados, page: 1, mas: false, start: 0 });
   if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
     titEn: "Keep reading", items: hTodos, page: 1, mas: false, start: 0 });
+  // v0.4.29 — ya están los rieles guardados con sus URLs cortas; para
+  // ESTE dibujado las portadas de ManhwaWeb se cambian por sus copias
+  // locales del almacén.
+  if (f.id === "manhwaweb") {
+    populares = mwDecora(populares);
+    recientes = mwDecora(recientes);
+  }
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
     .concat(railHist)
@@ -3578,7 +3689,7 @@ function detailTree(state) {
     ] };
   }
   const cover = meta.poster
-    ? { type: "Image", url: meta.poster, width: { compact: 120, expanded: 160 },
+    ? { type: "Image", url: mwDataDe(meta.poster) || meta.poster, width: { compact: 120, expanded: 160 },
         aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } }
     : { type: "Icon", name: "list" };
   const head = {
@@ -3882,7 +3993,7 @@ function searchTree(state) {
             submit: true },
         ] },
         results
-          ? (results.length ? gridOf(results, VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
+          ? (results.length ? gridOf(mwDecora(results), VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
           : { type: "Text", text: "Escribe un título y pulsa Buscar.",
               textEn: "Type a title and press Search.", color: "muted", padding: 16 },
       ] },
@@ -3980,7 +4091,9 @@ function catalogTree(c) {
   const f = fuentePorId(c.f || "leercapitulo");
   const todos = Array.isArray(c.items) ? c.items : [];
   const start = Math.max(0, parseInt(c.start, 10) || 0);
-  const items = todos.slice(start, start + CAT_TOPE);
+  // v0.4.29 — las portadas MW de la ventana visible se cambian por
+  // sus copias locales (si ya están en el almacén).
+  const items = mwDecora(todos.slice(start, start + CAT_TOPE));
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
   const hayMas = c.mas === undefined || c.mas === null
     ? (todos.length < total)
@@ -4079,6 +4192,8 @@ async function cargarCatalogo(cat, page, conRuta) {
   } else if (f.id === "manhwaweb") {
     const r2 = await mwCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
+    // v0.4.29 — portadas de la página nueva al almacén.
+    try { await mwPrecarga(nuevos, 12); } catch (e) { log("MW portadas catálogo: " + ((e && e.message) || e)); }
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
     nuevos = cardsDe(f, html, CAT_POR_PAG);
@@ -4152,7 +4267,9 @@ function rielTree(key) {
   const f = fuentePorId(r.f || "leercapitulo");
   const todos = r.items;
   const start = Math.max(0, parseInt(r.start, 10) || 0);
-  const items = todos.slice(start, start + RIEL_TOPE);
+  // v0.4.29 — la ventana visible se dibuja con las portadas MW ya
+  // convertidas (copias locales del almacén, sin red).
+  const items = mwDecora(todos.slice(start, start + RIEL_TOPE));
   const cuantos = todos.length + (todos.length === 1 ? " serie" : " series") +
     (r.f === "hist" ? "" : " · " + f.nombre);
   return {
@@ -4218,6 +4335,7 @@ async function cargarRiel(key) {
       } else if (f.id === "manhwaweb") {
         // La API de ManhwaWeb cuenta sus páginas desde 0.
         nuevos = mwCards(await mwGet(mwLib("", "", "", page - 1)), 20);
+        try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
       }
     } else if (key === "railRec") {
       if (f.id === "mangadex") {
@@ -4228,6 +4346,7 @@ async function cargarRiel(key) {
         nuevos = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=" + page)), 20);
       } else if (f.id === "manhwaweb") {
         nuevos = mwCards(await mwGet(mwLib("publicandose", "", "", page - 1)), 20);
+        try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
       }
     }
   } catch (e) {
@@ -4902,6 +5021,9 @@ export async function screenEvent(ev) {
         results = await msBuscar(q);
       } else if (f.id === "manhwaweb") {
         results = await mwBuscar(q);
+        // v0.4.29 — sus portadas al almacén; el dibujado las toma de
+        // ahí (el estado viaja con URLs cortas: 64 KB de tope).
+        try { await mwPrecarga(results, 8); } catch (e) { log("MW portadas búsqueda: " + ((e && e.message) || e)); }
       } else {
         // v0.4.25 — LeerCapitulo: "/?s=" ya no busca (devuelve la portada);
         // el buscador del sitio es ahora la página del catálogo con ?q=.
@@ -5847,6 +5969,9 @@ async function cargarSerie(url, conRuta) {
     const s = await mwSerie(url);
     if (s.aviso) return { toast: s.aviso };
     meta = s.meta;
+    // v0.4.29 — la portada de la serie al almacén (el detalle la
+    // dibuja desde ahí; el estado viaja con la URL corta).
+    try { await mwImgData(meta.poster); } catch (e) { log("MW portada serie: " + ((e && e.message) || e)); }
     meta.totalCaps = s.chapters.length;
     // mwSerie ya entrega los capítulos del 1 al más nuevo.
     full = s.chapters.slice(0, TOPE_CAPS_SERIE);
@@ -5892,6 +6017,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
