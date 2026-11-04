@@ -1,7 +1,7 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "creator": "Susejing",
   "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni y Mangas.in) y descubre manga con el catálogo de AniList.",
   "apiVersion": 14,
@@ -69,4 +69,5 @@
     ]
   }
 }
+
 

@@ -37,6 +37,15 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.21 — el corazón de las colecciones: listas con nombre que la
+// persona se crea («Mis mangas de terror», «Los que releo»…) y un
+// corazoncito flotante en el Inicio (lado derecho) que las lista.
+// Tocar una abre su sección con sus series en cuadrícula; desde la
+// página de cualquier serie, «Añadir a colección» la mete (o la
+// saca si ya estaba) y hasta estrena una colección nueva con la
+// serie dentro. Viven en el almacén del propio teléfono (no viajan
+// entre aparatos: el espacio compartido ya lo ocupan favoritos e
+// historial).
 // v0.4.20 — la séptima prueba dejó el diagnóstico cerrado: las páginas
 // de Mangas.in bajan todas cuando quien las pide se presenta (26/26,
 // 38/38, 57/57 medidas) y el sitio las NIEGA al pedido sin
@@ -143,7 +152,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.20";
+const VERSION = "0.4.21";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -489,6 +498,7 @@ function msGalletaInutilFresca() {
 function msDiagPresentacion(f, etiqueta, url) {
   if (!url || Date.now() - (getJson("msDiag", 0) || 0) < 3600000) return Promise.resolve();
   setJson("msDiag", Date.now());
+
   return kino.fetch(url, {})
     .then(function (r) {
       log("MS " + etiqueta + " al desnudo: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
@@ -497,7 +507,6 @@ function msDiagPresentacion(f, etiqueta, url) {
       log("MS " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
     });
 }
-
 
 function log(msg) {
   try { kino.log("[MangaTrack] " + msg); } catch (e) {}
@@ -981,6 +990,47 @@ function pgGuardar(chUrl, pg) {
   if (setJson("pgAtMap", m)) borrarClave("pgAt:" + chUrl);
 }
 function favs() { return getJson("favs", []); }
+
+// ------------------------------------------------ colecciones (v0.4.21)
+// Cada colección es una lista con nombre hecha por la persona; guarda
+// series completas (título, portada, dirección) en el almacén local.
+// El corazón flotante del Inicio abre la lista de colecciones; tocar
+// una abre su sección. Los nombres van recortados a 40 caracteres
+// (cabecera de la barra) y no se repiten.
+function cols() { return getJson("cols", {}); }
+
+function colCrear(nombre) {
+  const nom = String(nombre || "").trim().slice(0, 40);
+  if (!nom) return { err: "Ponle un nombre a la colección." };
+  const cs = cols();
+  if (cs[nom]) return { err: "Ya tienes una colección llamada «" + nom + "»." };
+  cs[nom] = { ts: Date.now(), items: {} };
+  return { ok: setJson("cols", cs), nom: nom };
+}
+function colEn(nom, url) {
+  const cs = cols();
+  return !!(cs[nom] && cs[nom].items && cs[nom].items[url]);
+}
+function colMeter(nom, it) {
+  const cs = cols();
+  if (!cs[nom]) return false;
+  cs[nom].items[it.url] = { url: it.url, title: it.title || "", poster: it.poster || "", ts: Date.now() };
+  cs[nom].ts = Date.now();
+  return setJson("cols", cs);
+}
+function colSacar(nom, url) {
+  const cs = cols();
+  if (!cs[nom] || !cs[nom].items) return false;
+  delete cs[nom].items[url];
+  cs[nom].ts = Date.now();
+  return setJson("cols", cs);
+}
+function colBorrar(nom) {
+  const cs = cols();
+  if (!cs[nom]) return false;
+  delete cs[nom];
+  return setJson("cols", cs);
+}
 function isFav(url) { return favs().some((f) => f.url === url); }
 
 function favValido(f) {
@@ -1449,6 +1499,7 @@ async function imSerie(url) {
   if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
     userMessage: "No se pudo conectar con InManga. Inténtalo de nuevo.",
   });
+
   const html = await r.text();
   const h1 = html.match(/<h1[^>]*>([\s\S]{2,150}?)<[/]h1>/i);
   let poster = "";
@@ -1642,7 +1693,6 @@ async function mwSerie(url) {
   log("MW capítulos: " + caps2.length);
   return { meta: meta, chapters: caps2 };
 }
-
 
 async function mwImages(chUrl) {
   const slug = String(chUrl).replace(/^[/]leer[/]/, "").replace(/[/]$/, "");
@@ -1949,6 +1999,7 @@ function msSlugDe(url) {
 
 // ------------------------------------------------ cifrado a mano
 // MD5, AES-256-CBC y la derivación OpenSSL EVP en JS puro: la lista
+
 // de capítulos se descifra dentro del plugin, sin pedirle nada al
 // entorno (verificado contra los vectores del propio estándar).
 
@@ -2449,6 +2500,7 @@ async function msCatalog(cat, page1) {
 
   const clave = "msCat:" + orden + ":" + page1;
   const inutil = msGalletaInutilFresca();
+
   const cache = getJson(clave, null);
   if (cache && Array.isArray(cache.items) && cache.items.length &&
       Date.now() - (cache.ts || 0) < 1800000 && (inutil || !getJson("msCookies", null))) {
@@ -2581,7 +2633,6 @@ function msMeta(html, slug) {
     pick(/<meta[^>]*content="([^"]*)"[^>]*name="description"/i);
   return { title: title || "Serie", poster: poster, overview: overview.slice(0, 600) };
 }
-
 
 // La serie completa: metadatos + capítulos (la lista cifrada). Si la
 // lista no se puede abrir, se devuelve el aviso honesto en vez de
@@ -2848,7 +2899,6 @@ async function medirImagenes(images, presupuesto) {
   return listas;
 }
 
-
 // ------------------------------------------------------------- interfaz
 
 function loadingTree(msg) {
@@ -2949,6 +2999,7 @@ async function homeTree() {
     try { recientes = mdCards(await mdJson(mdQuery("order[latestUploadedChapter]=desc", 0, 20)), 20); } catch (e) { log("MD home rec: " + e); }
   } else if (f.id === "inmanga") {
     // El catálogo popular sale del POST; si el POST no responde, la
+
     // portada misma de InManga (un GET, que sí funciona) trae
     // «Últimas actualizaciones» con sus enlaces.
     titPop = "Populares de InManga"; titPopEn = "Popular on InManga";
@@ -3247,6 +3298,9 @@ function detailTree(state) {
               labelText: isFav(d.url) ? "Quitar de favoritos" : "Añadir a favoritos",
               labelTextEn: isFav(d.url) ? "Remove favourite" : "Add favourite",
               onPressed: "fav" },
+            { type: "ElevatedButton", key: "colAddBtn", icon: "add",
+              labelText: "Añadir a colección", labelTextEn: "Add to collection",
+              onPressed: "colAdd" },
           ],
         },
       ].filter(Boolean) },
@@ -3446,6 +3500,7 @@ function readerTree(state) {
   const body = notaMs.concat(avisoMs).concat([
     cuerpo,
     { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
+
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
       { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
@@ -3752,6 +3807,10 @@ export async function screen(ev) {
     }
     if (route.name === "vincular") return vincularTree();
     if (route.name === "favs") return favsTree();
+    // v0.4.21 — las colecciones del corazón flotante.
+    if (route.name === "colecciones") return coleccionesTree();
+    if (route.name === "coleccion") return coleccionTree(String((route.params && route.params.nombre) || ""));
+    if (route.name === "colElegir") return colElegirTree(state);
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
     return errorTree((e && e.userMessage) ||
@@ -3766,6 +3825,11 @@ export async function screen(ev) {
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },
       ] },
     body: body,
+    // v0.4.21 — el corazón flotante de las colecciones: discreto (sin
+    // etiqueta), en el lado derecho, siempre a un toque del Inicio.
+    floatingActionButton: { type: "FloatingActionButton", key: "fabCols", icon: "heart",
+      tooltip: "Mis colecciones", tooltipEn: "My collections",
+      onPressed: { event: "colsOpen" } },
   };
 }
 
@@ -3794,6 +3858,53 @@ export async function screenEvent(ev) {
     }
     if (name === "goSearch") return { route: { push: "search" } };
     if (name === "favsOpen") return { route: { push: "favs" } };
+    // v0.4.21 — el corazón: abrir colecciones, crearlas, borrarlas,
+    // meter y sacar series, y elegirla desde la página de una serie.
+    if (name === "colsOpen") return { route: { push: "colecciones" } };
+    if (name === "colAbrir") {
+      const nom = String(ev.arg || "");
+      if (!cols()[nom]) return { toast: "Esa colección ya no existe." };
+      return { route: { push: "coleccion", params: { nombre: nom } } };
+    }
+    if (name === "colNueva") {
+      const r = colCrear((ev.value && ev.value.colNom) || "");
+      if (r.err) return { toast: r.err };
+      return { state: { colTk: Date.now() },
+        toast: r.ok ? "✓ Colección «" + r.nom + "» creada." : "El almacén del plugin está lleno: no pude guardarla." };
+    }
+    if (name === "colDel") {
+      const nom = String(ev.arg || "");
+      if (!colBorrar(nom)) return { toast: "No encontré esa colección." };
+      return { state: { colTk: Date.now() }, toast: "Colección «" + nom + "» borrada." };
+    }
+    if (name === "colAdd") {
+      const d = state.detail;
+      if (!d || !d.url) return { toast: "Abre una serie primero." };
+      return { state: { colPend: { url: d.url, title: (d.meta && d.meta.title) || "",
+          poster: (d.meta && d.meta.poster) || "" } },
+        route: { push: "colElegir" } };
+    }
+    if (name === "colAddA") {
+      const nom = String(ev.arg || "");
+      const pend = state.colPend;
+      if (!pend || !cols()[nom]) return { toast: "No encontré esa colección." };
+      if (colEn(nom, pend.url)) {
+        if (!colSacar(nom, pend.url)) return { toast: "El almacén del plugin está lleno." };
+        return { route: { pop: true }, toast: "Quitada de «" + nom + "»." };
+      }
+      if (!colMeter(nom, pend)) return { toast: "El almacén del plugin está lleno: no pude guardarla." };
+      return { route: { pop: true },
+        toast: "✓ «" + String(pend.title || "Serie").slice(0, 40) + "» añadida a «" + nom + "»." };
+    }
+    if (name === "colNuevaDesde") {
+      const r = colCrear((ev.value && ev.value.colNom2) || "");
+      if (r.err) return { toast: r.err };
+      const pend = state.colPend;
+      if (!pend) return { route: { pop: true }, toast: "✓ Colección «" + r.nom + "» creada." };
+      if (!r.ok || !colMeter(r.nom, pend)) return { toast: "El almacén del plugin está lleno: no pude guardarla." };
+      return { route: { pop: true },
+        toast: "✓ Colección «" + r.nom + "» creada con «" + String(pend.title || "Serie").slice(0, 40) + "» dentro." };
+    }
     // v0.4.18 — el botón de rescate: la PERSONA toca (contexto legal
     // para la ventanita) y esta abre EL CATÁLOGO BLOQUEADO, no la
     // portada (que no pide revisión ninguna). Dos caminos de salida:
@@ -3890,6 +4001,7 @@ export async function screenEvent(ev) {
       }
     }
     if (name === "alOrder") {
+
       const v = String(ev.value || "");
       const a = getJson("al", null) || {};
       try {
@@ -4302,6 +4414,146 @@ export async function screenEvent(ev) {
 }
 
 // ---------------------------------------------------------------- v0.4.4
+// ------------------------------------------- colecciones (v0.4.21)
+// La pantalla del corazón: las listas con nombre de la persona, cada
+// una con su cuenta, y el formulario para estrenar una. Tocar una
+// abre su sección; el botoncito de borrar solo borra la LISTA (las
+// series quedan donde estén: favoritos, historial, la fuente).
+function coleccionesTree() {
+  const cs = cols();
+  const nombres = Object.keys(cs).sort(function (a, b) { return (cs[b].ts || 0) - (cs[a].ts || 0); });
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barCols", title: "Mis colecciones", titleEn: "My collections",
+      leading: { type: "IconButton", key: "backFromCols", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "colsBody", children: [{ type: "Column", children: [
+      { type: "Form", key: "colNueva", onSubmitted: "colNueva", gap: 8, padding: 16, children: [
+        { type: "TextField", key: "colNom",
+          labelText: "Nueva colección", labelTextEn: "New collection",
+          hintText: "P. ej. Mangas de terror", hintEn: "e.g. Horror manga",
+          required: true },
+        { type: "ElevatedButton", icon: "add",
+          labelText: "Crear colección", labelTextEn: "Create collection", submit: true },
+      ] },
+      nombres.length
+        ? { type: "Column", gap: 8, padding: 16, children: nombres.map(function (n) {
+            const items = cs[n].items || {};
+            const cuantos = Object.keys(items).length;
+            return { type: "Card", key: "colCard-" + serieKey("", n), flush: true,
+              onTap: { event: "colAbrir", arg: n },
+              children: [{ type: "Row", padding: 16, gap: 12, children: [
+                { type: "Icon", name: "list", color: "muted" },
+                { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+                  { type: "Text", text: n, textEn: n, style: "h4" },
+                  { type: "Text", text: cuantos + (cuantos === 1 ? " manga" : " mangas"),
+                    textEn: cuantos + (cuantos === 1 ? " manga" : " mangas"),
+                    style: "caption", color: "muted" },
+                ] },
+                { type: "IconButton", key: "colDel-" + serieKey("", n), icon: "delete",
+                  labelText: "Borrar colección", labelTextEn: "Delete collection",
+                  onPressed: { event: "colDel", arg: n } },
+              ] }] };
+          }) }
+        : { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
+            { type: "emptyState", icon: "heart", title: "Sin colecciones todavía.", titleEn: "No collections yet." },
+            { type: "Text",
+              text: "Crea una con nombre («Mis mangas de terror», «Los que releo»…) y añádeles series desde su página con «Añadir a colección». El corazón del Inicio siempre te trae aquí.",
+              textEn: "Create one with a name and add series from their page with «Add to collection». The home heart always brings you here.",
+              style: "caption", color: "muted" },
+          ] },
+    ] }] },
+  };
+}
+
+// Una colección abierta: su nombre arriba y sus series en cuadrícula
+// (las mismas tarjetas de los favoritos: portada + título + fuente).
+function coleccionTree(nombre) {
+  const cs = cols();
+  const c = cs[nombre];
+  const items = c && c.items
+    ? Object.keys(c.items).map(function (k) { return c.items[k]; })
+      .sort(function (a, b) { return (b.ts || 0) - (a.ts || 0); })
+    : [];
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barCol", title: nombre, titleEn: nombre,
+      leading: { type: "IconButton", key: "backFromCol", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "colBody", children: [{ type: "Column", children: [
+      { type: "Text", text: items.length + (items.length === 1 ? " manga en «" : " mangas en «") + nombre + "»",
+        textEn: items.length + (items.length === 1 ? " manga in «" : " mangas in «") + nombre + "»",
+        style: "caption", color: "muted", padding: 16 },
+      items.length
+        ? { type: "ListView", key: "gridCol", columns: { compact: 3, medium: 4, expanded: 6 },
+            items: items.map(function (it) { return favCard(it); }) }
+        : { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
+            { type: "emptyState", icon: "list", title: "Esta colección está vacía.", titleEn: "This collection is empty." },
+            { type: "Text",
+              text: "Abre una serie y toca «Añadir a colección» para meterla en «" + nombre + "».",
+              textEn: "Open a series and tap «Add to collection» to put it in «" + nombre + "».",
+              style: "caption", color: "muted" },
+          ] },
+    ] }] },
+  };
+}
+
+// Elegir colección para una serie (desde su página): tocar una la mete
+// o la saca si ya estaba; el formulario estrena una nueva con la serie
+
+// dentro. La serie pendiente llega en el estado (colPend).
+function colElegirTree(state) {
+  const pend = (state && state.colPend) || null;
+  const cs = cols();
+  const nombres = Object.keys(cs).sort(function (a, b) { return (cs[b].ts || 0) - (cs[a].ts || 0); });
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barColE",
+      title: "«" + String((pend && pend.title) || "Serie").slice(0, 30) + "»",
+      titleEn: "«" + String((pend && pend.title) || "Series").slice(0, 30) + "»",
+      leading: { type: "IconButton", key: "backFromColE", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "colEBody", children: [{ type: "Column", children: [
+      pend
+        ? { type: "Text", text: "¿A cuál colección?", textEn: "Which collection?",
+            style: "h3", padding: 16 }
+        : { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
+            { type: "Text", text: "La serie pendiente se perdió (pasó un rato): vuelve a la serie y toca «Añadir a colección».",
+              textEn: "The pending series was lost (time passed): go back to the series and tap «Add to collection».",
+              style: "caption", color: "muted" },
+          ] },
+      { type: "Form", key: "colNuevaD", onSubmitted: "colNuevaDesde", gap: 8, padding: 16, children: [
+        { type: "TextField", key: "colNom2",
+          labelText: "Colección nueva", labelTextEn: "New collection",
+          hintText: "P. ej. Mangas de terror", hintEn: "e.g. Horror manga",
+          required: true },
+        { type: "ElevatedButton", icon: "add",
+          labelText: "Crear y añadir aquí", labelTextEn: "Create and add here", submit: true },
+      ] },
+      nombres.length
+        ? { type: "Column", gap: 8, padding: 16, children: nombres.map(function (n) {
+            const dentro = pend ? colEn(n, pend.url) : false;
+            return { type: "Card", key: "colE-" + serieKey("", n), flush: true,
+              onTap: { event: "colAddA", arg: n },
+              children: [{ type: "Row", padding: 16, gap: 12, children: [
+                { type: "Icon", name: dentro ? "check" : "heart", color: "muted" },
+                { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+                  { type: "Text", text: n, textEn: n, style: "h4" },
+                  { type: "Text",
+                    text: dentro ? "Ya está dentro: tocar la quita" : "Tocar la añade",
+                    textEn: dentro ? "Already inside: tapping removes it" : "Tap to add it",
+                    style: "caption", color: "muted" },
+                ] },
+              ] }] };
+          }) }
+        : null,
+    ].filter(Boolean) }] },
+  };
+}
+
 // Mis favoritos: cuadrícula con el nombre de la fuente debajo (antes
 // eran una tira horizontal apretada) y pantalla completa para verlos
 // todos cuando son más de 12.
@@ -4751,6 +5003,7 @@ function avisarAnitrack(d, ch, fSer) {
 
 // Abre en el lector el capítulo idx de la ventana actual del detalle:
 // descarga las páginas, las mide y guarda el historial con su índice
+
 // ABSOLUTO (capStart + idx) para que "Continuar" y las marcas ✓
 // funcionen sin importar desde qué ventana se leyó.
 async function abrirCapitulo(d, idx, conRuta) {
@@ -4897,11 +5150,4 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
-
-
-
-
-
-
-
 
