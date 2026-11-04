@@ -78,3 +78,8 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 - Agradecimientos a las siete fuentes; este plugin solo lee lo que ellas publican.
 
 *Los sitios de lectura cambian con el tiempo. Si una fuente falla, revisa el Registro y repórtalo: casi siempre tiene arreglo.*
+
+
+## Licencia
+
+Código bajo la **GPL-3.0**: puedes usarlo y modificarlo, pero tu versión debe seguir abierta y con crédito. © 2026 **Susejing** (Bogotá, Colombia). El texto completo está en el archivo [LICENSE](LICENSE).

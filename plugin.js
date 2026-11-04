@@ -1,3 +1,19 @@
+// MangaTrack — lector de mangas multi-fuente para Kino · github.com/Susejing/kino-mangatrack
+// Copyright (C) 2026 Susejing
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
 // v0.4.32 — presentación: icono propio del plugin (icon.png, PNG
 // cuadrado en el repo), color de acento naranja e icono «bookmark» en
@@ -6453,6 +6469,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
