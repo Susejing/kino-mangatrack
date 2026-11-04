@@ -1,4 +1,10 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.32 — presentación: icono propio del plugin (icon.png, PNG
+// cuadrado en el repo), color de acento naranja e icono «bookmark» en
+// la entrada del menú, y un README.md bien detallado en el repo (qué
+// es, cómo se instala, cómo se usa, permisos y límites honestos). El
+// código no cambia: solo sube el número para que el teléfono reciba
+// el icono al actualizar.
 // v0.4.31 — el reporte del teléfono tras la 0.4.30 lo dijo claro: el
 // muro de Mangas.in YA SIRVE las páginas con presentación (la sonda
 // del Registro: «al desnudo 403, con presentación 200») y el lector
@@ -290,7 +296,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.31";
+const VERSION = "0.4.32";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -6447,6 +6453,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
