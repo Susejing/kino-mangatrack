@@ -1,4 +1,19 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.30 — la gran news: el LECTOR INTEGRADO ya puede dibujar los
+// capítulos de ManhwaWeb y Mangas.in. La mejora del pintor de Kino
+// (0.9.82: las Image aceptan datos incrustados de hasta 200.000
+// caracteres) que ya pintaba las portadas de ManhwaWeb se aplica ahora
+// a las PÁGINAS: cada página se baja CON presentación (Referer+UA, la
+// receta de scancore), se convierte a datos y se guarda en el almacén
+// («pgd:», 16 MiB con storageLarge); el lector las dibuja desde ahí,
+// en tira o por páginas, con su zoom de siempre. Como un capítulo
+// entero no cabe de un viaje (20 s por evento), se baja por tandas: al
+// abrir salen las primeras 6 y las demás llegan solas al acercarse al
+// final (o con el botón «Bajar más páginas»). La página que el muro
+// niega queda con su aviso honrado en su sitio y «Leer en ventanita»
+// sigue ahí como siempre. Las PORTADAS DE MANGAS.IN reciben la misma
+// receta que las de ManhwaWeb (bajar con presentación, convertir,
+// decorar al dibujar): Inicio, buscador, catálogo, rieles y detalle.
 // v0.4.29 — dos reportes de la persona. (1) «Ver más» faltaba en las
 // secciones chicas de LeerCapitulo y LectorXd: la tarjetita salía
 // solo con 10 series o más y muchas secciones traen menos; ahora sale
@@ -257,7 +272,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.29";
+const VERSION = "0.4.30";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -795,34 +810,78 @@ async function mwVentanaLeer(ch) {
 // siempre) — una portada nunca rompe una pantalla.
 const MW_IMG_MAX = 140000; // bytes de imagen; en base64 cabe bajo el tope del Image
 
-async function mwImgData(url) {
-  const u = String(url || "");
-  if (!u || u.indexOf("data:") === 0) return u || null;
-  const ck = "dimg:" + u;
+// v0.4.30 — LA RECETA GENÉRICA de las imágenes con muro: bajar CON
+// presentación, validar, convertir a datos y guardar en el almacén.
+// «etiqueta» nombra la línea del Registro; «cajon» elige el cajón
+// («dimg:» portadas, «pgd:» páginas de capítulo). Devuelve
+// { data, w, h } (las dimensiones salen de los mismos bytes, sin
+// peticiones extra) o null; nunca lanza.
+async function muroBaja(u, headers, etiqueta, cajon) {
+  const ck = (cajon || "dimg:") + u;
   const hit = getJson(ck, null);
-  if (hit && typeof hit === "string") return hit;
+  if (hit && typeof hit === "string") return { data: hit, w: 0, h: 0 };
   try {
     const r = await kino.fetch(u, { maxBytes: MW_IMG_MAX, timeoutMs: 10000,
-      headers: { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
-        "User-Agent": UA_MOVIL, Referer: MW_BASE + "/" } });
-    if (!r.ok) { log("MW portada HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + ")"); return null; }
-    if (r.truncated) { log("MW portada muy grande: no se convierte"); return null; }
+      headers: headers });
+    if (!r.ok) { log(etiqueta + " HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + ")"); return null; }
+    if (r.truncated) { log(etiqueta + " muy grande: no se convierte"); return null; }
     const ct = String((r.headers && r.headers["content-type"]) || "").toLowerCase();
     const m = ct.match(/image[/](png|jpe?g|webp|gif)/);
-    if (!m) { log("MW portada con tipo raro: " + ct.slice(0, 40)); return null; }
+    if (!m) { log(etiqueta + " con tipo raro: " + ct.slice(0, 40)); return null; }
     const b64 = r.base64();
     if (!b64 || b64.length < 100) return null;
     const data = "data:image/" + (m[1] === "jpg" ? "jpeg" : m[1]) + ";base64," + b64;
-    if (data.length > 199000) { log("MW portada demasiado grande para el Image"); return null; }
-    if (!setJsonCache(ck, data)) log("MW portada sin guardar: almacén lleno");
-    return data;
+    if (data.length > 199000) { log(etiqueta + " demasiado grande para el Image"); return null; }
+    if (!setJsonCache(ck, data)) log(etiqueta + " sin guardar: almacén lleno");
+    let w = 0, h = 0;
+    try {
+      const d = dimsDeBytes(deB64(b64));
+      if (d && d.w > 0 && d.h > 0) { w = d.w; h = d.h; }
+    } catch (e) {}
+    return { data: data, w: w, h: h };
   } catch (e) {
-    log("MW portada no bajó: " + ((e && e.message) || e));
+    log(etiqueta + " no bajó: " + ((e && e.message) || e));
     return null;
   }
 }
 
-// Baja (si hace falta) las primeras «n» portadas de una lista MW al
+// La presentación de cada casa: la de ManhwaWeb es fija; la de
+// Mangas.in viaja con el disfraz que ganó su galleta (si ya se ganó) y
+// la galleta misma, como hacen sus otras apps.
+function muroHeadersMW() {
+  return { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+    "User-Agent": UA_MOVIL, Referer: MW_BASE + "/" };
+}
+
+function muroHeadersMS() {
+  const h = { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+    "User-Agent": getJson("msUA", "") || UA_MOVIL, Referer: MS_BASE + "/" };
+  const g = getJson("msCookies", null);
+  if (g && typeof g === "object") {
+    const par = [];
+    for (const k in g) if (g[k]) par.push(k + "=" + g[k]);
+    if (par.length) h.Cookie = par.join("; ");
+  }
+  return h;
+}
+
+async function mwImgData(url) {
+  const u = String(url || "");
+  if (!u || u.indexOf("data:") === 0) return u || null;
+  const r = await muroBaja(u, muroHeadersMW(), "MW portada", "dimg:");
+  return r ? r.data : null;
+}
+
+// v0.4.30 — Mangas.in con la misma receta que ManhwaWeb: sus portadas
+// también se bajan con presentación y se guardan convertidas.
+async function msImgData(url) {
+  const u = String(url || "");
+  if (!u || u.indexOf("data:") === 0) return u || null;
+  const r = await muroBaja(u, muroHeadersMS(), "MS portada", "dimg:");
+  return r ? r.data : null;
+}
+
+// Baja (si hace falta) las primeras «n» portadas de una lista al
 // almacén; no toca la lista, solo llena la caché para el dibujado.
 async function mwPrecarga(items, n) {
   const arr = Array.isArray(items) ? items : [];
@@ -831,25 +890,145 @@ async function mwPrecarga(items, n) {
   }));
 }
 
-// La copia local de una portada MW si ya está en el almacén (lectura
-// sin red para el dibujado); si no hay, null.
-function mwDataDe(url) {
+async function msPrecarga(items, n) {
+  const arr = Array.isArray(items) ? items : [];
+  await Promise.all(arr.slice(0, n || 8).map(function (it) {
+    return msImgData(it && it.poster).catch(function () { return null; });
+  }));
+}
+
+// La copia local de una imagen si ya está en el almacén (lectura sin
+// red para el dibujado); si no hay, null. Vale para cualquier casa:
+// la clave es la propia dirección de la imagen.
+function imgLocalDe(url) {
   const u = String(url || "");
   if (!u || u.indexOf("data:") === 0) return u || null;
   const hit = getJson("dimg:" + u, null);
   return hit && typeof hit === "string" ? hit : null;
 }
 
-// Cambia las portadas de las tarjetas MW por sus copias locales ya en
-// el almacén (las tarjetas de otras fuentes pasan igualitas).
-function mwDecora(items) {
+// Cambia las portadas de las tarjetas de las casas con muro por sus
+// copias locales ya en el almacén (las tarjetas de otras fuentes
+// pasan igualitas).
+function decoraMuros(items) {
   const arr = Array.isArray(items) ? items : [];
   const out = arr.map(function (it) {
-    if (!it || !it.poster || String(it.url || "").indexOf("/mw/") !== 0) return it;
-    const d = mwDataDe(it.poster);
+    if (!it || !it.poster) return it;
+    const u = String(it.url || "");
+    if (u.indexOf("/mw/") !== 0 && u.indexOf("/ms/") !== 0) return it;
+    const d = imgLocalDe(it.poster);
     return d ? Object.assign({}, it, { poster: d }) : it;
   });
   return out;
+}
+
+// v0.4.30 — LAS PÁGINAS de los capítulos con muro, con la misma
+// receta: bajadas con presentación, convertidas y guardadas en
+// «pgd:». Un capítulo entero no cabe de un viaje (20 s por evento),
+// así que se convierte POR TANDAS: al abrir salen las primeras y las
+// demás llegan solas al acercarse la persona al final (o con el
+// botón «Bajar más páginas»). La que el muro niega queda con su
+// hueco honrado — y se reintenta sola si la persona vuelve a ella.
+const MURO_PAG_BATCH = 6; // páginas por tanda (6 en vuelo, 60 peticiones por evento)
+const PGD_TOPE = 70;      // páginas guardadas por capítulo (16 MiB entre todas)
+
+// La copia local de una PÁGINA convertida, si ya está en el almacén.
+function pgdDe(url) {
+  const u = String(url || "");
+  if (!u || u.indexOf("data:") === 0) return u || null;
+  const hit = getJson("pgd:" + u, null);
+  return hit && typeof hit === "string" ? hit : null;
+}
+
+// Al abrir un capítulo con muro, las páginas de OTROS capítulos se
+// van del almacén (las portadas «dimg:» se quedan: pequeñas y útiles).
+function muroLimpiaPaginas(images) {
+  try {
+    const set = {};
+    const arr = Array.isArray(images) ? images : [];
+    for (let i = 0; i < arr.length; i++) set["pgd:" + String(arr[i] && arr[i].url)] = 1;
+    const idx = cacheIdx();
+    let fuera = 0;
+    for (const k in idx) {
+      if (k.indexOf("pgd:") === 0 && !set[k]) { borrarClave(k); fuera++; }
+    }
+    if (fuera) log("muro: " + fuera + " páginas de otros capítulos fuera del almacén");
+  } catch (e) { log("muro limpia: " + ((e && e.message) || e)); }
+}
+
+// Convierte la tanda de páginas [desde, desde+cuantas) de un capítulo
+// con muro: baja las que no tienen copia local (6 en vuelo), guarda las
+// convertidas en «pgd:» y mide sus dimensiones de los mismos bytes.
+// MUTA images (w/h de las convertidas). Devuelve { conv, neg, med }.
+async function muroConvierte(images, desde, cuantas, pref) {
+  const arr = Array.isArray(images) ? images : [];
+  const hdrs = pref === "MS" ? muroHeadersMS() : muroHeadersMW();
+  const et = pref === "MS" ? "MS" : "MW";
+  const fin = Math.min(arr.length, Math.max(0, desde | 0) + (cuantas || MURO_PAG_BATCH));
+  const out = { conv: 0, nuevas: 0, neg: 0, med: 0, negIdx: [] };
+  const lote = [];
+  // El tope manda sobre el capítulo ENTERO (las que ya hay en el
+  // almacén cuentan): un capítulo kilométrico no cabe de golpe.
+  let hay = 0;
+  for (let i = 0; i < arr.length; i++) if (arr[i] && arr[i].url && pgdDe(arr[i].url)) hay++;
+  for (let i = Math.max(0, desde | 0); i < fin; i++) {
+    const im = arr[i];
+    if (!im || !im.url) continue;
+    if (pgdDe(im.url)) { hay++; out.conv++; if (im.w > 0 && im.h > 0) out.med++; continue; }
+    if (hay + lote.length >= PGD_TOPE) break;
+    lote.push(i);
+  }
+  for (let g = 0; g < lote.length; g += 6) {
+    const sub = lote.slice(g, g + 6);
+    const rs = await Promise.all(sub.map(function (ix) {
+      return muroBaja(String(arr[ix].url), hdrs, et + " página " + (ix + 1), "pgd:")
+        .catch(function () { return null; });
+    }));
+    for (let j = 0; j < sub.length; j++) {
+      const r = rs[j];
+      const ix = sub[j];
+      if (r && r.data) {
+        out.conv++; out.nuevas++;
+        if (r.w > 0 && r.h > 0) { arr[ix].w = r.w; arr[ix].h = r.h; out.med++; }
+      } else { out.neg++; out.negIdx.push(ix); }
+    }
+  }
+  log("muro: tanda " + out.conv + " convertidas, " + out.neg + " negadas");
+  return out;
+}
+
+// El registro de las páginas que el muro negó (índices), unido y
+// ordenado — vive en reader.mal y viaja en el estado (chico).
+function muroJuntaMal(viejo, nuevos) {
+  const s = {};
+  (Array.isArray(viejo) ? viejo : []).forEach(function (i) { s[i] = 1; });
+  (nuevos || []).forEach(function (i) { s[i] = 1; });
+  return Object.keys(s).map(Number).sort(function (a, b) { return a - b; });
+}
+
+// La carga automática de los capítulos con muro (pgChanged y
+// tiraScrolled): convierte la tanda [desde, +cuantas) SOLO si el
+// capítulo es de una casa con muro y hay páginas pendientes en la
+// tanda; devuelve el parche de estado para que Kino redibuje, o null
+// si no hay nada nuevo que dibujar (nada de red si ya está al día).
+async function muroAutoLote(state, desde, cuantas) {
+  const r = state.reader;
+  if (!r || !Array.isArray(r.images) || !r.images.length) return null;
+  const d = state.detail;
+  const fSer = d ? fuenteDeUrl(d.url) : null;
+  const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "manhwaweb" ? "MW" : null);
+  if (!pref) return null;
+  const desdeOk = Math.max(0, desde | 0);
+  if (desdeOk >= r.images.length) return null;
+  const cuantasOk = cuantas || MURO_PAG_BATCH;
+  const fin = Math.min(r.images.length, desdeOk + cuantasOk);
+  let pendientes = 0;
+  for (let i = desdeOk; i < fin; i++) if (!pgdDe(r.images[i].url)) pendientes++;
+  if (!pendientes) return null;
+  const st = await muroConvierte(r.images, desdeOk, cuantasOk, pref);
+  if (!st.conv && !st.neg) return null;
+  return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
+    pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(r.mal, st.negIdx) } } };
 }
 
 function log(msg) {
@@ -3488,6 +3667,11 @@ async function homeTree() {
       // puede pedir la siguiente.
       masRec = recientes.length > 0;
     } catch (e) { log("MS home rec: " + e); }
+    // v0.4.30 — las portadas de Mangas.in al almacén con la misma
+    // receta de ManhwaWeb (bajar con presentación, convertir); el
+    // dibujado las toma de ahí sin red.
+    try { await msPrecarga(populares, 8); await msPrecarga(recientes, 8); }
+    catch (e) { log("MS portadas home: " + ((e && e.message) || e)); }
   } else if (f.id === "manhwaweb") {
     // v0.4.28 — ManhwaWeb por su API: la biblioteca entera (orden de la
     // API) y las que están publicándose; ambas pagan páginas de verdad.
@@ -3636,11 +3820,12 @@ async function homeTree() {
   if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
     titEn: "Keep reading", items: hTodos, page: 1, mas: false, start: 0 });
   // v0.4.29 — ya están los rieles guardados con sus URLs cortas; para
-  // ESTE dibujado las portadas de ManhwaWeb se cambian por sus copias
-  // locales del almacén.
-  if (f.id === "manhwaweb") {
-    populares = mwDecora(populares);
-    recientes = mwDecora(recientes);
+  // ESTE dibujado las portadas de las casas con muro (ManhwaWeb y,
+  // desde la v0.4.30, Mangas.in) se cambian por sus copias locales
+  // del almacén.
+  if (f.id === "manhwaweb" || f.id === "mangasin") {
+    populares = decoraMuros(populares);
+    recientes = decoraMuros(recientes);
   }
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
@@ -3689,7 +3874,7 @@ function detailTree(state) {
     ] };
   }
   const cover = meta.poster
-    ? { type: "Image", url: mwDataDe(meta.poster) || meta.poster, width: { compact: 120, expanded: 160 },
+    ? { type: "Image", url: imgLocalDe(meta.poster) || meta.poster, width: { compact: 120, expanded: 160 },
         aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } }
     : { type: "Icon", name: "list" };
   const head = {
@@ -3868,9 +4053,25 @@ function readerTree(state) {
   // servidor de pruebas; el diagnóstico por hora dirá si desde el
   // teléfono es distinto).
   const esMw = d && d.url && d.url.indexOf("/mw/") === 0;
+  const esMuro = esMs || esMw;
+  // v0.4.30 — el lector con muro dibuja las páginas CONVERTIDAS (las
+  // copias locales «pgd:»: la receta de las portadas aplicada a las
+  // páginas). Las que aún no están muestran su hueco honrado y llegan
+  // solas al acercarse la persona al final (o con «Bajar más
+  // páginas»); la que el muro niega queda con su aviso en su sitio.
+  // La nota antigua solo sale cuando no hay NINGUNA convertida.
+  let convN = 0;
+  if (esMuro) for (let ci = 0; ci < r.images.length; ci++) if (pgdDe(r.images[ci].url)) convN++;
   const btnVentanaLeer = { type: "TextButton", key: "btnLeerVentana", labelText: "Leer en ventanita",
     labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
-  const notaMs = ((esMs || esMw) && medidas.length) ? [
+  const notaMuro = (esMuro && convN > 0) ? [
+    { type: "Text",
+      text: "Capítulo dibujado desde el almacén: " + convN + " de " + r.images.length
+        + " páginas bajadas con presentación y convertidas. Las demás llegan solas al acercarte al final (o con «Bajar más páginas»).",
+      textEn: "Chapter drawn from storage: " + convN + " of " + r.images.length + " pages downloaded and converted. The rest arrive as you approach the end.",
+      style: "caption", color: "muted", padding: { h: 12 } },
+  ] : [];
+  const notaMs = ((esMs || esMw) && medidas.length && !convN) ? [
     { type: "Column", padding: 12, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text",
         text: esMw
@@ -3881,7 +4082,7 @@ function readerTree(state) {
       Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaNota" }),
     ] },
   ] : [];
-  const avisoMs = ((esMs || esMw) && !medidas.length) ? [
+  const avisoMs = ((esMs || esMw) && !medidas.length && !convN) ? [
     { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text", text: "El sitio no entregó ninguna de las " + r.images.length + " páginas.",
         textEn: "The site served none of the " + r.images.length + " pages.", style: "h4" },
@@ -3910,9 +4111,40 @@ function readerTree(state) {
     // dedo, barra fina de progreso de Kino y zoom (pellizco) dentro de
     // cada página. La página en la que se quedó vive en
     // state.inputs.pgs y la guarda el evento pgChanged.
+    // v0.4.30 — con muro: cada página convertida se dibuja desde el
+    // almacén y la que no, con su hueco; el botón «Bajar más páginas»
+    // va de última página del pages. Muy atrás de la página vista las
+    // convertidas se dibujan como hueco para no inflar el árbol: al
+    // volver a ellas, el aviso de página las convierte desde el caché.
+    const maxPag = Math.min(r.images.length, 249);
+    const ventIni = esMuro ? Math.max(0, pg - 25) : 0;
+    const hijos = [];
+    for (let i = 0; i < maxPag; i++) {
+      const p = r.images[i];
+      const dat = esMuro && i >= ventIni ? pgdDe(p.url) : null;
+      hijos.push({ type: "SingleChildScrollView", key: "z" + i, zoom: true,
+        children: [dat
+          ? pageNodes({ url: dat, w: p.w, h: p.h }, i, ratioGuia, true)[0]
+          : (esMuro
+            ? { type: "Text", key: "np" + i, text: "Página " + (i + 1) + " sin bajar todavía — se baja sola al llegar a ella",
+                textEn: "Page " + (i + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 24 }
+            : pageNodes(p, i, ratioGuia, true)[0])] });
+    }
+    if (esMuro) {
+      let pendPg = 0;
+      for (let i = 0; i < maxPag; i++) if (!pgdDe(r.images[i].url)) pendPg++;
+      const restantes = Math.max(pendPg, r.images.length - maxPag);
+      if (restantes > 0) {
+        hijos.push({ type: "Column", key: "btnMasPag", padding: 24, gap: 8, crossAxisAlignment: "center", children: [
+          { type: "Text", text: restantes + " páginas por bajar", textEn: restantes + " pages to download",
+            color: "muted", style: "caption" },
+          { type: "ElevatedButton", key: "btnMuroCarga", icon: "download",
+            labelText: "Bajar más páginas", labelTextEn: "Download more pages", onPressed: "muroCarga" },
+        ] });
+      }
+    }
     cuerpo = { type: "pages", key: "pgs", flex: 1, progress: "bar", onPageChanged: "pgChanged",
-      children: r.images.map((p, i) => ({ type: "SingleChildScrollView", key: "z" + i, zoom: true,
-        children: pageNodes(p, i, ratioGuia, true) })) };
+      children: hijos };
   } else {
     // v0.4.23 — la tira avisa dónde se detiene la persona (onScroll,
     // 0..1) para que «Continuar» retome; y si el capítulo se reabrió
@@ -3922,21 +4154,57 @@ function readerTree(state) {
     const visibles = desde > 0 ? r.images.slice(desde) : r.images;
     const inicio = desde > 0 ? [{ type: "TextButton", key: "btnTiraInicio", icon: "refresh",
       labelText: "◀ Volver a la página 1", labelTextEn: "◀ Back to page 1", onPressed: "tiraReinicia" }] : [];
-    // Tira vertical de siempre: todas las páginas pegadas (gap 0) a
-    // ancho completo — fit "width" toma el ancho de la caja y el alto
-    // propio de la imagen — y zoom de pellizco en todo el capítulo.
+    // Tira vertical de siempre: las páginas pegadas (gap 0) a ancho
+    // completo — fit "width" toma el ancho de la caja y el alto propio
+    // de la imagen — y zoom de pellizco en todo el capítulo. Con muro,
+    // las convertidas se dibujan desde el almacén y las demás con su
+    // hueco honrado; tras 12 huecos seguidos la tira se corta y el
+    // resto baja con el botón (una tira kilométrica no puede revolver
+    // el tope de 600 nodos de Kino).
+    let nodos = [];
+    let pendSeguidas = 0;
+    let pendTotal = 0;
+    for (let i = 0; i < visibles.length; i++) {
+      const p = visibles[i];
+      const dat = esMuro ? pgdDe(p.url) : null;
+      if (esMuro && !dat) {
+        pendTotal++;
+        pendSeguidas++;
+        if (pendSeguidas > 12) break;
+        nodos.push({ type: "Text", key: "np" + (desde + i),
+          text: "Página " + (desde + i + 1) + " sin bajar todavía — toca «Bajar más páginas» abajo",
+          textEn: "Page " + (desde + i + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 12 });
+      } else {
+        pendSeguidas = 0;
+        nodos.push(pageNodes(dat ? { url: dat, w: p.w, h: p.h } : p, desde + i, ratioGuia)[0]);
+      }
+    }
+    const btnMasTira = (esMuro && pendTotal > 0) ? [
+      { type: "Column", key: "btnMasTira", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
+        { type: "ElevatedButton", key: "btnMuroCarga", icon: "download",
+          labelText: "Bajar más páginas (" + pendTotal + ")", labelTextEn: "Download more pages", onPressed: "muroCarga" },
+        { type: "Text", text: "Cada página se baja con presentación y se guarda convertida; el muro puede negar alguna.",
+          textEn: "Each page is downloaded with presentation and stored converted; the wall may deny some.",
+          style: "caption", color: "muted" },
+      ] },
+    ] : [];
     cuerpo = { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true, onScroll: "tiraScrolled",
       children: [{ type: "Column", gap: 0, crossAxisAlignment: "center",
-        children: inicio.concat(visibles.flatMap((p, i) => pageNodes(p, desde + i, ratioGuia))) }] };
+        children: inicio.concat(nodos).concat(btnMasTira) }] };
   }
-  const barraTexto = modo === "paginas"
+  const barraTexto = esMuro
+    ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length
+      + (modo === "paginas" ? " · pág " + (pg + 1) + " de " + r.images.length : "")
+      + " · " + convN + " de " + r.images.length + " páginas dibujadas · pellizca para acercar"
+      + (desde > 0 ? " · retomado en la pág " + (desde + 1) : "")
+    : modo === "paginas"
     ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · pág " + (pg + 1)
       + " de " + r.images.length + " · pellizca para acercar"
     : "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
       + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
       + (desde > 0 ? " · retomado en la pág " + (desde + 1) : "")
       + " · pellizca para acercar";
-  const body = notaMs.concat(avisoMs).concat([
+  const body = notaMuro.concat(notaMs).concat(avisoMs).concat([
     cuerpo,
     { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
 
@@ -3949,7 +4217,7 @@ function readerTree(state) {
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
         labelTextEn: hasNext ? "Next" : "Last chapter",
         icon: "arrow_forward", onPressed: "nextChap", enabled: hasNext },
-    ].concat(esMs ? [btnVentanaLeer] : []).concat(pagesDisponible() ? [
+    ].concat(esMuro ? [btnVentanaLeer] : []).concat(pagesDisponible() ? [
       { type: "TextButton", key: "btnModo", labelText: modo === "paginas" ? "Modo tira" : "Modo páginas",
         labelTextEn: modo === "paginas" ? "Strip mode" : "Page mode", onPressed: "modoLector" },
     ] : []).concat([
@@ -3993,7 +4261,7 @@ function searchTree(state) {
             submit: true },
         ] },
         results
-          ? (results.length ? gridOf(mwDecora(results), VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
+          ? (results.length ? gridOf(decoraMuros(results), VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
           : { type: "Text", text: "Escribe un título y pulsa Buscar.",
               textEn: "Type a title and press Search.", color: "muted", padding: 16 },
       ] },
@@ -4093,7 +4361,7 @@ function catalogTree(c) {
   const start = Math.max(0, parseInt(c.start, 10) || 0);
   // v0.4.29 — las portadas MW de la ventana visible se cambian por
   // sus copias locales (si ya están en el almacén).
-  const items = mwDecora(todos.slice(start, start + CAT_TOPE));
+  const items = decoraMuros(todos.slice(start, start + CAT_TOPE));
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
   const hayMas = c.mas === undefined || c.mas === null
     ? (todos.length < total)
@@ -4189,6 +4457,8 @@ async function cargarCatalogo(cat, page, conRuta) {
   } else if (f.id === "mangasin") {
     const r2 = await msCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
+    // v0.4.30 — portadas de la página nueva al almacén.
+    try { await msPrecarga(nuevos, 12); } catch (e) { log("MS portadas catálogo: " + ((e && e.message) || e)); }
   } else if (f.id === "manhwaweb") {
     const r2 = await mwCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
@@ -4269,7 +4539,7 @@ function rielTree(key) {
   const start = Math.max(0, parseInt(r.start, 10) || 0);
   // v0.4.29 — la ventana visible se dibuja con las portadas MW ya
   // convertidas (copias locales del almacén, sin red).
-  const items = mwDecora(todos.slice(start, start + RIEL_TOPE));
+  const items = decoraMuros(todos.slice(start, start + RIEL_TOPE));
   const cuantos = todos.length + (todos.length === 1 ? " serie" : " series") +
     (r.f === "hist" ? "" : " · " + f.nombre);
   return {
@@ -4332,6 +4602,8 @@ async function cargarRiel(key) {
         if (!ruta) throw kino.error("network", "sin páginas", {
           userMessage: "Esta lista de Mangas.in no se deja pasar de página desde el plugin." });
         nuevos = msCards(await getHtmlDe(f, ruta), 20);
+        // v0.4.30 — portadas de la página nueva al almacén.
+        try { await msPrecarga(nuevos, 8); } catch (e) { log("MS portadas riel: " + ((e && e.message) || e)); }
       } else if (f.id === "manhwaweb") {
         // La API de ManhwaWeb cuenta sus páginas desde 0.
         nuevos = mwCards(await mwGet(mwLib("", "", "", page - 1)), 20);
@@ -4344,6 +4616,8 @@ async function cargarRiel(key) {
         nuevos = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=" + page), 20);
       } else if (f.id === "mangasin") {
         nuevos = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=" + page)), 20);
+        // v0.4.30 — portadas de la página nueva al almacén.
+        try { await msPrecarga(nuevos, 8); } catch (e) { log("MS portadas riel: " + ((e && e.message) || e)); }
       } else if (f.id === "manhwaweb") {
         nuevos = mwCards(await mwGet(mwLib("publicandose", "", "", page - 1)), 20);
         try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
@@ -4950,7 +5224,7 @@ export async function screenEvent(ev) {
         return { toast: "Este capítulo no entra en el modo páginas (2 a 250 páginas): se queda en tira." };
       }
       const resp = { state: { reader: { images: r.images, idx: r.idx, tk: Date.now(),
-          pend: r.pend || 0, fallos: r.fallos || 0 } },
+          pend: r.pend || 0, fallos: r.fallos || 0, mal: r.mal } },
         toast: nuevo === "paginas" ? "Leyendo por páginas" : "Leyendo en tira" };
       if (nuevo === "paginas") {
         const d = state.detail;
@@ -4981,7 +5255,10 @@ export async function screenEvent(ev) {
       if (!ch) return null;
       const pg = parseInt(String(ev.value), 10);
       if (pg >= 0) pgGuardar(ch.url, pg);
-      return null;
+      // v0.4.30 — capítulo con muro: la tanda alrededor de la página
+      // que se está viendo se convierte SOLA (con reintento de las
+      // negadas de antes, si la persona vuelve a ellas).
+      return await muroAutoLote(state, Math.max(0, pg - 2), MURO_PAG_BATCH + 4);
     }
     if (name === "tiraScrolled") {
       // v0.4.23 — la tira avisa cada vez que la persona se detiene
@@ -4995,7 +5272,40 @@ export async function screenEvent(ev) {
       if (!ch) return null;
       const f = Number(ev.value);
       if (isFinite(f) && f >= 0) tiraGuardar(ch.url, f);
+      // v0.4.30 — cerca del final de lo dibujado, la tanda siguiente
+      // del capítulo con muro se convierte sola.
+      if (isFinite(f) && f >= 0.7) {
+        const hacia = Math.min(r.images.length - 1, Math.round(f * r.images.length));
+        return await muroAutoLote(state, hacia, MURO_PAG_BATCH + 2);
+      }
       return null;
+    }
+    if (name === "muroCarga") {
+      // v0.4.30 — «Bajar más páginas»: la siguiente tanda pendiente
+      // del capítulo con muro; si solo quedan las que el muro negó,
+      // se reintentan una vez más (a veces cede) y se dice honesto.
+      const r = state.reader;
+      if (!r || !Array.isArray(r.images) || !r.images.length) return null;
+      const d = state.detail;
+      const fSer = d ? fuenteDeUrl(d.url) : null;
+      const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "manhwaweb" ? "MW" : null);
+      if (!pref) return null;
+      const mal = Array.isArray(r.mal) ? r.mal : [];
+      let desde = -1;
+      for (let i = 0; i < r.images.length; i++) {
+        if (!pgdDe(r.images[i].url) && mal.indexOf(i) < 0) { desde = i; break; }
+      }
+      if (desde < 0) {
+        for (let i = 0; i < r.images.length; i++) {
+          if (!pgdDe(r.images[i].url)) { desde = i; break; }
+        }
+        if (desde < 0) return { toast: "Ya están bajadas todas las páginas posibles." };
+      }
+      const st = await muroConvierte(r.images, desde, 12, pref);
+      if (!st.conv && !st.neg) return { toast: "No se pudo bajar ninguna página ahora: prueba en un rato o usa «Leer en ventanita»." };
+      return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
+          pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(mal, st.negIdx) } },
+        toast: st.nuevas + " páginas más dibujadas" + (st.neg ? " · " + st.neg + " negadas por el muro" : "") };
     }
     if (name === "tiraReinicia") {
       // El botoncito «◀ Volver a la página 1» de la tira retomada: se
@@ -5003,7 +5313,7 @@ export async function screenEvent(ev) {
       const r = state.reader;
       if (!r) return null;
       return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
-          pend: r.pend || 0, fallos: r.fallos || 0, desde: 0 } },
+          pend: r.pend || 0, fallos: r.fallos || 0, mal: r.mal, desde: 0 } },
         toast: "Capítulo desde la página 1", toastEn: "Chapter from page 1" };
     }
     if (name === "search") {
@@ -5019,6 +5329,8 @@ export async function screenEvent(ev) {
         results = await moBuscar(q);
       } else if (f.id === "mangasin") {
         results = await msBuscar(q);
+        // v0.4.30 — sus portadas al almacén, igual que las de MW.
+        try { await msPrecarga(results, 8); } catch (e) { log("MS portadas búsqueda: " + ((e && e.message) || e)); }
       } else if (f.id === "manhwaweb") {
         results = await mwBuscar(q);
         // v0.4.29 — sus portadas al almacén; el dibujado las toma de
@@ -5859,9 +6171,29 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
   }
   if (!images.length) return null;
   images = images.map((x) => (typeof x === "string" ? { url: x } : x));
-  await medirImagenes(images, 9000);
-  const pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
-  log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+  // v0.4.30 — el gran cambio del lector: los capítulos con muro
+  // (ManhwaWeb y Mangas.in) ya no se miden con peticiones sueltas —
+  // sus PÁGINAS se bajan enteras con presentación y se guardan
+  // convertidas («pgd:»); las dimensiones salen de los mismos bytes.
+  // La primera tanda sale con el capítulo; las demás llegan solas al
+  // acercarse la persona al final (o con «Bajar más páginas»). Solo
+  // si el muro niega hasta la primera tanda se cae a la medición de
+  // siempre, para que la nota honrada sepa decir cuál fue el motivo.
+  const muro = fSer.id === "mangasin" ? "MS" : (fSer.id === "manhwaweb" ? "MW" : null);
+  let pend = 0;
+  let muroSt = null;
+  if (muro) {
+    muroLimpiaPaginas(images);
+    const st = await muroConvierte(images, 0, MURO_PAG_BATCH, muro);
+    muroSt = st;
+    if (!st.conv) await medirImagenes(images, 6000);
+    pend = 0; // sin temporizador de medición: ahora se convierte, no se mide
+    log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + st.conv + " dibujables, " + st.neg + " negadas");
+  } else {
+    await medirImagenes(images, 9000);
+    pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
+    log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + pend + " sin medir");
+  }
   // v0.4.19 — una vez por hora, el diagnóstico que separa las causas del
   // lector en blanco: ¿el sitio de Mangas.in sirve sus imágenes a un
   // pedido SIN presentarse (como el pintor de pantalla de Kino)? Lo que
@@ -5889,6 +6221,10 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
   setJson("hist", h);
   syncPushHist();
   const reader = { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 };
+  // v0.4.30 — el registro de las páginas que el muro negó (índices
+  // chicos): el botón «Bajar más páginas» distingue «todas listas» de
+  // «solo quedan las negadas».
+  if (muroSt && muroSt.negIdx && muroSt.negIdx.length) reader.mal = muroSt.negIdx;
   // v0.4.23 — tira vertical: «Continuar» reabre el capítulo por la
   // página en la que ibas (la fracción la fue guardando onScroll). A la
   // tira no se le puede ordenar que se desplace a un punto guardado
@@ -5962,6 +6298,9 @@ async function cargarSerie(url, conRuta) {
     const s = await msSerie(url);
     if (s.aviso) return { toast: s.aviso };
     meta = s.meta;
+    // v0.4.30 — la portada de la serie al almacén (el detalle la
+    // dibuja desde ahí; el estado viaja con la URL corta).
+    try { await msImgData(meta.poster); } catch (e) { log("MS portada serie: " + ((e && e.message) || e)); }
     meta.totalCaps = s.chapters.length;
     // msSerie ya entrega los capítulos del 1 al más nuevo.
     full = s.chapters.slice(0, TOPE_CAPS_SERIE);
@@ -6017,6 +6356,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
