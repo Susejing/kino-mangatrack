@@ -37,6 +37,12 @@
 // el sitio contesta con su revisión (403) al catálogo por visitas,
 // las mismas tarjetas se sirven del catálogo público de siempre
 // (/manga-list, la página enlazada en el propio sitio).
+// v0.4.22 — el Inicio sin el viejo riel de «Mis favoritos»: petición
+// de la persona, que ya tiene el corazón de las colecciones y 17
+// favoritos que solo ocupaban espacio en la portada. Los favoritos
+// NO desaparecen: la estrella de cada serie sigue igual y su lista
+// entera vive ahora dentro del corazón (primera tarjeta), para no
+// perderlos de vista nunca.
 // v0.4.21 — el corazón de las colecciones: listas con nombre que la
 // persona se crea («Mis mangas de terror», «Los que releo»…) y un
 // corazoncito flotante en el Inicio (lado derecho) que las lista.
@@ -152,7 +158,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.21";
+const VERSION = "0.4.22";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -492,6 +498,7 @@ function msGalletaInutilFresca() {
 // v0.4.19 — Una pregunta al sitio, una vez por hora: ¿sus imágenes se
 // sirven a un pedido SIN presentarse (sin Referer ni disfraz)? El pintor
 // de pantalla de Kino no puede presentarse ante el sitio y las páginas
+
 // del lector salen en blanco aunque el plugin las descargue y mida
 // perfectamente. Esta prueba separa «el sitio niega la imagen al pintor»
 // de cualquier otra causa — lo que decida el Registro irá al reporte.
@@ -992,6 +999,7 @@ function pgGuardar(chUrl, pg) {
 function favs() { return getJson("favs", []); }
 
 // ------------------------------------------------ colecciones (v0.4.21)
+
 // Cada colección es una lista con nombre hecha por la persona; guarda
 // series completas (título, portada, dirección) en el almacén local.
 // El corazón flotante del Inicio abre la lista de colecciones; tocar
@@ -1492,6 +1500,7 @@ function imCards(html, max) {
 
 async function imBuscar(q) {
   return imCards(await imPostForm("/manga/getMangasConsultResult", q, 1, 0, 30), 30);
+
 }
 
 async function imSerie(url) {
@@ -2492,6 +2501,7 @@ async function msBuscar(q) {
 async function msCatalog(cat, page1) {
   const f = fuentePorId("mangasin");
   const orden = (cat && cat.order) === "name" ? "name" : "views";
+
   // v0.4.19 — el catálogo rescatado en la ventanita se guarda 30 min:
   // si las listas siguen cerradas, la próxima entrada al catálogo sale
   // del almacén, sin repetir intentos ni abrir otra ventanita. Y si la
@@ -3154,21 +3164,10 @@ async function homeTree() {
   const vr = {};
   recientes = recientes.filter((x) => (!vr[x.url] && (vr[x.url] = 1)));
   if (!populares.length && !recientes.length && !mixtas.length) mixtas = cardsDe(f, html, 40);
-  const mf = favs();
-  // v0.4.4 — favoritos en cuadrícula como el catálogo (antes: tira
-  // horizontal apretada), con el nombre de la fuente debajo y botón
-  // para verlos todos cuando son más de 12.
-  const railFavs = mf.length ? [
-    { type: "Text", text: "Mis favoritos (" + mf.length + ")",
-      textEn: "My favourites (" + mf.length + ")", style: "h3", padding: 16 },
-    { type: "ListView", key: "gridFavs", columns: { compact: 3, medium: 4, expanded: 6 },
-      items: mf.slice(0, 12).map(function (it) { return favCard(it); }) },
-    mf.length > 12
-      ? { type: "ElevatedButton", key: "favsTodos", icon: "expand_more",
-          labelText: "Ver todos los favoritos (" + mf.length + ")",
-          labelTextEn: "See all favourites (" + mf.length + ")", onPressed: "favsOpen" }
-      : null,
-  ].filter(Boolean) : [];
+  // v0.4.22 — el riel de «Mis favoritos» se retira del Inicio
+  // (petición de la persona: con las colecciones del corazón ya no
+  // hace falta aquí; su lista entera está en la pantalla del
+  // corazón, como primera tarjeta).
   const hh = hist();
   const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
       poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
@@ -3230,7 +3229,6 @@ async function homeTree() {
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
-    .concat(railFavs)
     .concat(gridSeries)
     .concat(catalogo) };
 }
@@ -3504,6 +3502,7 @@ function readerTree(state) {
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
       { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
+
         value: String(idx), onChanged: "jumpChap",
         options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
@@ -4004,6 +4003,7 @@ export async function screenEvent(ev) {
 
       const v = String(ev.value || "");
       const a = getJson("al", null) || {};
+
       try {
         const r = await alBuscar(a.q || "", 1, v, false, false);
         if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar el orden." };
@@ -4421,6 +4421,20 @@ export async function screenEvent(ev) {
 // series quedan donde estén: favoritos, historial, la fuente).
 function coleccionesTree() {
   const cs = cols();
+  const mf = favs();
+  // v0.4.22 — los favoritos retirados del Inicio viven aquí: primera
+  // tarjeta fija, con su cuenta y un toque abre la lista de siempre.
+  const favEntry = mf.length ? { type: "Card", key: "favEntry", flush: true,
+    onTap: { event: "favsOpen" },
+    children: [{ type: "Row", padding: 16, gap: 12, children: [
+      { type: "Icon", name: "star", color: "muted" },
+      { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+        { type: "Text", text: "Mis favoritos (" + mf.length + ")",
+          textEn: "My favourites (" + mf.length + ")", style: "h4" },
+        { type: "Text", text: "Tus mangas marcados con la estrella",
+          textEn: "Your manga marked with the star", style: "caption", color: "muted" },
+      ] },
+    ] }] } : null;
   const nombres = Object.keys(cs).sort(function (a, b) { return (cs[b].ts || 0) - (cs[a].ts || 0); });
   return {
     type: "Scaffold",
@@ -4437,6 +4451,7 @@ function coleccionesTree() {
         { type: "ElevatedButton", icon: "add",
           labelText: "Crear colección", labelTextEn: "Create collection", submit: true },
       ] },
+      favEntry,
       nombres.length
         ? { type: "Column", gap: 8, padding: 16, children: nombres.map(function (n) {
             const items = cs[n].items || {};
@@ -4463,7 +4478,7 @@ function coleccionesTree() {
               textEn: "Create one with a name and add series from their page with «Add to collection». The home heart always brings you here.",
               style: "caption", color: "muted" },
           ] },
-    ] }] },
+    ].filter(Boolean) }] },
   };
 }
 
@@ -4489,6 +4504,7 @@ function coleccionTree(nombre) {
       items.length
         ? { type: "ListView", key: "gridCol", columns: { compact: 3, medium: 4, expanded: 6 },
             items: items.map(function (it) { return favCard(it); }) }
+
         : { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
             { type: "emptyState", icon: "list", title: "Esta colección está vacía.", titleEn: "This collection is empty." },
             { type: "Text",
@@ -4989,6 +5005,7 @@ function avisarAnitrack(d, ch, fSer) {
       .catch(function (e) {
         const code = (e && e.code) || "";
         log("anitrack " + code + ": " + ((e && e.message) || e));
+
         if (code === "provider_missing" && !getJson("avisoAnitrackFalta", 0)) {
           setJson("avisoAnitrackFalta", 1);
           return "AniTrack no está instalado o está apagado: el capítulo no quedó registrado en tus listas.";
