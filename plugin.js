@@ -1,4 +1,22 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.31 — el reporte del teléfono tras la 0.4.30 lo dijo claro: el
+// muro de Mangas.in YA SIRVE las páginas con presentación (la sonda
+// del Registro: «al desnudo 403, con presentación 200») y el lector
+// dibujó capítulos enteros por tandas. Lo que falla ahora es el
+// TAMAÑO: el pintor de Kino solo acepta imágenes incrustadas de
+// 200.000 caracteres (unos 150 KB de imagen) y las páginas de los
+// manhuas kilométricos pesan más — el Registro las llamaba a todas
+// «muy grande: no se convierte». Tres arreglos: (1) el tope de
+// conversión sube al máximo real (149.000 bytes: las portadas y
+// páginas que quedaban justo fuera ahora entran); (2) las «demasiado
+// grandes» se distinguen de las «negadas por el muro»: se marcan en
+// el lector (reader.grande), NO se reintentan solas (antes quemaba
+// tandas re-pidiendo lo que jamás va a caber), y su hueco lo dice
+// honrado — «demasiado grande para el pintor — se ve con Leer en
+// ventanita»; solo el botón «Bajar más páginas» las reintenta a
+// mano (tras una actualización de Kino podrían caber). (3) Los
+// avisos del lector separan las tres suertes: dibujadas, negadas
+// por el muro (reintentan solas) y muy grandes (ventanita).
 // v0.4.30 — la gran news: el LECTOR INTEGRADO ya puede dibujar los
 // capítulos de ManhwaWeb y Mangas.in. La mejora del pintor de Kino
 // (0.9.82: las Image aceptan datos incrustados de hasta 200.000
@@ -272,7 +290,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.30";
+const VERSION = "0.4.31";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -808,7 +826,13 @@ async function mwVentanaLeer(ch) {
 // el dibujado la lee de ahí SIN red. La que no baje, pese demasiado o
 // venga dañada se queda con su URL normal (el salvapantallas de
 // siempre) — una portada nunca rompe una pantalla.
-const MW_IMG_MAX = 140000; // bytes de imagen; en base64 cabe bajo el tope del Image
+// v0.4.31 — el tope al máximo REAL del pintor: 149.000 bytes de
+// imagen son 198.668 caracteres de base64 + el prefijo «data:» —
+// cabe justo bajo los 200.000 del Image (y bajo el control de
+// 199.000 de muroBaja). Las que pesen más, no caben: no hay
+// miniatura en la API de ManhwaWeb (probado: solo entrega _imagen
+// grande) ni quien les cambie el tamaño.
+const MW_IMG_MAX = 149000; // bytes de imagen; en base64 cabe bajo el tope del Image
 
 // v0.4.30 — LA RECETA GENÉRICA de las imágenes con muro: bajar CON
 // presentación, validar, convertir a datos y guardar en el almacén.
@@ -824,14 +848,19 @@ async function muroBaja(u, headers, etiqueta, cajon) {
     const r = await kino.fetch(u, { maxBytes: MW_IMG_MAX, timeoutMs: 10000,
       headers: headers });
     if (!r.ok) { log(etiqueta + " HTTP " + r.status + " (" + u.replace(/^https?:\/\//, "").split("/")[0] + ")"); return null; }
-    if (r.truncated) { log(etiqueta + " muy grande: no se convierte"); return null; }
+    // v0.4.31 — «grande» marca la que NO CABRÁ NUNCA (no es un fallo
+    // del muro ni algo que reintentar): el lector la aparta y solo el
+    // botón manual la vuelve a probar.
+    if (r.truncated) { log(etiqueta + " muy grande: no se convierte");
+      return { data: null, w: 0, h: 0, grande: true }; }
     const ct = String((r.headers && r.headers["content-type"]) || "").toLowerCase();
     const m = ct.match(/image[/](png|jpe?g|webp|gif)/);
     if (!m) { log(etiqueta + " con tipo raro: " + ct.slice(0, 40)); return null; }
     const b64 = r.base64();
     if (!b64 || b64.length < 100) return null;
     const data = "data:image/" + (m[1] === "jpg" ? "jpeg" : m[1]) + ";base64," + b64;
-    if (data.length > 199000) { log(etiqueta + " demasiado grande para el Image"); return null; }
+    if (data.length > 199000) { log(etiqueta + " demasiado grande para el Image");
+      return { data: null, w: 0, h: 0, grande: true }; }
     if (!setJsonCache(ck, data)) log(etiqueta + " sin guardar: almacén lleno");
     let w = 0, h = 0;
     try {
@@ -956,16 +985,28 @@ function muroLimpiaPaginas(images) {
   } catch (e) { log("muro limpia: " + ((e && e.message) || e)); }
 }
 
+// v0.4.31 — el conjunto de las páginas ya sabidas «demasiado grandes»
+// (índices → 1): pasarlo evita re-pedir lo que jamás va a caber.
+function muroSetDe(lista) {
+  const s = {};
+  (Array.isArray(lista) ? lista : []).forEach(function (i) { s[i] = 1; });
+  return s;
+}
+
 // Convierte la tanda de páginas [desde, desde+cuantas) de un capítulo
 // con muro: baja las que no tienen copia local (6 en vuelo), guarda las
 // convertidas en «pgd:» y mide sus dimensiones de los mismos bytes.
 // MUTA images (w/h de las convertidas). Devuelve { conv, neg, med }.
-async function muroConvierte(images, desde, cuantas, pref) {
+// v0.4.31 — «grandes» (índices ya sabidos demasiado grandes) se saltan
+// sin red; las que RESULTAN grandes en esta tanda van a out.grande
+// (aparte de out.negIdx: las grandes no se reintentan solas).
+async function muroConvierte(images, desde, cuantas, pref, grandes) {
   const arr = Array.isArray(images) ? images : [];
   const hdrs = pref === "MS" ? muroHeadersMS() : muroHeadersMW();
   const et = pref === "MS" ? "MS" : "MW";
   const fin = Math.min(arr.length, Math.max(0, desde | 0) + (cuantas || MURO_PAG_BATCH));
-  const out = { conv: 0, nuevas: 0, neg: 0, med: 0, negIdx: [] };
+  const out = { conv: 0, nuevas: 0, neg: 0, med: 0, negIdx: [], grande: [] };
+  const gset = grandes || {};
   const lote = [];
   // El tope manda sobre el capítulo ENTERO (las que ya hay en el
   // almacén cuentan): un capítulo kilométrico no cabe de golpe.
@@ -975,6 +1016,7 @@ async function muroConvierte(images, desde, cuantas, pref) {
     const im = arr[i];
     if (!im || !im.url) continue;
     if (pgdDe(im.url)) { hay++; out.conv++; if (im.w > 0 && im.h > 0) out.med++; continue; }
+    if (gset[i]) continue; // demasiado grande ya lo sabemos: ni pedirla
     if (hay + lote.length >= PGD_TOPE) break;
     lote.push(i);
   }
@@ -990,10 +1032,12 @@ async function muroConvierte(images, desde, cuantas, pref) {
       if (r && r.data) {
         out.conv++; out.nuevas++;
         if (r.w > 0 && r.h > 0) { arr[ix].w = r.w; arr[ix].h = r.h; out.med++; }
-      } else { out.neg++; out.negIdx.push(ix); }
+      } else if (r && r.grande) { out.grande.push(ix); }
+      else { out.neg++; out.negIdx.push(ix); }
     }
   }
-  log("muro: tanda " + out.conv + " convertidas, " + out.neg + " negadas");
+  log("muro: tanda " + out.conv + " convertidas, " + out.neg + " negadas"
+    + (out.grande.length ? ", " + out.grande.length + " muy grandes" : ""));
   return out;
 }
 
@@ -1022,13 +1066,17 @@ async function muroAutoLote(state, desde, cuantas) {
   if (desdeOk >= r.images.length) return null;
   const cuantasOk = cuantas || MURO_PAG_BATCH;
   const fin = Math.min(r.images.length, desdeOk + cuantasOk);
+  // v0.4.31 — las demasiado grandes ya sabidas no cuentan ni se
+  // piden: lo único que harían es fallar otra vez igual.
+  const gset = muroSetDe(r.grande);
   let pendientes = 0;
-  for (let i = desdeOk; i < fin; i++) if (!pgdDe(r.images[i].url)) pendientes++;
+  for (let i = desdeOk; i < fin; i++) if (!pgdDe(r.images[i].url) && !gset[i]) pendientes++;
   if (!pendientes) return null;
-  const st = await muroConvierte(r.images, desdeOk, cuantasOk, pref);
-  if (!st.conv && !st.neg) return null;
+  const st = await muroConvierte(r.images, desdeOk, cuantasOk, pref, gset);
+  if (!st.conv && !st.neg && !st.grande.length) return null;
   return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
-    pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(r.mal, st.negIdx) } } };
+    pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(r.mal, st.negIdx),
+    grande: muroJuntaMal(r.grande, st.grande) } } };
 }
 
 function log(msg) {
@@ -4062,13 +4110,22 @@ function readerTree(state) {
   // La nota antigua solo sale cuando no hay NINGUNA convertida.
   let convN = 0;
   if (esMuro) for (let ci = 0; ci < r.images.length; ci++) if (pgdDe(r.images[ci].url)) convN++;
+  // v0.4.31 — las demasiado grandes (reader.grande): su hueco avisa
+  // que solo se ven en la ventanita, y no cuentan como «por bajar».
+  const gset = muroSetDe(r.grande);
+  let grandeN = 0;
+  for (let gi = 0; gi < r.images.length; gi++) if (gset[gi]) grandeN++;
   const btnVentanaLeer = { type: "TextButton", key: "btnLeerVentana", labelText: "Leer en ventanita",
     labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
   const notaMuro = (esMuro && convN > 0) ? [
     { type: "Text",
       text: "Capítulo dibujado desde el almacén: " + convN + " de " + r.images.length
-        + " páginas bajadas con presentación y convertidas. Las demás llegan solas al acercarte al final (o con «Bajar más páginas»).",
-      textEn: "Chapter drawn from storage: " + convN + " of " + r.images.length + " pages downloaded and converted. The rest arrive as you approach the end.",
+        + " páginas bajadas con presentación y convertidas."
+        + (grandeN ? " " + grandeN + " pesan más de lo que el pintor de Kino acepta: esas solo se ven con «Leer en ventanita»." : "")
+        + " Las demás llegan solas al acercarte al final (o con «Bajar más páginas»).",
+      textEn: "Chapter drawn from storage: " + convN + " of " + r.images.length + " pages downloaded and converted."
+        + (grandeN ? " " + grandeN + " are heavier than Kino's painter accepts: those only open in the small window." : "")
+        + " The rest arrive as you approach the end.",
       style: "caption", color: "muted", padding: { h: 12 } },
   ] : [];
   const notaMs = ((esMs || esMw) && medidas.length && !convN) ? [
@@ -4126,13 +4183,18 @@ function readerTree(state) {
         children: [dat
           ? pageNodes({ url: dat, w: p.w, h: p.h }, i, ratioGuia, true)[0]
           : (esMuro
-            ? { type: "Text", key: "np" + i, text: "Página " + (i + 1) + " sin bajar todavía — se baja sola al llegar a ella",
-                textEn: "Page " + (i + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 24 }
+            ? { type: "Text", key: "np" + i, text: gset[i]
+                ? "Página " + (i + 1) + " demasiado grande para el pintor de Kino — se ve con «Leer en ventanita»"
+                : "Página " + (i + 1) + " sin bajar todavía — se baja sola al llegar a ella",
+                textEn: gset[i]
+                  ? "Page " + (i + 1) + " is too heavy for Kino's painter — open it with «Read in the small window»"
+                  : "Page " + (i + 1) + " not downloaded yet",
+                color: "muted", style: "caption", padding: 24 }
             : pageNodes(p, i, ratioGuia, true)[0])] });
     }
     if (esMuro) {
       let pendPg = 0;
-      for (let i = 0; i < maxPag; i++) if (!pgdDe(r.images[i].url)) pendPg++;
+      for (let i = 0; i < maxPag; i++) if (!pgdDe(r.images[i].url) && !gset[i]) pendPg++;
       const restantes = Math.max(pendPg, r.images.length - maxPag);
       if (restantes > 0) {
         hijos.push({ type: "Column", key: "btnMasPag", padding: 24, gap: 8, crossAxisAlignment: "center", children: [
@@ -4140,6 +4202,16 @@ function readerTree(state) {
             color: "muted", style: "caption" },
           { type: "ElevatedButton", key: "btnMuroCarga", icon: "download",
             labelText: "Bajar más páginas", labelTextEn: "Download more pages", onPressed: "muroCarga" },
+        ] });
+      } else if (grandeN) {
+        // v0.4.31 — no queda nada por bajar: solo las demasiado
+        // grandes. Se dice y se ofrece la ventanita, sin botones que
+        // no puedan cumplir nada.
+        hijos.push({ type: "Column", key: "notaGrandes", padding: 24, gap: 8, crossAxisAlignment: "center", children: [
+          { type: "Text", text: "Las " + grandeN + " páginas que faltan pesan más de lo que el pintor de Kino acepta (unos 150 KB por imagen).",
+            textEn: "The " + grandeN + " missing pages are heavier than Kino's painter accepts (about 150 KB per picture).",
+            color: "muted", style: "caption" },
+          Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaGrandes" }),
         ] });
       }
     }
@@ -4171,9 +4243,14 @@ function readerTree(state) {
         pendTotal++;
         pendSeguidas++;
         if (pendSeguidas > 12) break;
-        nodos.push({ type: "Text", key: "np" + (desde + i),
-          text: "Página " + (desde + i + 1) + " sin bajar todavía — toca «Bajar más páginas» abajo",
-          textEn: "Page " + (desde + i + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 12 });
+        const gix = desde + i;
+        nodos.push({ type: "Text", key: "np" + gix,
+          text: gset[gix]
+            ? "Página " + (gix + 1) + " demasiado grande para el pintor de Kino — se ve con «Leer en ventanita»"
+            : "Página " + (gix + 1) + " sin bajar todavía — toca «Bajar más páginas» abajo",
+          textEn: gset[gix]
+            ? "Page " + (gix + 1) + " is too heavy for Kino's painter — open it with «Read in the small window»"
+            : "Page " + (gix + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 12 });
       } else {
         pendSeguidas = 0;
         nodos.push(pageNodes(dat ? { url: dat, w: p.w, h: p.h } : p, desde + i, ratioGuia)[0]);
@@ -5284,6 +5361,10 @@ export async function screenEvent(ev) {
       // v0.4.30 — «Bajar más páginas»: la siguiente tanda pendiente
       // del capítulo con muro; si solo quedan las que el muro negó,
       // se reintentan una vez más (a veces cede) y se dice honesto.
+      // v0.4.31 — las demasiado grandes van aparte (reader.grande):
+      // el botón busca primero lo que SÍ puede llegar, y en el
+      // reintento manual a mano las vuelve a probar también (tras
+      // una actualización de Kino su tope podría crecer).
       const r = state.reader;
       if (!r || !Array.isArray(r.images) || !r.images.length) return null;
       const d = state.detail;
@@ -5291,21 +5372,27 @@ export async function screenEvent(ev) {
       const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "manhwaweb" ? "MW" : null);
       if (!pref) return null;
       const mal = Array.isArray(r.mal) ? r.mal : [];
+      const grandes = Array.isArray(r.grande) ? r.grande : [];
       let desde = -1;
+      let reintento = false;
       for (let i = 0; i < r.images.length; i++) {
-        if (!pgdDe(r.images[i].url) && mal.indexOf(i) < 0) { desde = i; break; }
+        if (!pgdDe(r.images[i].url) && mal.indexOf(i) < 0 && grandes.indexOf(i) < 0) { desde = i; break; }
       }
       if (desde < 0) {
+        reintento = true;
         for (let i = 0; i < r.images.length; i++) {
           if (!pgdDe(r.images[i].url)) { desde = i; break; }
         }
         if (desde < 0) return { toast: "Ya están bajadas todas las páginas posibles." };
       }
-      const st = await muroConvierte(r.images, desde, 12, pref);
-      if (!st.conv && !st.neg) return { toast: "No se pudo bajar ninguna página ahora: prueba en un rato o usa «Leer en ventanita»." };
+      const st = await muroConvierte(r.images, desde, 12, pref, reintento ? null : muroSetDe(grandes));
+      if (!st.conv && !st.neg && !st.grande.length) return { toast: "No se pudo bajar ninguna página ahora: prueba en un rato o usa «Leer en ventanita»." };
+      const tt = (st.nuevas ? st.nuevas + " páginas más dibujadas" : "Ninguna página nueva");
       return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
-          pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(mal, st.negIdx) } },
-        toast: st.nuevas + " páginas más dibujadas" + (st.neg ? " · " + st.neg + " negadas por el muro" : "") };
+          pend: 0, fallos: r.fallos || 0, mal: muroJuntaMal(mal, st.negIdx),
+          grande: muroJuntaMal(grandes, st.grande) } },
+        toast: tt + (st.neg ? " · " + st.neg + " negadas por el muro" : "")
+          + (st.grande.length ? " · " + st.grande.length + " demasiado grandes para el pintor (ventanita)" : "") };
     }
     if (name === "tiraReinicia") {
       // El botoncito «◀ Volver a la página 1» de la tira retomada: se
@@ -6188,7 +6275,8 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     muroSt = st;
     if (!st.conv) await medirImagenes(images, 6000);
     pend = 0; // sin temporizador de medición: ahora se convierte, no se mide
-    log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + st.conv + " dibujables, " + st.neg + " negadas");
+    log("capítulo " + ch.num + " listo: " + images.length + " páginas, " + st.conv + " dibujables, " + st.neg + " negadas"
+      + (st.grande.length ? ", " + st.grande.length + " muy grandes" : ""));
   } else {
     await medirImagenes(images, 9000);
     pend = images.filter((im) => !(im.w > 0 && im.h > 0)).length;
@@ -6225,6 +6313,9 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
   // chicos): el botón «Bajar más páginas» distingue «todas listas» de
   // «solo quedan las negadas».
   if (muroSt && muroSt.negIdx && muroSt.negIdx.length) reader.mal = muroSt.negIdx;
+  // v0.4.31 — las demasiado grandes viajan APARTE (reader.grande):
+  // su hueco lo dice honrado y las tandas automáticas las saltan.
+  if (muroSt && muroSt.grande && muroSt.grande.length) reader.grande = muroSt.grande;
   // v0.4.23 — tira vertical: «Continuar» reabre el capítulo por la
   // página en la que ibas (la fracción la fue guardando onScroll). A la
   // tira no se le puede ordenar que se desplace a un punto guardado
@@ -6356,6 +6447,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
