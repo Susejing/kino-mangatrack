@@ -74,7 +74,6 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 ## Créditos
 
 - Hecho por **Susejing**.
-- La receta de bajar imágenes «con presentación» para los sitios con muro está inspirada en cómo lo hace **scancore**.
 - Los datos de descubrimiento vienen de la API pública de **AniList**.
 - Agradecimientos a las siete fuentes; este plugin solo lee lo que ellas publican.
 
