@@ -1,4 +1,14 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.23 — el «Continuar» que retoma de verdad: en la tira vertical el
+// lector recordaba QUÉ capítulo leías pero no por dónde ibas dentro de
+// él, y volvía al principio. La documentación de las pantallas lo dice
+// sin rodeos: a una tira vertical NO se le puede ordenar que se
+// desplace a una posición guardada («guarda el punto, muéstralo y deja
+// que la persona se desplace»). La salida honesta: la tira ahora avisa
+// cada vez que te detienes (onScroll, de 0 a 1) y «Continuar» reabre el
+// capítulo DIRECTO por la página en la que ibas, con un botoncito
+// arriba («Volver a la página 1») para releer desde el principio. En
+// modo páginas nada cambia: ya retomaba.
 // v0.4.13 — entra Mangas.in (m440.in): otra fuente en español con su
 // propio quiste: la lista de capítulos NO viene en la página, llega
 // CIFRADA (AES, la receta de CryptoJS) y la llave vive en un script
@@ -158,7 +168,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.22";
+const VERSION = "0.4.23";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -995,6 +1005,30 @@ function pgGuardar(chUrl, pg) {
   // v0.4.6 — al guardar la página en el mapa se borra la clave
   // legada de ese capítulo, para no dejar cáscaras en el almacén.
   if (setJson("pgAtMap", m)) borrarClave("pgAt:" + chUrl);
+}
+
+// v0.4.23 — la FRACCIÓN de la tira (0 = arriba, 1 = final) por la que
+// iba la persona en cada capítulo: la guarda onScroll y la usa
+// «Continuar» para reabrir el capítulo por donde se quedó (a la tira
+// no se le puede ordenar que se desplace a un punto guardado, así que
+// el capítulo se reabre directamente desde esa página).
+function tiraLeer(chUrl) {
+  const m = getJson("tiraAtMap", {});
+  if (m && typeof m === "object" && (chUrl in m)) {
+    const v = Number(m[chUrl]);
+    if (isFinite(v) && v >= 0 && v <= 1) return v;
+  }
+  return 0;
+}
+
+function tiraGuardar(chUrl, f) {
+  if (!chUrl || !isFinite(f) || f < 0) return;
+  const m = getJson("tiraAtMap", {});
+  if (!m || typeof m !== "object") return;
+  m[chUrl] = f;
+  const ks = Object.keys(m);
+  while (ks.length > 120) delete m[ks.shift()];
+  setJson("tiraAtMap", m);
 }
 function favs() { return getJson("favs", []); }
 
@@ -3473,6 +3507,7 @@ function readerTree(state) {
   const pg = state.inputs && typeof state.inputs.pgs === "number" && state.inputs.pgs >= 0
     ? state.inputs.pgs : 0;
   let cuerpo;
+  let desde = 0;
   if (modo === "paginas") {
     // Modo páginas (Kino 0.9.81): una página a la vez, se pasa con el
     // dedo, barra fina de progreso de Kino y zoom (pellizco) dentro de
@@ -3482,18 +3517,27 @@ function readerTree(state) {
       children: r.images.map((p, i) => ({ type: "SingleChildScrollView", key: "z" + i, zoom: true,
         children: pageNodes(p, i, ratioGuia, true) })) };
   } else {
+    // v0.4.23 — la tira avisa dónde se detiene la persona (onScroll,
+    // 0..1) para que «Continuar» retome; y si el capítulo se reabrió
+    // retomado (r.desde), se dibuja desde esa página con un botoncito
+    // arriba para volver al principio.
+    desde = (r.desde | 0) > 0 && r.desde < r.images.length ? (r.desde | 0) : 0;
+    const visibles = desde > 0 ? r.images.slice(desde) : r.images;
+    const inicio = desde > 0 ? [{ type: "TextButton", key: "btnTiraInicio", icon: "refresh",
+      labelText: "◀ Volver a la página 1", labelTextEn: "◀ Back to page 1", onPressed: "tiraReinicia" }] : [];
     // Tira vertical de siempre: todas las páginas pegadas (gap 0) a
     // ancho completo — fit "width" toma el ancho de la caja y el alto
     // propio de la imagen — y zoom de pellizco en todo el capítulo.
-    cuerpo = { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true,
+    cuerpo = { type: "SingleChildScrollView", key: scrollKey, flex: 1, zoom: true, onScroll: "tiraScrolled",
       children: [{ type: "Column", gap: 0, crossAxisAlignment: "center",
-        children: r.images.flatMap((p, i) => pageNodes(p, i, ratioGuia)) }] };
+        children: inicio.concat(visibles.flatMap((p, i) => pageNodes(p, desde + i, ratioGuia))) }] };
   }
   const barraTexto = modo === "paginas"
     ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · pág " + (pg + 1)
       + " de " + r.images.length + " · pellizca para acercar"
     : "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · "
       + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
+      + (desde > 0 ? " · retomado en la pág " + (desde + 1) : "")
       + " · pellizca para acercar";
   const body = notaMs.concat(avisoMs).concat([
     cuerpo,
@@ -4252,7 +4296,7 @@ export async function screenEvent(ev) {
           if (start >= full.length) start = Math.max(0, full.length - VENTANA_CAPS);
           d2 = { url: d.url, meta: d.meta, chapters: full.slice(start, start + VENTANA_CAPS), capStart: start, capsTotal: full.length };
         }
-        const r = await abrirCapitulo(d2, abs - (d2.capStart || 0), true);
+        const r = await abrirCapitulo(d2, abs - (d2.capStart || 0), true, true);
         if (!r) return { toast: "No se pudieron leer las páginas de este capítulo." };
         if (d2 !== d) r.state.detail = d2;
         return r;
@@ -4294,6 +4338,15 @@ export async function screenEvent(ev) {
         at = parseInt(at, 10);
         if (!(at >= 0) || at >= r.images.length) at = 0;
         resp.ui = [{ set: { key: "pgs", value: at } }];
+      } else {
+        // v0.4.23 — al volver a la tira, se retoma por la página que
+        // guardó el modo páginas (la misma vara del «Continuar»).
+        const d = state.detail;
+        const ch = d && Array.isArray(d.chapters) ? d.chapters[r.idx || 0] : null;
+        let at = ch ? pgLeer(ch.url) : 0;
+        at = parseInt(at, 10);
+        if (!(at >= 0) || at >= r.images.length) at = 0;
+        if (at > 0) resp.state.reader.desde = at;
       }
       return resp;
     }
@@ -4308,6 +4361,29 @@ export async function screenEvent(ev) {
       const pg = parseInt(String(ev.value), 10);
       if (pg >= 0) pgGuardar(ch.url, pg);
       return null;
+    }
+    if (name === "tiraScrolled") {
+      // v0.4.23 — la tira avisa cada vez que la persona se detiene
+      // (valor de 0 a 1): se guarda la fracción por capítulo para que
+      // «Continuar» reabra por donde se quedó. La escritura es barata
+      // (Kino ya espera 0,3 s tras dejar de desplazar).
+      const r = state.reader;
+      const d = state.detail;
+      if (!r || !d || !Array.isArray(d.chapters)) return null;
+      const ch = d.chapters[r.idx || 0];
+      if (!ch) return null;
+      const f = Number(ev.value);
+      if (isFinite(f) && f >= 0) tiraGuardar(ch.url, f);
+      return null;
+    }
+    if (name === "tiraReinicia") {
+      // El botoncito «◀ Volver a la página 1» de la tira retomada: se
+      // vuelve a dibujar el capítulo completo desde arriba.
+      const r = state.reader;
+      if (!r) return null;
+      return { state: { reader: { images: r.images, idx: r.idx, tk: r.tk,
+          pend: r.pend || 0, fallos: r.fallos || 0, desde: 0 } },
+        toast: "Capítulo desde la página 1", toastEn: "Chapter from page 1" };
     }
     if (name === "search") {
       const q = String((ev.value && ev.value.q) || "").trim();
@@ -4344,7 +4420,7 @@ export async function screenEvent(ev) {
       const fallos = despues > antes ? 0 : (r.fallos || 0) + 1;
       if (fallos >= 3) pend = 0;
       log("dimsTick: " + pend + " pendientes, fallos " + fallos);
-      return { state: { reader: { images: imgs, idx: r.idx, tk: r.tk, pend: pend, fallos: fallos } } };
+      return { state: { reader: { images: imgs, idx: r.idx, tk: r.tk, pend: pend, fallos: fallos, desde: r.desde || 0 } } };
     }
     if (name === "fav") {
       const d = state.detail;
@@ -5023,7 +5099,7 @@ function avisarAnitrack(d, ch, fSer) {
 
 // ABSOLUTO (capStart + idx) para que "Continuar" y las marcas ✓
 // funcionen sin importar desde qué ventana se leyó.
-async function abrirCapitulo(d, idx, conRuta) {
+async function abrirCapitulo(d, idx, conRuta, retomar) {
   const ch = d.chapters[idx];
   const fSer = fuenteDeUrl(d.url) || fuenteActiva();
   // El registro en AniList/MAL corre en PARALELO con la descarga de las
@@ -5071,7 +5147,29 @@ async function abrirCapitulo(d, idx, conRuta) {
     for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
   setJson("hist", h);
   syncPushHist();
-  const resp = { state: { reader: { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 } } };
+  const reader = { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 };
+  // v0.4.23 — tira vertical: «Continuar» reabre el capítulo por la
+  // página en la que ibas (la fracción la fue guardando onScroll). A la
+  // tira no se le puede ordenar que se desplace a un punto guardado
+  // (la receta del lector de las docs lo dice claro), así que el
+  // capítulo se abre directamente desde esa página — con un botoncito
+  // arriba para volver al principio. Solo con fracción de verdad
+  // (12 %) y capítulos de 8 páginas o más; abrir un capítulo a mano
+  // (el botón de siempre) empieza en la página 1 como siempre.
+  let retomoMsg = "";
+  if (retomar && modoLectorEfectivo(images.length) === "tira") {
+    const f = tiraLeer(ch.url);
+    if (f >= 0.12 && images.length >= 8) {
+      let desde = Math.round(f * images.length);
+      if (desde >= images.length) desde = images.length - 1;
+      if (desde > 0) {
+        reader.desde = desde;
+        retomoMsg = "Retomado por la pág " + (desde + 1) + " de " + images.length
+          + " · toca «Volver a la página 1» arriba para empezar de cero";
+      }
+    }
+  }
+  const resp = { state: { reader: reader } };
   if (conRuta) resp.route = { push: "read" };
   // Modo páginas (Kino 0.9.81): retomar donde se quedó (la receta del
   // lector de la docs: un `set` de ui sobre la key del pages en la
@@ -5089,6 +5187,7 @@ async function abrirCapitulo(d, idx, conRuta) {
     const aviso = await avisoAnitrack;
     if (aviso) resp.toast = aviso;
   } catch (e) { log("anitrack aviso: " + ((e && e.message) || e)); }
+  if (retomoMsg) resp.toast = resp.toast ? retomoMsg + " · " + resp.toast : retomoMsg;
   return resp;
 }
 
