@@ -1,4 +1,14 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.26 — la portada de LeerCapitulo muestra los «Ultimos capitulos
+// agregados» del sitio: series con su capítulo más nuevo y su edad
+// («Cap. 47 · 36 mins»), la lista que en la web se mueve minuto a
+// minuto. Antes el riel «Actualizados recientes» se llenaba con
+// «Ultimos mangas» — series AÑADIDAS, que pueden llevarse días ahí
+// quietas: de ahí la impresión de portada estática que veía la
+// persona comparando la web con el plugin. Ahora ese riel se llama
+// «Recién actualizados» y trae los capítulos de verdad (con su edad
+// bajo el título), y las series añadidas siguen debajo con nombre
+// honesto («Series añadidas»).
 // v0.4.25 — el buscador de LeerCapitulo, reparado: el sitio cambió cómo
 // busca y la dirección vieja ("/?s=") ya no busca — contesta con la
 // portada, así que el plugin raspe siempre las mismas ~24 tarjetas de
@@ -202,7 +212,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.25";
+const VERSION = "0.4.26";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -638,6 +648,65 @@ function homeCards(html, max) {
     }
   }
   log("portada: " + out.length + " series");
+  return out;
+}
+
+// v0.4.26 — «Ultimos capitulos agregados» de LeerCapitulo: series con
+// su capítulo más nuevo y su edad («Cap. 47 · 36 mins»). Es la lista
+// que en la web se actualiza minuto a minuto. Estructura verificada en
+// vivo contra el sitio: cada serie trae su portada y un enlace a
+// /manga/<id>/<slug>/, seguidos de hasta cuatro enlaces a
+// /leer/<id>/<slug>/<número>/ con el texto de edad después de cada uno.
+function capsRecientesLC(html, max) {
+  const out = [];
+  const pos = html.search(/ultimos\s+cap[ií]tulos\s+agregados/i);
+  if (pos < 0) return out;
+  const zona = html.slice(pos, pos + 150000);
+  // Anclas a series: la entrada trae dos enlaces a la misma (portada y
+  // título); se deduplican y cada serie se procesa una vez.
+  const reS = /<a\b[^>]*href="([^"]*\/manga\/[a-z0-9]{4,}\/[a-z0-9-]+\/?)"[^>]*>([\s\S]{0,800}?)<\/a>/gi;
+  const anclas = [];
+  let m;
+  while ((m = reS.exec(zona)) !== null) {
+    anclas.push({ url: m[1].replace(/^https?:\/\/[^\/]+/i, ""),
+      ini: m.index, fin: m.index + m[0].length, inner: m[2] });
+    if (anclas.length > 200) break;
+  }
+  const vistos = {};
+  for (let i = 0; i < anclas.length && out.length < max; i++) {
+    const a = anclas[i];
+    if (vistos[a.url]) continue;
+    vistos[a.url] = 1;
+    // El bloque de la serie llega hasta la ancla de la siguiente serie.
+    let fin = zona.length;
+    for (let j = i + 1; j < anclas.length; j++) {
+      if (anclas[j].url !== a.url) { fin = anclas[j].ini; break; }
+    }
+    const bloque = zona.slice(a.fin, fin);
+    // El primer enlace a /leer/ del bloque es el capítulo más nuevo.
+    const mc = bloque.match(/<a\b[^>]*href="[^"]*\/leer\/[a-z0-9]{4,}\/[a-z0-9-]+\/([0-9]+(?:[.][0-9]+)?)\/?"/i);
+    if (!mc) continue;   // sin capítulos: no es una entrada de esta lista
+    const num = mc[1];
+    let edad = "";
+    const tras = bloque.slice(mc.index, mc.index + 250).replace(/<[^>]*>/g, " ");
+    const ma = tras.match(/[0-9]{1,4}\s*(?:seg(?:undos?)?|min(?:utos?|s?)?|h(?:oras?)?|d[ií]as?|semanas?|mes(?:es)?|hours?|days?|weeks?|months?|mins?)/i);
+    if (ma) edad = clean(ma[0]);
+    // Título y portada de entre los enlaces de esta misma serie.
+    let titulo = "", poster = "";
+    for (let j = i; j < anclas.length && anclas[j].url === a.url; j++) {
+      const texto = clean(anclas[j].inner.replace(/<[^>]*>/g, " "));
+      if (!titulo && texto && texto.length <= 90) titulo = texto;
+      const im = anclas[j].inner.match(/<img\b[^>]*>/i);
+      if (im && !poster) {
+        const p = im[0].match(/\b(?:data-src|data-lazy-src|src)=\"([^\"]+)\"/i);
+        if (p) poster = absoluta(p[1]);
+      }
+    }
+    if (!titulo) titulo = (a.url.split("/").filter(Boolean).pop() || a.url).replace(/-/g, " ");
+    out.push({ url: a.url, title: titulo, poster: poster,
+      label: "Cap. " + num + (edad ? " · " + edad : "") });
+  }
+  log("LC caps recientes: " + out.length + " series");
   return out;
 }
 
@@ -3016,7 +3085,11 @@ function posterCard(it, prefix, rail) {
     type: "Card", key: serieKey(prefix, it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
     children: [img].concat(twoLines(it.title).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 }))),
+      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+      // v0.4.26 — etiqueta opcional bajo el título (capítulo y edad de
+      // los «Recién actualizados»); las demás tarjetas no la traen.
+      .concat(it.label ? [{ type: "Text", text: it.label, textEn: it.label,
+        style: "caption", color: "muted", padding: 8 }] : []),
   };
 }
 
@@ -3212,18 +3285,25 @@ async function homeTree() {
     }
   } else {
     // La portada de LeerCapitulo trae tres secciones (Tendencias,
-    // Populares, Ultimos mangas): se reparte el HTML por sus encabezados
-    // y cada rail se llena con la suya. Si el sitio cambia y no aparecen,
-    // se vuelve a la cuadrícula mixta de siempre.
+    // Populares, Ultimos mangas) y al final «Ultimos capitulos
+    // agregados». v0.4.26: el riel «Recién actualizados» se llena con
+    // ESA lista (series con su capítulo más nuevo y su edad — la que
+    // en la web se mueve minuto a minuto); «Ultimos mangas» son series
+    // AÑADIDAS y van debajo con nombre honesto («Series añadidas»).
     const posT = html.search(/tendencias/i);
     const posP = html.search(/populares/i);
     const posU = html.search(/ultimos\s+mangas/i);
     if (posT >= 0 && posP > posT && posU > posP) {
       populares = homeCards(html.slice(posP, posU), 10)
         .concat(homeCards(html.slice(posT, posP), 24));
-      recientes = homeCards(html.slice(posU), 24);
+      actualizados = homeCards(html.slice(posU), 24);
+      titUpd = "Series añadidas"; titUpdEn = "Recently added";
     } else {
       mixtas = homeCards(html, 40);
+    }
+    try { recientes = capsRecientesLC(html, 15); } catch (e) { log("LC caps recientes: " + ((e && e.message) || e)); }
+    if (recientes.length) {
+      titRec = "Recién actualizados"; titRecEn = "Just updated";
     }
     }
   }
@@ -5449,5 +5529,6 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
