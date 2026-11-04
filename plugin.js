@@ -1,4 +1,17 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.27 — «Ver más» en cada sección del Inicio (petición de la
+// persona): cada riel (Populares, Recién actualizados, Series
+// añadidas, Seguir leyendo…) lleva al final de su tira una tarjetita
+// «Ver más» que abre la sección entera en cuadrícula cómoda, y donde
+// la fuente de verdad tiene más páginas de ESA sección (las consultas
+// de MangaDex, el directorio de MangaOni, el catálogo POST de InManga,
+// y las listas y el feed «lasted» de Mangas.in) un botón «Cargar más
+// del sitio» va trayendo las siguientes páginas. Las secciones fijas
+// de las portadas (LeerCapitulo, LectorXd, «Series añadidas», el
+// historial) son todo lo que hay: la cuadrícula lo dice honesto («Es
+// todo lo que esta sección trae») y no ofrece un botón que no pueda
+// cumplir. La sección viaja por el almacén («riel:<key>», el patrón
+// del catálogo) para no inflar el estado de la pantalla.
 // v0.4.26 — la portada de LeerCapitulo muestra los «Ultimos capitulos
 // agregados» del sitio: series con su capítulo más nuevo y su edad
 // («Cap. 47 · 36 mins»), la lista que en la web se mueve minuto a
@@ -212,7 +225,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.26";
+const VERSION = "0.4.27";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3107,13 +3120,30 @@ const VACIO_SERIES = { type: "emptyState", icon: "list",
 const VACIO_BUSQUEDA = { type: "emptyState", icon: "search",
   title: "Sin resultados.", titleEn: "No results." };
 
+// v0.4.27 — la tarjetita «Ver más» al final de un riel: abre la
+// sección entera en cuadrícula (y con «Cargar más» donde la fuente
+// tiene más páginas de esa sección).
+function verMasCard(key) {
+  return { type: "Card", key: "vermas-" + key, flush: true,
+    onTap: { event: "verMas", arg: key },
+    children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
+      children: [
+        { type: "Icon", name: "arrow_forward", color: "muted" },
+        { type: "Text", text: "Ver más", textEn: "See more", style: "caption", color: "muted" },
+      ] }] };
+}
+
 function railOf(titulo, tituloEn, items, key, prefix) {
   if (!items || !items.length) return [];
   return [
     { type: "Text", text: titulo, textEn: tituloEn, style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true)) }] },
+        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true))
+          // v0.4.27 — con 10 series o más, la tarjetita que abre la
+          // sección entera (menos riel para el pulgar, cuadrícula
+          // completa para los ojos).
+          .concat(items.length >= 10 ? [verMasCard(key)] : []) }] },
   ];
 }
 
@@ -3134,6 +3164,12 @@ async function homeTree() {
   let actualizados = [];
   let mixtas = [];
   let msPopBloqueada = false;
+  // v0.4.27 — «Ver más»: qué secciones tienen más páginas en el sitio
+  // (para el botón «Cargar más» de su cuadrícula) y por qué puerta se
+  // piden las de Mangas.in (sus listas cambian de entrada).
+  let masPop = false;
+  let masRec = false;
+  let msVia = "";
   let titPop = "Populares en español";
   let titPopEn = "Popular in Spanish";
   let titRec = "Actualizados recientes";
@@ -3148,6 +3184,9 @@ async function homeTree() {
     titRec = "Actualizados en MangaDex"; titRecEn = "Updated on MangaDex";
     try { populares = mdCards(await mdJson(mdQuery("order[followedCount]=desc", 0, 20)), 20); } catch (e) { log("MD home pop: " + e); }
     try { recientes = mdCards(await mdJson(mdQuery("order[latestUploadedChapter]=desc", 0, 20)), 20); } catch (e) { log("MD home rec: " + e); }
+    // v0.4.27 — ambas consultas de MangaDex pagan más páginas con
+    // offset: «Cargar más» puede seguir pidiendo.
+    masPop = true; masRec = true;
   } else if (f.id === "inmanga") {
     // El catálogo popular sale del POST; si el POST no responde, la
 
@@ -3158,6 +3197,11 @@ async function homeTree() {
     let pag = "";
     try { pag = await imPostForm("/manga/getMangasConsultResult", "", 1, 0, 20); } catch (e) { log("IM POST falló: " + e); }
     try { populares = pag ? imCards(pag, 20) : []; } catch (e) { log("IM cards POST: " + e); }
+    // v0.4.27 — el POST pagina (skip/take): si llenó las populares,
+    // «Cargar más» puede pedir la siguiente ventana. Si el POST falló
+    // y las populares vinieron de la portada (GET), esa lista no
+    // pagina: sin botón.
+    if (populares.length && pag) masPop = true;
     if (populares.length) {
       try { recientes = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
     } else {
@@ -3174,6 +3218,9 @@ async function homeTree() {
     try { populares = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home pop: " + e); }
     try { recientes = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home rec: " + e); }
     try { actualizados = moCards(await getHtmlDe(f, "/recientes"), 20); } catch (e) { log("MO home upd: " + e); }
+    // v0.4.27 — el directorio pagina con p=: Populares y Novedades
+    // pueden seguir; el feed /recientes es una sola página.
+    masPop = true; masRec = true;
   } else if (f.id === "mangasin") {
     // Portada de Mangas.in: populares (su catálogo por visitas) y
     // novedades (el servicio «lasted» que alimenta la propia web).
@@ -3209,6 +3256,9 @@ async function homeTree() {
       }
     } else try {
       populares = msCards(await getHtmlDe(f, "/filterList?page=1&sortBy=views&asc=false"), 20);
+      // v0.4.27 — por aquí paginó: «Cargar más» puede volver a pedir
+      // filterList con la página siguiente.
+      if (populares.length) msVia = "filterList";
     } catch (e) {
       // v0.4.15 — el sitio le contestó con su revisión al catálogo por
       // visitas (el 403 de la prueba real): las mismas tarjetas se
@@ -3216,6 +3266,8 @@ async function homeTree() {
       log("MS home pop filterList bloqueado (" + ((e && e.message) || e) + "): probando /manga-list");
       try {
         populares = msCards(await getHtmlDe(f, "/manga-list?page=1"), 20);
+        // v0.4.27 — la puerta pública también pagina.
+        if (populares.length) msVia = "manga-list";
       } catch (e2) {
         // v0.4.18 — también el catálogo público cerrado: queda la
         // PORTADA del sitio, que la quinta prueba demostró que SÍ
@@ -3245,18 +3297,18 @@ async function homeTree() {
         }
       }
     }
+    // v0.4.27 — «Cargar más» solo si las populares entraron por una
+    // puerta que pagina (filterList o manga-list); de la portada o de
+    // la caché no hay más páginas que pedir.
+    masPop = !!msVia;
     try {
       // Pausa entre las dos preguntas de la portada: el sitio atiende
       // mejor a quien no se las mete seguidas (así lo hacen sus otras apps).
       await kino.sleep(900);
-      const j = JSON.parse(await getHtmlDe(f, "/lasted?p=1"));
-      const datos = (j && j.data) || [];
-      recientes = [];
-      for (let i = 0; i < datos.length && i < 20; i++) {
-        const x = datos[i] || {};
-        if (!x.manga_slug) continue;
-        recientes.push({ url: "/ms/manga/" + x.manga_slug + "/", title: clean(x.manga_name), poster: msCover(x.manga_slug) });
-      }
+      recientes = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=1")), 20);
+      // v0.4.27 — el feed «lasted» pagina con p=: si contestó, se
+      // puede pedir la siguiente.
+      masRec = recientes.length > 0;
     } catch (e) { log("MS home rec: " + e); }
   } else {
     html = await getHtmlDe(f, "/");
@@ -3301,7 +3353,7 @@ async function homeTree() {
     } else {
       mixtas = homeCards(html, 40);
     }
-    try { recientes = capsRecientesLC(html, 15); } catch (e) { log("LC caps recientes: " + ((e && e.message) || e)); }
+    try { recientes = capsRecientesLC(html, 24); } catch (e) { log("LC caps recientes: " + ((e && e.message) || e)); }
     if (recientes.length) {
       titRec = "Recién actualizados"; titRecEn = "Just updated";
     }
@@ -3317,14 +3369,18 @@ async function homeTree() {
   // hace falta aquí; su lista entera está en la pantalla del
   // corazón, como primera tarjeta).
   const hh = hist();
-  const hItems = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
+  const hTodos = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
       poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
-    .filter((x) => x.title).sort((a, b) => b.ts - a.ts).slice(0, 15);
+    .filter((x) => x.title).sort((a, b) => b.ts - a.ts);
+  const hItems = hTodos.slice(0, 15);
   const railHist = hItems.length ? [
     { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: hItems.map((it) => posterCard(it, "h-", true)) }] },
+        children: hItems.map((it) => posterCard(it, "h-", true))
+          // v0.4.27 — el riel enseña 15; «Ver más» abre el historial
+          // entero (hasta 100 series) en cuadrícula.
+          .concat(hTodos.length >= 10 ? [verMasCard("railHist")] : []) }] },
   ] : [];
   const fuentes = [
     { type: "Text", text: "Fuentes", textEn: "Sources", style: "h3", padding: 16 },
@@ -3370,6 +3426,23 @@ async function homeTree() {
       ] },
   ] : [];
   if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length) return VACIO_SERIES;
+  // v0.4.27 — cada riel deja su sección en el almacén para su «Ver
+  // más»: la cuadrícula la lee de ahí (el patrón del catálogo), y el
+  // botón «Cargar más del sitio» solo aparece donde mas dice que la
+  // fuente tiene otra página de ESA sección.
+  const guardarRiel = function (key, obj) {
+    try {
+      if (!setJsonCache("riel:" + key, obj)) log("riel " + key + " sin guardar: almacén lleno");
+    } catch (e) { log("riel " + key + " sin guardar: " + ((e && e.message) || e)); }
+  };
+  if (populares.length) guardarRiel("railPop", { f: f.id, tit: titPop, titEn: titPopEn,
+    via: msVia, items: populares, page: 1, mas: masPop });
+  if (recientes.length) guardarRiel("railRec", { f: f.id, tit: titRec, titEn: titRecEn,
+    via: "", items: recientes, page: 1, mas: masRec });
+  if (actualizados.length) guardarRiel("railUpd", { f: f.id, tit: titUpd, titEn: titUpdEn,
+    via: "", items: actualizados, page: 1, mas: false });
+  if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
+    titEn: "Keep reading", items: hTodos, page: 1, mas: false });
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
     .concat(railHist)
@@ -3938,6 +4011,114 @@ async function cargarCatalogo(cat, page, conRuta) {
   return resp;
 }
 
+// v0.4.27 — el feed «lasted» de Mangas.in a tarjetas (la portada y el
+// «Cargar más» de su riel usan el mismo lector: una sola receta).
+function msRecientesDe(j, max) {
+  const datos = (j && j.data) || [];
+  const out = [];
+  for (let i = 0; i < datos.length && out.length < max; i++) {
+    const x = datos[i] || {};
+    if (!x.manga_slug) continue;
+    out.push({ url: "/ms/manga/" + x.manga_slug + "/", title: clean(x.manga_name),
+      poster: msCover(x.manga_slug) });
+  }
+  return out;
+}
+
+// v0.4.27 — la sección de un riel en cuadrícula («Ver más»): lo que
+// la portada trajo (y lo que «Cargar más» fue añadiendo) vive en el
+// almacén («riel:<key>»); la pantalla lo lee de ahí, igual que el
+// catálogo, para no inflar el estado.
+function rielTree(key) {
+  const r = getJson("riel:" + key, null);
+  if (!r || typeof r !== "object" || !Array.isArray(r.items)) {
+    return errorTree("Esta sección ya no está en el almacén: vuelve al Inicio y toca «Ver más» otra vez.");
+  }
+  const f = fuentePorId(r.f || "leercapitulo");
+  const items = r.items;
+  const cuantos = items.length + (items.length === 1 ? " serie" : " series") +
+    (r.f === "hist" ? "" : " · " + f.nombre);
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barRiel", title: String(r.tit || "Sección").slice(0, 40),
+      titleEn: String(r.titEn || r.tit || "Section").slice(0, 40),
+      leading: { type: "IconButton", key: "backFromRiel", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "rielBody", children: [{ type: "Column", children: [
+      { type: "Text", text: cuantos, textEn: cuantos, style: "caption", color: "muted", padding: 16 },
+      items.length ? gridOf(items, VACIO_SERIES) : VACIO_SERIES,
+      r.mas
+        ? { type: "ElevatedButton", key: "rielMas", icon: "expand_more",
+            labelText: "Cargar más del sitio", labelTextEn: "Load more from site",
+            onPressed: { event: "rielMas", arg: key } }
+        : { type: "Text", text: "Es todo lo que esta sección trae.",
+            textEn: "This is all this section has.", style: "caption", color: "muted", padding: 16 },
+    ] }] },
+  };
+}
+
+// v0.4.27 — «Cargar más» de una sección: donde la fuente tiene más
+// páginas de ESA sección (las consultas de MangaDex, el directorio de
+// MangaOni, el catálogo POST de InManga, las listas de Mangas.in y su
+// feed «lasted»), la siguiente página se pide y se añade a lo ya
+// guardado. Las secciones que no pagina (portadas de LeerCapitulo y
+// LectorXd, «Series añadidas», el historial) ni traen el botón.
+async function cargarRiel(key) {
+  const r = getJson("riel:" + key, null);
+  if (!r || typeof r !== "object" || !Array.isArray(r.items)) {
+    return { toast: "Esta sección ya no está: vuelve al Inicio y toca «Ver más» otra vez." };
+  }
+  if (!r.mas) return { toast: "Es todo lo que esta sección trae." };
+  const f = fuentePorId(r.f || "leercapitulo");
+  const page = (parseInt(r.page, 10) || 1) + 1;
+  let nuevos = [];
+  try {
+    if (key === "railPop") {
+      if (f.id === "mangadex") {
+        nuevos = mdCards(await mdJson(mdQuery("order[followedCount]=desc", (page - 1) * 20, 20)), 20);
+      } else if (f.id === "inmanga") {
+        nuevos = imCards(await imPostForm("/manga/getMangasConsultResult", "", 1, (page - 1) * 20, 20), 20);
+      } else if (f.id === "mangaoni") {
+        nuevos = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=" + page), 20);
+      } else if (f.id === "mangasin") {
+        const ruta = r.via === "filterList"
+          ? "/filterList?page=" + page + "&sortBy=views&asc=false"
+          : r.via === "manga-list" ? "/manga-list?page=" + page : "";
+        if (!ruta) throw kino.error("network", "sin páginas", {
+          userMessage: "Esta lista de Mangas.in no se deja pasar de página desde el plugin." });
+        nuevos = msCards(await getHtmlDe(f, ruta), 20);
+      }
+    } else if (key === "railRec") {
+      if (f.id === "mangadex") {
+        nuevos = mdCards(await mdJson(mdQuery("order[latestUploadedChapter]=desc", (page - 1) * 20, 20)), 20);
+      } else if (f.id === "mangaoni") {
+        nuevos = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=" + page), 20);
+      } else if (f.id === "mangasin") {
+        nuevos = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=" + page)), 20);
+      }
+    }
+  } catch (e) {
+    log("riel " + key + " pág " + page + ": " + ((e && e.message) || e));
+    return { toast: (e && e.userMessage) || "El sitio no quiso dar más de esta sección ahora; prueba en un rato." };
+  }
+  const vistos = {};
+  r.items.forEach(function (x) { vistos[x.url] = 1; });
+  const frescos = nuevos.filter(function (x) { return !vistos[x.url]; });
+  if (!frescos.length) {
+    // La página siguiente no trajo nada nuevo: fin honesto de la
+    // lista (no se ofrece otro «Cargar más» en bucle).
+    setJsonCache("riel:" + key, Object.assign({}, r, { mas: false }));
+    return { state: { rielTk: Date.now() }, toast: "No quedan más en esta sección." };
+  }
+  const items = r.items.concat(frescos).slice(0, 120);
+  const ok = setJsonCache("riel:" + key, { f: r.f, tit: r.tit, titEn: r.titEn, via: r.via || "",
+    items: items, page: page, mas: true });
+  if (!ok) return { toast: "El almacén del plugin está lleno: no pude guardar más." };
+  log("riel " + key + " pág " + page + ": +" + frescos.length + " → " + items.length + " series");
+  return { state: { rielTk: Date.now() } };
+}
+
 function routeUrl(r) {
   if (!r) return "";
   return String((r.params && r.params.url) || (r.args && r.args.url) || r.url || "");
@@ -3967,6 +4148,8 @@ export async function screen(ev) {
     // v0.4.21 — las colecciones del corazón flotante.
     if (route.name === "colecciones") return coleccionesTree();
     if (route.name === "coleccion") return coleccionTree(String((route.params && route.params.nombre) || ""));
+    // v0.4.27 — la sección de un riel en cuadrícula («Ver más»).
+    if (route.name === "riel") return rielTree(String((route.params && route.params.key) || ""));
     if (route.name === "colElegir") return colElegirTree(state);
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
@@ -4132,6 +4315,17 @@ export async function screenEvent(ev) {
     if (name === "openCatalog") {
       return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
     }
+    // v0.4.27 — «Ver más»: la tarjetita del riel abre su sección en
+    // cuadrícula; el botón de la cuadrícula trae la siguiente página
+    // del sitio donde la hay.
+    if (name === "verMas") {
+      const key = String(ev.arg || "");
+      if (!getJson("riel:" + key, null)) {
+        return { toast: "Esa sección ya no está: vuelve al Inicio y toca «Ver más» otra vez." };
+      }
+      return { route: { push: "riel", params: { key: key } } };
+    }
+    if (name === "rielMas") return await cargarRiel(String(ev.arg || ""));
     if (name === "alOpen") {
       try {
         const r = await alBuscar("", 1, "TRENDING_DESC", true, false);
@@ -5529,6 +5723,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
