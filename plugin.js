@@ -1,4 +1,17 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.25 — el buscador de LeerCapitulo, reparado: el sitio cambió cómo
+// busca y la dirección vieja ("/?s=") ya no busca — contesta con la
+// portada, así que el plugin raspe siempre las mismas ~24 tarjetas de
+// «Tendencias» pusiera lo que pusiera (lo que la persona vio: «los
+// mismos mangas al azar», y de ahí la impresión de fuente estática).
+// El buscador nuevo del sitio vive en su catálogo: "/manga/?q=…" (la
+// misma página del catálogo con el filtro de nombre; probado en vivo:
+// «one piece» → 8 series con One Piece delante, «naruto» → 8, «solo
+// leveling» → 4). El plugin pide esa página y la raspa con el mismo
+// lector de tarjetas del catálogo, que ya entiende ese HTML. La
+// portada y las páginas de series no cambiaron: siguen frescas (el
+// capítulo 1198 de One Piece del día anterior sale en el sitio y en
+// el plugin por igual).
 // v0.4.24 — la sección de AniList con más alcance y precisión (petición
 // de la persona: «no encuentra todos los títulos ni enlaza bien con la
 // fuente»). Tres arreglos sobre el toque de una serie de AniList:
@@ -189,7 +202,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.24";
+const VERSION = "0.4.25";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4463,9 +4476,11 @@ export async function screenEvent(ev) {
       } else if (f.id === "mangasin") {
         results = await msBuscar(q);
       } else {
+        // v0.4.25 — LeerCapitulo: "/?s=" ya no busca (devuelve la portada);
+        // el buscador del sitio es ahora la página del catálogo con ?q=.
         const ruta = f.id === "lectorxd"
           ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
-          : "/?s=" + encodeURIComponent(q);
+          : "/manga/?q=" + encodeURIComponent(q);
         const html = await getHtmlDe(f, ruta);
         results = cardsDe(f, html, 30);
       }
@@ -4838,9 +4853,11 @@ async function buscarEnFuente(f, q) {
   if (f.id === "inmanga") return await imBuscar(q);
   if (f.id === "mangaoni") return await moBuscar(q);
   if (f.id === "mangasin") return await msBuscar(q);
+  // v0.4.25 — LeerCapitulo ya no responde a "/?s=" (devuelve su portada):
+  // su buscador vive ahora en la página del catálogo, "/manga/?q=…".
   const ruta = f.id === "lectorxd"
     ? "/catalogo?filters=true&orderBy=recent&search=" + encodeURIComponent(q)
-    : "/?s=" + encodeURIComponent(q);
+    : "/manga/?q=" + encodeURIComponent(q);
   const html = await getHtmlDe(f, ruta);
   return cardsDe(f, html, 30);
 }
@@ -5432,4 +5449,5 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
