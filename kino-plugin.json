@@ -1,9 +1,9 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.27",
+  "version": "0.4.28",
   "creator": "Susejing",
-  "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni y Mangas.in) y hojea cada sección con «Ver más» y descubre manga con el catálogo de AniList.",
+  "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni, Mangas.in y ManhwaWeb) y hojea cada sección con «Ver más» y descubre manga con el catálogo de AniList.",
   "apiVersion": 14,
   "entry": "plugin.js",
   "hosts": [
@@ -35,7 +35,13 @@
     "3.bp.blogspot.com",
     "4.bp.blogspot.com",
     "graphql.anilist.co",
-    "s4.anilist.co"
+    "s4.anilist.co",
+    "manhwaweb.com",
+    "www.manhwaweb.com",
+    "api.manhwaweb.com",
+    "img1mw.xyz",
+    "img2mw.xyz",
+    "ccdn.lezhin.com"
   ],
   "capabilities": [
     "screen",
@@ -69,8 +75,3 @@
     ]
   }
 }
-
-
-
-
-

@@ -1,4 +1,22 @@
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.28 — dos peticiones de la persona. (1) Las secciones de «Ver más»
+// ahora PAGINAN: la cuadrícula enseña 24 series por ventana con
+// «‹ Series anteriores / Series siguientes ›» (el patrón del catálogo)
+// y «Cargar más del sitio» salta directo a lo recién traído — las
+// secciones pueden crecer hasta 120 series y una sola lista eterna ya
+// cansaba el dedo. (2) ManhwaWeb entra como séptima fuente, por su API
+// pública (api.manhwaweb.com, la misma que lee la app scancore, que
+// inspiró la integración): biblioteca con paginación y filtros de
+// estado/tipo/demografía, buscador, series con sus capítulos y
+// capítulos con sus páginas. Dosquistes: su JSON llega a veces con
+// saltos crudos dentro de las cadenas (se limpian antes de parsear) y
+// su casa de imágenes (img1mw.xyz / img2mw.xyz) niega el paso a
+// pedidos sin presentación («Sorry, you have been blocked», probado
+// en vivo desde el servidor de pruebas) — el mismo muro que Mangas.in:
+// el lector va con la nota honesta y el botón «Leer en ventanita», y
+// el diagnóstico de una vez por hora dirá desde el TELÉFONO si el
+// pintor de Kino pasa o no. Seis hosts nuevos en el manifiesto:
+// ManhwaWeb pedirá su aprobación en rojo al actualizar.
 // v0.4.27 — «Ver más» en cada sección del Inicio (petición de la
 // persona): cada riel (Populares, Recién actualizados, Series
 // añadidas, Seguir leyendo…) lleva al final de su tira una tarjetita
@@ -225,7 +243,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.27";
+const VERSION = "0.4.28";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -251,6 +269,7 @@ const FUENTES = [
   { id: "inmanga", nombre: "InManga", base: "https://inmanga.com" },
   { id: "mangaoni", nombre: "MangaOni", base: "https://manga-oni.com" },
   { id: "mangasin", nombre: "Mangas.in", base: "https://m440.in" },
+  { id: "manhwaweb", nombre: "ManhwaWeb", base: "https://manhwaweb.com" },
 ];
 
 function fuentePorId(id) {
@@ -281,6 +300,9 @@ function fuenteDeUrl(url) {
   // Mangas.in: sus series se guardan con el prefijo /ms para no
   // chocar con las /manga/<slug>/ de LectorXd y LeerCapitulo.
   if (/^[/]ms[/]manga[/][a-z0-9-]+(?:[/][a-z0-9-]+)?[/]?$/.test(u)) return fuentePorId("mangasin");
+  // ManhwaWeb: sus ids son <slug>_<13 dígitos>; series en /mw/manhwa/ y
+  // capítulos en /mw/leer/ (el prefijo /mw evita chocar con las demás).
+  if (/^[/]mw[/](?:manhwa|leer)[/][a-z0-9-]+_[0-9]{10,}/.test(u)) return fuentePorId("manhwaweb");
   return null;
 }
 
@@ -569,17 +591,167 @@ function msGalletaInutilFresca() {
 // del lector salen en blanco aunque el plugin las descargue y mida
 // perfectamente. Esta prueba separa «el sitio niega la imagen al pintor»
 // de cualquier otra causa — lo que decida el Registro irá al reporte.
-function msDiagPresentacion(f, etiqueta, url) {
-  if (!url || Date.now() - (getJson("msDiag", 0) || 0) < 3600000) return Promise.resolve();
-  setJson("msDiag", Date.now());
-
+function msDiagPresentacion(f, etiqueta, url, clave) {
+  const kDiag = clave || "msDiag";
+  if (!url || Date.now() - (getJson(kDiag, 0) || 0) < 3600000) return Promise.resolve();
+  setJson(kDiag, Date.now());
+  const pref = kDiag === "mwDiag" ? "MW" : "MS";
   return kino.fetch(url, {})
     .then(function (r) {
-      log("MS " + etiqueta + " al desnudo: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
+      log(pref + " " + etiqueta + " al desnudo: HTTP " + (r && r.status) + " (" + (r && r.ok ? "sí la sirve" : "la niega") + ")");
     })
     .catch(function (e) {
-      log("MS " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
+      log(pref + " " + etiqueta + " al desnudo: no bajó (" + ((e && e.message) || e) + ")");
     });
+}
+
+// ------------------------------------------------------------- manhwaweb
+// v0.4.28 — ManhwaWeb (séptima fuente) por su API pública, la misma
+// que lee scancore (api.manhwaweb.com): biblioteca con paginación y
+// filtros, series con sus capítulos y capítulos con sus páginas. Sus
+// dos quistes: el JSON llega a veces con saltos crudos dentro de las
+// cadenas (se limpian antes de parsear) y sus imágenes viven tras un
+// filtro que niega al pintor de Kino (img1mw/img2mw — «Sorry, you
+// have been blocked», comprobado en vivo); el lector va con la nota
+// honesta y el «Leer en ventanita» como en Mangas.in, y el diagnóstico
+// por hora dirá desde el teléfono si el muro también corre allí.
+const MW_BASE = "https://manhwaweb.com";
+const MW_API = "https://api.manhwaweb.com";
+const MW_ESTADOS = [["", "Cualquier estado"], ["publicandose", "Publicándose"],
+  ["finalizado", "Finalizado"], ["pausado", "Pausado"], ["cancelado", "Cancelado"]];
+const MW_TIPOS = [["", "Cualquier tipo"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"]];
+const MW_DEMO = [["", "Cualquier demografía"], ["shonen", "Shonen"], ["seinen", "Seinen"],
+  ["josei", "Josei"], ["kodomo", "Kodomo"]];
+
+// La consulta de biblioteca (la API cuenta sus páginas desde 0).
+function mwLib(estado, tipo, demo, pag) {
+  return "/manhwa/library?buscar=&estado=" + encodeURIComponent(estado || "") +
+    "&tipo=" + encodeURIComponent(tipo || "") +
+    "&erotico=no&demografia=" + encodeURIComponent(demo || "") +
+    "&order_item=alfabetico&order_dir=desc&page=" + (Math.max(0, parseInt(pag, 10) || 0)) +
+    "&generes=";
+}
+
+async function mwGet(ruta) {
+  const r = await kino.fetch(MW_API + ruta, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con ManhwaWeb (HTTP " + r.status + "). Inténtalo de nuevo.",
+  });
+  const t = await r.text();
+  // v0.4.28 — a veces manda JSON con saltos crudos dentro de las
+  // cadenas (lección del intento viejo de esta fuente): se limpian.
+  try { return JSON.parse(t); } catch (e) {
+    return JSON.parse(t.replace(/[\u0000-\u001F]/g, " "));
+  }
+}
+
+// Tarjetas de la biblioteca: id real, título en español y su imagen.
+// Las +18 quedan fuera (la receta de MangaOni), igual que en scancore.
+function mwCards(j, max) {
+  const arr = (j && j.data) || [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    if (String(m._erotico || "") === "si") continue;
+    const id = String(m.real_id || m._id || "");
+    const t = clean(String(m.name_esp || m.the_real_name || ""));
+    if (!id || !t || seen[id]) continue;
+    seen[id] = 1;
+    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || "") });
+  }
+  log("MW tarjetas: " + out.length);
+  return out;
+}
+
+async function mwBuscar(q) {
+  const qq = String(q || "").trim();
+  if (qq.length < 3) return [];
+  const j = await mwGet("/manhwa/library?buscar=" + encodeURIComponent(qq) +
+    "&estado=&tipo=&erotico=no&demografia=&order_item=alfabetico&order_dir=desc&page=0&generes=");
+  return mwCards(j, 30);
+}
+
+// Catálogo con paginación de verdad (page= en la API) y filtros de
+// estado, tipo y demografía.
+async function mwCatalog(cat, page1) {
+  const p = Math.max(0, (parseInt(page1, 10) || 1) - 1);
+  const j = await mwGet(mwLib((cat && cat.status) || "", (cat && cat.type) || "",
+    (cat && cat.genre) || "", p));
+  const items = mwCards(j, 30);
+  return { items: items, mas: items.length > 0 };
+}
+
+// La serie con TODOS sus capítulos (asc: del 1 al más nuevo). Cada
+// fila de chapters trae el número y el enlace público «…-<cap>_<ver>»;
+// la parte tras el último guion nombra la subida, y de varias subidas
+// del mismo capítulo se queda la más reciente.
+async function mwSerie(url) {
+  const id = String(url || "").replace(/^[/]mw[/]manhwa[/]/, "").replace(/[/]$/, "");
+  if (!id || id.indexOf("_") < 0) return { meta: { title: "Serie", poster: "", overview: "" },
+    chapters: [], aviso: "Esa serie de ManhwaWeb no tiene una dirección válida." };
+  const j = await mwGet("/manhwa/see/" + encodeURIComponent(id));
+  const meta = { title: clean(String(j.name_esp || j.the_real_name || id)),
+    poster: String(j._imagen || ""), overview: clean(String(j._sinopsis || "")) };
+  const rows = Array.isArray(j.chapters) ? j.chapters : (Array.isArray(j._chapters) ? j._chapters : []);
+  const porNum = {};
+  const orden = [];
+  for (let i = 0; i < rows.length; i++) {
+    const c = rows[i] || {};
+    let num = String(c.chapter || "").trim();
+    const mn = num.match(/^(\d+(?:[.]\d+)?)_/);
+    if (mn) num = mn[1];
+    const version = String(c.link || "").split("-").pop();
+    if (!num || version.indexOf("_") < 0) continue;
+    const prev = porNum[num];
+    if (!prev) { orden.push(num); }
+    if (!prev || (c.create || 0) > (prev.create || 0)) {
+      porNum[num] = { create: c.create || 0, cid: id + "-" + version };
+    }
+  }
+  const caps = orden.sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0))
+    .map((num) => ({ num: num, title: "Capítulo " + num,
+      url: "/mw/leer/" + porNum[num].cid + "/" }));
+  log("MW serie: " + caps.length + " capítulos");
+  return { meta: meta, chapters: caps.slice(0, TOPE_CAPS_SERIE) };
+}
+
+// Las páginas del capítulo: /chapters/see/<id>-<cap>_<ver> trae el
+// array «img» con las direcciones https de las páginas.
+async function mwImages(url) {
+  const id = String(url || "").replace(/^[/]mw[/]leer[/]/, "").replace(/[/]$/, "");
+  if (!id) return [];
+  const j = await mwGet("/chapters/see/" + encodeURIComponent(id));
+  const ch = (j && j.chapter) || {};
+  const imgs = Array.isArray(ch.img) ? ch.img : [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < imgs.length; i++) {
+    const u = String(imgs[i] || "");
+    if (u.indexOf("https://") === 0 && !seen[u]) { seen[u] = 1; out.push(u); }
+  }
+  log("MW lector: " + out.length + " páginas");
+  return out;
+}
+
+// «Leer en ventanita»: el lector del propio sitio (el navegador SÍ
+// pasa el filtro de img1mw/img2mw y las imágenes se ven).
+async function mwVentanaLeer(ch) {
+  if (!kino.visualBrowser || !kino.visualBrowser.available) return { st: "sin-ventanita" };
+  const id = String(ch.url || "").replace(/^[/]mw[/]leer[/]/, "").replace(/[/]$/, "");
+  try {
+    const r = await kino.visualBrowser.open({
+      url: MW_BASE + "/leer/" + id,
+      title: "ManhwaWeb · cap. " + ch.num,
+      timeoutMs: 600000,
+    });
+    const st = (r && r.status) || "sin-respuesta";
+    log("ventana leer manhwaweb: " + st);
+    return { st: st };
+  } catch (e) {
+    log("ventana leer manhwaweb falló: " + ((e && e.message) || e));
+    return { st: "error" };
+  }
 }
 
 function log(msg) {
@@ -1768,108 +1940,6 @@ async function imCatalog(page1) {
   return { items: items, mas: items.length > 0 };
 }
 
-// ------------------------------------------------ ManhwaWeb (5ª fuente)
-// ManhwaWeb expone una API JSON pública (biblioteca, series y
-// capítulos). Su JSON a veces trae saltos de línea crudos dentro de
-// los números, así que se limpia antes de parsear; los enlaces de los
-// capítulos se sacan por regex del texto por si la API vuelve a
-// cambiar de forma. Las series se guardan como /<slug>_<id>, los
-// capítulos como /leer/<slug>-<num>_01 y el contenido +18 se descarta.
-
-const MW_API = "https://api.manhwaweb.com";
-const MAX_CAPS_MW = 300;
-
-async function mwGet(path) {
-  const r = await kino.fetch(MW_API + path, { headers: { Accept: "application/json" } });
-  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
-    userMessage: "No se pudo conectar con ManhwaWeb. Inténtalo de nuevo.",
-  });
-  try { return await r.json(); } catch (e) { return JSON.parse((await r.text()).replace(/[\u0000-\u001F]/g, "")); }
-}
-
-function mwCards(j, max) {
-  let arr;
-  if (j && Array.isArray(j.data)) arr = j.data;
-  else if (Array.isArray(j)) arr = j;
-  else if (j && Array.isArray(j.utimos_mangas_creados)) arr = j.utimos_mangas_creados;
-  else if (j && j.data && (Array.isArray(j.data.weekly) || Array.isArray(j.data.total))) arr = (j.data.weekly || []).concat(j.data.total || []);
-  else arr = [];
-  const out = [];
-  for (let i = 0; i < arr.length && out.length < max; i++) {
-    const x = arr[i];
-    if (!x || !x._id) continue;
-    if (String(x._erotico || "no") === "si") continue;
-    const poster = String(x._imagen || "");
-    if (!/^https?:/i.test(poster)) continue;
-    out.push({ url: "/" + x._id, title: clean(x.name_esp || x.the_real_name || x._name || x._id), poster: poster });
-  }
-  log("MW tarjetas: " + out.length + " de " + arr.length);
-  return out;
-}
-
-async function mwBuscar(q) {
-  const j = await mwGet("/manhwa/library?buscar=" + encodeURIComponent(q) + "&page=0");
-  return mwCards(j, 30);
-}
-
-async function mwSerie(url) {
-  const id = String(url).replace(/^[/]/, "").replace(/[/]$/, "");
-  const r = await kino.fetch(MW_API + "/manhwa/see/" + id, { headers: { Accept: "application/json" } });
-  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
-    userMessage: "No se pudo conectar con ManhwaWeb. Inténtalo de nuevo.",
-  });
-  const text = await r.text();
-  let meta = { title: id, poster: "", overview: "" };
-  try {
-    const j = JSON.parse(text.replace(/[\u0000-\u001F]/g, ""));
-    const d = (j && j.data && j.data._id) ? j.data : j;
-    meta.title = clean(d.name_esp || d._name || d.the_real_name || id);
-    meta.poster = String(d._imagen || "");
-    meta.overview = clean(String(d.sinopsis || d._sinopsis || "")).slice(0, 600);
-  } catch (e) { log("MW detalle JSON roto: " + e); }
-  const caps = [];
-  const seen = {};
-  const re = /"(?:link|url)"\s*:\s*"([^"]*[/]leer[/][^"]+)"/g;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    let u = m[1];
-    if (/^https?:/i.test(u)) u = u.replace(/^https?:[/][/][^/]+/i, "");
-    if (seen[u]) continue;
-    seen[u] = 1;
-    const seg = u.split("/").filter(Boolean);
-    const slug = seg[1] || "";
-    const nm = slug.match(/-([0-9]+(?:[.][0-9]+)?)(?:[_][0-9]+)?$/);
-    caps.push({ url: u, num: nm ? nm[1] : slug });
-  }
-  const vnum = {};
-  const caps2 = caps.filter(function (x) {
-    const k = x.num + "";
-    if (vnum[k]) return false;
-    vnum[k] = 1;
-    return true;
-  });
-  caps2.sort(function (a, b) { return parseFloat(b.num) - parseFloat(a.num); });
-  log("MW capítulos: " + caps2.length);
-  return { meta: meta, chapters: caps2 };
-}
-
-async function mwImages(chUrl) {
-  const slug = String(chUrl).replace(/^[/]leer[/]/, "").replace(/[/]$/, "");
-  const j = await mwGet("/chapters/see/" + slug);
-  let imgs = [];
-  if (j && j.chapter && Array.isArray(j.chapter.img)) imgs = j.chapter.img;
-  else if (j && j.data && Array.isArray(j.data.images)) imgs = j.data.images;
-  const out = [];
-  for (let i = 0; i < imgs.length; i++) if (/^https?:/i.test(imgs[i] || "")) out.push(imgs[i]);
-  log("MW lector: " + out.length + " páginas");
-  return out;
-}
-
-async function mwCatalog(page1) {
-  const j = await mwGet("/manhwa/library?buscar=&page=" + (page1 - 1));
-  return { items: mwCards(j, CAT_POR_PAG), mas: !!(j && j.next) };
-}
-
 // ------------------------------------------------ MangaOni (5ª fuente)
 // MangaOni es un WordPress con Cloudflare que solo abre a peticiones
 // presentadas como navegador de escritorio (receta verificada en la app
@@ -3000,6 +3070,16 @@ async function dimsDeImagen(url) {
         if (par.length) ops.headers.Cookie = par.join("; ");
       }
     }
+    // v0.4.28 — ManhwaWeb mide sus imágenes presentándose igual (su casa
+    // img1mw/img2mw niega a los pedidos desnudos): el lector las DIBUJA
+    // con el pintor, que no puede presentarse — de ahí la ventanita.
+    if (/img[12]mw[.]xyz/i.test(u)) {
+      ops.headers = {
+        Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+        "User-Agent": UA_MOVIL,
+        Referer: MW_BASE + "/",
+      };
+    }
     const r = await kino.fetch(url, ops);
     if (!r.ok) {
       // v0.4.17 — el porqué de CADA imagen que no baje, de cualquier
@@ -3310,6 +3390,14 @@ async function homeTree() {
       // puede pedir la siguiente.
       masRec = recientes.length > 0;
     } catch (e) { log("MS home rec: " + e); }
+  } else if (f.id === "manhwaweb") {
+    // v0.4.28 — ManhwaWeb por su API: la biblioteca entera (orden de la
+    // API) y las que están publicándose; ambas pagan páginas de verdad.
+    titPop = "Biblioteca de ManhwaWeb"; titPopEn = "ManhwaWeb library";
+    titRec = "Publicándose en ManhwaWeb"; titRecEn = "Ongoing on ManhwaWeb";
+    try { populares = mwCards(await mwGet(mwLib("", "", "", 0)), 20); } catch (e) { log("MW home pop: " + ((e && e.message) || e)); }
+    try { recientes = mwCards(await mwGet(mwLib("publicandose", "", "", 0)), 20); } catch (e) { log("MW home rec: " + ((e && e.message) || e)); }
+    masPop = true; masRec = true;
   } else {
     html = await getHtmlDe(f, "/");
     if (f.id === "lectorxd") {
@@ -3436,13 +3524,13 @@ async function homeTree() {
     } catch (e) { log("riel " + key + " sin guardar: " + ((e && e.message) || e)); }
   };
   if (populares.length) guardarRiel("railPop", { f: f.id, tit: titPop, titEn: titPopEn,
-    via: msVia, items: populares, page: 1, mas: masPop });
+    via: msVia, items: populares, page: 1, mas: masPop, start: 0 });
   if (recientes.length) guardarRiel("railRec", { f: f.id, tit: titRec, titEn: titRecEn,
-    via: "", items: recientes, page: 1, mas: masRec });
+    via: "", items: recientes, page: 1, mas: masRec, start: 0 });
   if (actualizados.length) guardarRiel("railUpd", { f: f.id, tit: titUpd, titEn: titUpdEn,
-    via: "", items: actualizados, page: 1, mas: false });
+    via: "", items: actualizados, page: 1, mas: false, start: 0 });
   if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
-    titEn: "Keep reading", items: hTodos, page: 1, mas: false });
+    titEn: "Keep reading", items: hTodos, page: 1, mas: false, start: 0 });
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(fuentes)
     .concat(railHist)
@@ -3458,6 +3546,8 @@ function detalleSinCaps(url) {
   const f = fuenteDeUrl(url);
   if (f && f.id === "lectorxd")
     return "No hay capítulos legibles de esta serie en LectorXd: si es +18, la cierra sin cuenta. Prueba otra serie.";
+  if (f && f.id === "manhwaweb")
+    return "ManhwaWeb no entregó capítulos de esta serie: puede ser +18 (quedan fuera de su biblioteca pública, como en MangaOni) o estar retirada. Prueba otra serie.";
   if (f && f.id === "mangadex")
     return "MangaDex no tiene capítulos legibles en español de esta serie: sus capítulos en español suelen ser solo enlaces a otras webs (series licenciadas) o la serie está retirada. Prueba esta serie en otra fuente.";
   if (f && f.id === "inmanga")
@@ -3662,24 +3752,33 @@ function readerTree(state) {
   // página ni siquiera para medir, el aviso de v0.4.17 sigue mandando
   // — ahora con el mismo botón.
   const esMs = d && d.url && d.url.indexOf("/ms/") === 0;
+  // v0.4.28 — ManhwaWeb en la misma situación que Mangas.in: su casa
+  // de imágenes niega el paso al pintor de Kino (comprobado desde el
+  // servidor de pruebas; el diagnóstico por hora dirá si desde el
+  // teléfono es distinto).
+  const esMw = d && d.url && d.url.indexOf("/mw/") === 0;
   const btnVentanaLeer = { type: "TextButton", key: "btnLeerVentana", labelText: "Leer en ventanita",
     labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
-  const notaMs = (esMs && medidas.length) ? [
+  const notaMs = ((esMs || esMw) && medidas.length) ? [
     { type: "Column", padding: 12, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text",
-        text: "Kino no puede dibujar las páginas de Mangas.in: el sitio solo las sirve a quien sabe presentarse, y su pintor de imágenes no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio.",
-        textEn: "Kino cannot draw Mangas.in's pages: the site only serves them to identified requests, and its image painter cannot identify itself. Tap «Read in the small window» and they open on the site's own reader.",
+        text: esMw
+          ? "Kino no puede dibujar las páginas de ManhwaWeb: su casa de imágenes las niega a quien no sabe presentarse, y el pintor de Kino no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio."
+          : "Kino no puede dibujar las páginas de Mangas.in: el sitio solo las sirve a quien sabe presentarse, y su pintor de imágenes no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio.",
+        textEn: "Kino cannot draw this site's pages: the image host only serves identified requests, and Kino's image painter cannot identify itself. Tap «Read in the small window» and they open on the site's own reader.",
         style: "caption", color: "muted" },
       Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaNota" }),
     ] },
   ] : [];
-  const avisoMs = (esMs && !medidas.length) ? [
+  const avisoMs = ((esMs || esMw) && !medidas.length) ? [
     { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text", text: "El sitio no entregó ninguna de las " + r.images.length + " páginas.",
         textEn: "The site served none of the " + r.images.length + " pages.", style: "h4" },
       { type: "Text",
-        text: "Si las listas de Mangas.in siguen cerradas, ábrelas desde la portada (el botón «Mangas.in tiene sus listas cerradas») y vuelve a abrir el capítulo. Si ya lo hiciste, manda el Registro: dirá el motivo exacto.",
-        textEn: "If Mangas.in's lists are still closed, open them from home (the «Mangas.in has its lists closed» button) and reopen the chapter. If already done, send the log: it will say the exact reason.",
+        text: esMw
+          ? "ManhwaWeb no entregó ni una página para medir: su casa de imágenes suele negarlas a quien no se presenta. Toca «Leer en ventanita» para leer el capítulo en el lector del propio sitio, y manda el Registro si quieres que vea el motivo exacto."
+          : "Si las listas de Mangas.in siguen cerradas, ábrelas desde la portada (el botón «Mangas.in tiene sus listas cerradas») y vuelve a abrir el capítulo. Si ya lo hiciste, manda el Registro: dirá el motivo exacto.",
+        textEn: "If the site keeps refusing, open it from home and retry. If already done, send the log: it will say the exact reason.",
         style: "caption", color: "muted" },
       Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaAviso" }),
     ] },
@@ -3850,6 +3949,10 @@ const CAT_TOPE = 90;
 // ventana de CAT_TOPE: los botones "‹ / ›" mueven la ventana sin
 // pedirle nada al sitio y "Cargar más" trae otra página del sitio.
 const CAT_ALMACEN = 240;
+// v0.4.28 — las pantallas «Ver más» de los rieles enseñan una ventana
+// de RIEL_TOPE series: «‹ / ›» recorre lo ya cargado sin pedirle nada
+// al sitio y «Cargar más» (donde la fuente pagina) trae otra página.
+const RIEL_TOPE = 24;
 
 function catalogoUrlDe(f, cat, page) {
   if (f.id !== "lectorxd") return catalogoUrl(cat, page);
@@ -3900,6 +4003,15 @@ function catalogTree(c) {
     drops = [catDrop("Orden", "catOrder", ORDEN_MO, c.order, "catOrder")];
   } else if (f.id === "mangasin") {
     drops = [catDrop("Orden", "catOrder", ORDEN_MS, c.order, "catOrder")];
+  } else if (f.id === "manhwaweb") {
+    // v0.4.28 — los filtros de la API de ManhwaWeb: estado, tipo y
+    // demografía (la demografía viaja en el hueco del género, que el
+    // catálogo ya sabe mover).
+    drops = [
+      catDrop("Estado", "catStatus", MW_ESTADOS, c.status, "catStatus"),
+      catDrop("Tipo", "catType", MW_TIPOS, c.type, "catType"),
+      catDrop("Demografía", "catGenre", MW_DEMO, c.genre, "catGenre"),
+    ];
   } else if (f.id === "leercapitulo") {
     drops = [
       catDrop("Género", "catGenre", GENEROS, c.genre, "catGenre"),
@@ -3963,6 +4075,9 @@ async function cargarCatalogo(cat, page, conRuta) {
     nuevos = r2.items; mas = r2.mas;
   } else if (f.id === "mangasin") {
     const r2 = await msCatalog(cat, page1);
+    nuevos = r2.items; mas = r2.mas;
+  } else if (f.id === "manhwaweb") {
+    const r2 = await mwCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
@@ -4035,8 +4150,10 @@ function rielTree(key) {
     return errorTree("Esta sección ya no está en el almacén: vuelve al Inicio y toca «Ver más» otra vez.");
   }
   const f = fuentePorId(r.f || "leercapitulo");
-  const items = r.items;
-  const cuantos = items.length + (items.length === 1 ? " serie" : " series") +
+  const todos = r.items;
+  const start = Math.max(0, parseInt(r.start, 10) || 0);
+  const items = todos.slice(start, start + RIEL_TOPE);
+  const cuantos = todos.length + (todos.length === 1 ? " serie" : " series") +
     (r.f === "hist" ? "" : " · " + f.nombre);
   return {
     type: "Scaffold",
@@ -4047,14 +4164,24 @@ function rielTree(key) {
       actions: [] },
     body: { type: "SingleChildScrollView", key: "rielBody", children: [{ type: "Column", children: [
       { type: "Text", text: cuantos, textEn: cuantos, style: "caption", color: "muted", padding: 16 },
+      items.length && (todos.length > RIEL_TOPE || start > 0) ?
+        { type: "Text", text: "Mostrando " + (start + 1) + "–" + (start + items.length) + " de " + todos.length + ".",
+          textEn: "Showing " + (start + 1) + "–" + (start + items.length) + " of " + todos.length + ".",
+          style: "caption", color: "muted", padding: 16 } : null,
       items.length ? gridOf(items, VACIO_SERIES) : VACIO_SERIES,
+      start > 0 ? { type: "ElevatedButton", key: "rielPrevW", icon: "arrow_back",
+        labelText: "‹ Series anteriores", labelTextEn: "Previous series",
+        onPressed: { event: "rielPrevW", arg: key } } : null,
+      start + RIEL_TOPE < todos.length ? { type: "ElevatedButton", key: "rielNextW", icon: "expand_more",
+        labelText: "Series siguientes ›", labelTextEn: "Next series",
+        onPressed: { event: "rielNextW", arg: key } } : null,
       r.mas
         ? { type: "ElevatedButton", key: "rielMas", icon: "expand_more",
             labelText: "Cargar más del sitio", labelTextEn: "Load more from site",
             onPressed: { event: "rielMas", arg: key } }
         : { type: "Text", text: "Es todo lo que esta sección trae.",
             textEn: "This is all this section has.", style: "caption", color: "muted", padding: 16 },
-    ] }] },
+    ].filter(Boolean) }] },
   };
 }
 
@@ -4088,6 +4215,9 @@ async function cargarRiel(key) {
         if (!ruta) throw kino.error("network", "sin páginas", {
           userMessage: "Esta lista de Mangas.in no se deja pasar de página desde el plugin." });
         nuevos = msCards(await getHtmlDe(f, ruta), 20);
+      } else if (f.id === "manhwaweb") {
+        // La API de ManhwaWeb cuenta sus páginas desde 0.
+        nuevos = mwCards(await mwGet(mwLib("", "", "", page - 1)), 20);
       }
     } else if (key === "railRec") {
       if (f.id === "mangadex") {
@@ -4096,6 +4226,8 @@ async function cargarRiel(key) {
         nuevos = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=" + page), 20);
       } else if (f.id === "mangasin") {
         nuevos = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=" + page)), 20);
+      } else if (f.id === "manhwaweb") {
+        nuevos = mwCards(await mwGet(mwLib("publicandose", "", "", page - 1)), 20);
       }
     }
   } catch (e) {
@@ -4112,8 +4244,10 @@ async function cargarRiel(key) {
     return { state: { rielTk: Date.now() }, toast: "No quedan más en esta sección." };
   }
   const items = r.items.concat(frescos).slice(0, 120);
+  // La ventana salta a lo recién cargado (el patrón del catálogo):
+  // así «Cargar más» siempre deja a la vista series nuevas.
   const ok = setJsonCache("riel:" + key, { f: r.f, tit: r.tit, titEn: r.titEn, via: r.via || "",
-    items: items, page: page, mas: true });
+    items: items, page: page, mas: true, start: Math.max(0, items.length - RIEL_TOPE) });
   if (!ok) return { toast: "El almacén del plugin está lleno: no pude guardar más." };
   log("riel " + key + " pág " + page + ": +" + frescos.length + " → " + items.length + " series");
   return { state: { rielTk: Date.now() } };
@@ -4290,10 +4424,14 @@ export async function screenEvent(ev) {
       const rS = state.reader || {};
       const idx = parseInt(rS.idx, 10) || 0;
       const ch = d && Array.isArray(d.chapters) ? d.chapters[idx] : null;
-      if (!ch || !ch.url || String(ch.url).indexOf("/ms/") !== 0)
-        return { toast: "No hay un capítulo de Mangas.in abierto en el lector." };
-      const fMs = fuentePorId("mangasin");
-      const r = await msVentanaLeer(ch, fMs);
+      const cu = String(ch && ch.url || "");
+      // v0.4.28 — el mismo botón sirve a Mangas.in y a ManhwaWeb:
+      // cada una abre el capítulo en el lector de su propio sitio.
+      if (!ch || !ch.url || (cu.indexOf("/ms/") !== 0 && cu.indexOf("/mw/") !== 0))
+        return { toast: "No hay un capítulo de Mangas.in o ManhwaWeb abierto en el lector." };
+      const r = cu.indexOf("/mw/") === 0
+        ? await mwVentanaLeer(ch)
+        : await msVentanaLeer(ch, fuentePorId("mangasin"));
       if (r.st === "sin-ventanita")
         return { toast: "Este Kino no trae la ventanita de navegador: actualiza la app." };
       if (r.st === "timeout")
@@ -4585,6 +4723,19 @@ export async function screenEvent(ev) {
       setJsonCache("cat", Object.assign({}, c, { start: ns }));
       return { state: { catTk: Date.now() } };
     }
+    if (name === "rielPrevW" || name === "rielNextW") {
+      // v0.4.28 — ventanas de la pantalla «Ver más» de un riel: mueven
+      // la vista por lo ya cargado, sin pedirle nada al sitio.
+      const rkey = String(ev.arg || "");
+      const r = getJson("riel:" + rkey, null);
+      if (!r || !Array.isArray(r.items) || !r.items.length) return null;
+      const start = Math.max(0, parseInt(r.start, 10) || 0);
+      const tope = Math.max(0, r.items.length - RIEL_TOPE);
+      const ns = name === "rielPrevW" ? Math.max(0, start - RIEL_TOPE)
+        : Math.min(tope, start + RIEL_TOPE);
+      setJsonCache("riel:" + rkey, Object.assign({}, r, { start: ns }));
+      return { state: { rielTk: Date.now() } };
+    }
     if (name === "popBack") return { route: { pop: true } };
     if (name === "openSeries") {
       const url = String(ev.arg || "");
@@ -4749,6 +4900,8 @@ export async function screenEvent(ev) {
         results = await moBuscar(q);
       } else if (f.id === "mangasin") {
         results = await msBuscar(q);
+      } else if (f.id === "manhwaweb") {
+        results = await mwBuscar(q);
       } else {
         // v0.4.25 — LeerCapitulo: "/?s=" ya no busca (devuelve la portada);
         // el buscador del sitio es ahora la página del catálogo con ?q=.
@@ -5127,6 +5280,7 @@ async function buscarEnFuente(f, q) {
   if (f.id === "inmanga") return await imBuscar(q);
   if (f.id === "mangaoni") return await moBuscar(q);
   if (f.id === "mangasin") return await msBuscar(q);
+  if (f.id === "manhwaweb") return await mwBuscar(q);
   // v0.4.25 — LeerCapitulo ya no responde a "/?s=" (devuelve su portada):
   // su buscador vive ahora en la página del catálogo, "/manga/?q=…".
   const ruta = f.id === "lectorxd"
@@ -5594,6 +5748,14 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     msDiagPresentacion(fSer, "imagen del capítulo", images[0] && images[0].url);
     msDiagPresentacion(fSer, "portada", (d.meta && d.meta.poster) || msCover(msSlugDe(d.url)));
   }
+  // v0.4.28 — ManhwaWeb con el mismo diagnóstico: ¿sus imágenes se
+  // sirven a un pedido sin presentarse (el pintor de Kino)? Lo que diga
+  // el Registro desde el TELÉFONO decide si el lector puede dibujar o
+  // si la ventanita es el camino (desde el servidor de pruebas, el
+  // filtro de img1mw/img2mw niega el paso).
+  if (fSer.id === "manhwaweb") {
+    msDiagPresentacion(fSer, "imagen del capítulo", images[0] && images[0].url, "mwDiag");
+  }
   // Historial: el último capítulo abierto de la serie (para
   // "Seguir leyendo", el botón "Continuar" y las marcas de leído).
   const h = hist();
@@ -5681,6 +5843,13 @@ async function cargarSerie(url, conRuta) {
     meta.totalCaps = s.chapters.length;
     // msSerie ya entrega los capítulos del 1 al más nuevo.
     full = s.chapters.slice(0, TOPE_CAPS_SERIE);
+  } else if (f.id === "manhwaweb") {
+    const s = await mwSerie(url);
+    if (s.aviso) return { toast: s.aviso };
+    meta = s.meta;
+    meta.totalCaps = s.chapters.length;
+    // mwSerie ya entrega los capítulos del 1 al más nuevo.
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
   } else {
     const html = await getHtmlDe(f, url);
     if (f.id === "lectorxd") {
@@ -5723,6 +5892,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
