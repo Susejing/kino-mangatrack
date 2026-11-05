@@ -15,6 +15,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.37 — el arreglo de la pantalla completa: el ojo usa
+// mergeWithKinoBar y dense, funciones de apiVersion 19, y el manifiesto
+// había quedado en 14 — Kino las ignoraba y dibujaba DOS barras
+// apiladas (la suya con «MangaTrack» y la nuestra con el ojo debajo).
+// Con el apiVersion 19 la barra del lector es UNA sola compacta:
+// normal = «Capítulo N · versión» con atrás y ojo; con el ojo
+// apretado la fila se queda en mínimos — el ojo y un espacio en
+// blanco en el lugar del nombre, para que no se lea «MangaTrack».
+// Esa fila fina es lo mínimo que Kino permite: es su salida y
+// siempre la conserva (regla de la app, no del plugin).
 // v0.4.36 — el panel del lector viaja al FINAL del capítulo: la
 // persona lee sin nada encima y al terminar encuentra «Fin del
 // capítulo» con Anterior / Ir a capítulo / Siguiente (como los
@@ -341,7 +351,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.36";
+const VERSION = "0.4.37";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4481,6 +4491,7 @@ function readerTree(state) {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
     appBar: inm ? { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
+        title: " ",
         leading: { type: "IconButton", key: "verBarra", icon: "visibility",
           labelText: "Mostrar la barra", labelTextEn: "Show the bar",
           onPressed: { event: "lectorInm" } } }
@@ -6648,6 +6659,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
