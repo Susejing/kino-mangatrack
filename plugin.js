@@ -15,6 +15,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.33 — la portada elegante: el Inicio estrena el «heroCard»
+// oficial de Kino (una serie destacada que rota cada día, con su
+// portada y botón directo a la serie), «Seguir leyendo» sube a
+// protagonista con su cuenta en insignia y el capítulo de cada serie
+// bajo el título, el detalle gana su barra de progreso («llevas X de
+// Y capítulos») y las cargas muestran esqueletos con la forma del
+// contenido en vez del molinillo. El orden de la portada cambia: el
+// contenido primero y las fuentes al final. Todo aditivo: nada de
+// lo que ya funcionaba se toca.
 // v0.4.32 — presentación: icono propio del plugin (icon.png, PNG
 // cuadrado en el repo), color de acento naranja e icono «bookmark» en
 // la entrada del menú, y un README.md bien detallado en el repo (qué
@@ -312,7 +321,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.32";
+const VERSION = "0.4.33";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3489,8 +3498,14 @@ async function medirImagenes(images, presupuesto) {
 // ------------------------------------------------------------- interfaz
 
 function loadingTree(msg) {
-  return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
-    { type: "CircularProgressIndicator" },
+  // v0.4.33 — skeleton: mientras llega la serie o el catálogo, un
+  // marcador de lugar con la FORMA del contenido (portadas y líneas,
+  // en el color atenuado de Kino con su pulso suave) se lee mejor
+  // que un molinillo suelto. Con wrap las cuatro tarjetas se reparten
+  // solas: dos por fila en el teléfono, las cuatro en la TV.
+  return { type: "Column", padding: 16, gap: 12, children: [
+    { type: "Row", gap: 8, wrap: true, children: [0, 1, 2, 3].map((i) => (
+      { type: "Skeleton", shape: "card", width: 110, key: "sk" + i })) },
     { type: "Text", text: msg || "Cargando…", textEn: "Loading…", color: "muted" },
   ] };
 }
@@ -3815,11 +3830,20 @@ async function homeTree() {
   // corazón, como primera tarjeta).
   const hh = hist();
   const hTodos = Object.keys(hh).map((k) => ({ url: k, title: hh[k].title || "",
-      poster: hh[k].poster || "", ts: hh[k].ts || 0 }))
+      poster: hh[k].poster || "", ts: hh[k].ts || 0,
+      // v0.4.33 — la etiqueta de capítulo bajo el título (la misma
+      // vía de it.label de los «Recién actualizados»): donde estabas
+      // de cada serie, a la vista en el riel y en su «Ver más».
+      label: (hh[k].num || "") !== "" ? "Cap. " + hh[k].num : "" }))
     .filter((x) => x.title).sort((a, b) => b.ts - a.ts);
   const hItems = hTodos.slice(0, 15);
   const railHist = hItems.length ? [
-    { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3", padding: 16 },
+    // v0.4.33 — la insignia con el número de series en lectura da el
+    // toque de las apps de manga al encabezado del riel protagonista.
+    { type: "Row", gap: 8, padding: { h: 16 }, children: [
+      { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3" },
+      { type: "Badge", text: String(hTodos.length) },
+    ] },
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
         children: hItems.map((it) => posterCard(it, "h-", true))
@@ -3897,15 +3921,51 @@ async function homeTree() {
     populares = decoraMuros(populares);
     recientes = decoraMuros(recientes);
   }
+  // v0.4.33 — el hero del Inicio: una sola serie destacada arriba de
+  // todo, el banner oficial de Kino (el mismo de la portada de su
+  // lado de video). Sale de las populares de la fuente activa y rota
+  // de a una por día (la fecha decide, no el azar: el mismo día, la
+  // misma serie — así el Inicio no cambia bajo los dedos). En las
+  // casas con muro la portada ya es la copia local convertida; si el
+  // pintor no la admite en un banner, el hero se dibuja igual con su
+  // título, su línea y sus botones (la imagen se descarta, no la
+  // pantalla). El segundo botón abre las populares en cuadrícula.
+  let hero = [];
+  if (populares.length) {
+    const dia = Math.floor(Date.now() / 86400000);
+    const it = populares[dia % populares.length];
+    if (it && it.title && it.url) {
+    const hNodo = {
+      type: "heroCard",
+      title: String(it.title).slice(0, 60),
+      titleEn: String(it.title).slice(0, 60),
+      text: "Destacado de hoy en " + f.nombre,
+      textEn: "Today's pick on " + f.nombre,
+      buttons: [
+        { type: "ElevatedButton", labelText: "Ver serie", labelTextEn: "Open series",
+          onPressed: { event: "openSeries", arg: it.url } },
+        { type: "TextButton", labelText: "Populares", labelTextEn: "Popular",
+          onPressed: { event: "verMas", arg: "railPop" } },
+      ],
+    };
+    if (it.poster) hNodo.image = it.poster;
+    hero = [hNodo];
+    }
+  }
+  // v0.4.33 — orden de la portada: el hero, «Seguir leyendo» de
+  // protagonista, el contenido de la fuente y al final las fuentes
+  // y el catálogo (antes las fuentes abrían la página; ahora el
+  // contenido manda, como en las apps de lectura).
   return { type: "SingleChildScrollView", key: "home", children: []
-    .concat(fuentes)
+    .concat(hero)
     .concat(railHist)
     .concat(msAviso)
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
     .concat(gridSeries)
-    .concat(catalogo) };
+    .concat(catalogo)
+    .concat(fuentes) };
 }
 
 function detalleSinCaps(url) {
@@ -3955,6 +4015,14 @@ function detailTree(state) {
         { type: "Text", text: meta.title || d.url, style: "h2" },
         { type: "Text", text: chapters.length + " capítulos",
           textEn: chapters.length + " chapters", color: "muted", style: "caption" },
+        // v0.4.33 — la barra de progreso de lectura: cuánto llevas de
+        // la serie, a la vista (el índice del historial es absoluto,
+        // así que el conteo es correcto en cualquier ventana de la
+        // lista). Sin historial de esta serie no se dibuja.
+        hIdx >= 0 && capsTotal > 0 ? { type: "LinearProgressIndicator",
+          value: Math.min(1, (hIdx + 1) / capsTotal),
+          labelText: "Llevas " + (hIdx + 1) + " de " + capsTotal + " capítulos",
+          labelTextEn: (hIdx + 1) + " of " + capsTotal + " chapters" } : null,
         meta.overview ? { type: "Text", text: meta.overview.slice(0, 1500), style: "p", color: "muted" } : null,
         {
           type: "Row", gap: 8, wrap: true, children: [
@@ -6469,6 +6537,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
