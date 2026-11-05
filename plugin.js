@@ -15,6 +15,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.38 — el ojo se muda abajo: en pantalla completa la barra de
+// arriba queda en mínimos absolutos — sin nombre (un espacio
+// irrompible como título-nodo: Kino descartaba el espacio llano y
+// ponía «MangaTrack» de vuelta), sin la línea divisoria del borde
+// (divider: false) y con el botón de atrás como salida — y el ojo
+// pasa a ser un botón flotante en la esquina de abajo, como los
+// lectores de siempre: tocarlo trae la barra completa de vuelta.
+// El color de esa fila no puede ser transparente: Kino solo acepta
+// sus roles de color fijos (surface, primary...) para la barra, así
+// que la fila conserva el color del tema — 56 dp sin nombre ni línea
+// es lo más discreto que la app permite.
 // v0.4.37 — el arreglo de la pantalla completa: el ojo usa
 // mergeWithKinoBar y dense, funciones de apiVersion 19, y el manifiesto
 // había quedado en 14 — Kino las ignoraba y dibujaba DOS barras
@@ -351,7 +362,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.37";
+const VERSION = "0.4.38";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4487,20 +4498,31 @@ function readerTree(state) {
   // con mergeWithKinoBar la nuestra la ocupa y en pantalla completa se
   // queda en mínimos: sin título y sin atrás, SOLO el ojo — tocarlo
   // trae la barra completa de vuelta.
+  // v0.4.38 — el ojo se muda ABAJO: en pantalla completa la fila queda
+  // [atrás][nombre invisible][campana de Kino] — el título es un NODO
+  // con un espacio irrompible (Kino descartaba el espacio llano del
+  // 0.4.37 y ponía «MangaTrack» de vuelta), sin la línea divisoria
+  // (divider: false) — y el ojo vive como botón flotante en la esquina
+  // de abajo, sobre la página: tocarlo trae la barra completa. El
+  // color de la fila es del tema de Kino: sus barras solo aceptan
+  // roles de color fijos, sin transparente posible.
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
     appBar: inm ? { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
-        title: " ",
-        leading: { type: "IconButton", key: "verBarra", icon: "visibility",
-          labelText: "Mostrar la barra", labelTextEn: "Show the bar",
-          onPressed: { event: "lectorInm" } } }
+        title: { type: "Text", key: "titInm", text: "\u00A0" },
+        divider: false,
+        leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
+          labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } } }
       : { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
         leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
           labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
         actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
           labelText: "Pantalla completa (ocultar la barra de arriba)", labelTextEn: "Fullscreen (hide the top bar)",
           onPressed: { event: "lectorInm" } }] },
+    floatingActionButton: inm ? { type: "FloatingActionButton", key: "ojoFlotante", icon: "visibility",
+      tooltip: "Mostrar la barra", tooltipEn: "Show the bar",
+      onPressed: { event: "lectorInm" } } : undefined,
     body: { type: "Column", children: body },
   };
   return raiz;
@@ -6659,6 +6681,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
