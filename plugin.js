@@ -15,6 +15,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.36 — el panel del lector viaja al FINAL del capítulo: la
+// persona lee sin nada encima y al terminar encuentra «Fin del
+// capítulo» con Anterior / Ir a capítulo / Siguiente (como los
+// lectores de siempre, p. ej. ZonaTMO). El ojo de la barra es ahora
+// pantalla completa: esconde la barra de arriba y la deja en
+// mínimos (solo el ojo, para traerla de vuelta con un toque).
 // v0.4.35 — preparado para el pintor con presentación: las docs vivas
 // de Kino traen Image.headers { Referer, User-Agent } (aditivo, llega
 // con la próxima versión de la app). Las portadas de las casas con
@@ -335,7 +341,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.35";
+const VERSION = "0.4.36";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4311,11 +4317,12 @@ function readerTree(state) {
     ] },
   ] : [];
   const modo = modoLectorEfectivo(r.images.length);
-  // Modo inmersivo (v0.4.2): el OJO de la barra esconde la barra de
-  // arriba y la de controles de abajo — quedan solo las páginas y un
-  // botoncito flotante discreto (el mismo ojo) para traerlas de
-  // vuelta. La preferencia vive en el almacén ("lectorInm"), igual
-  // que el modo tira/páginas.
+  // Pantalla completa (v0.4.36): el OJO de la barra esconde la barra
+  // de arriba — la fila fina de la app siempre queda (regla de Kino),
+  // y con mergeWithKinoBar la nuestra la ocupa en mínimos: sin título,
+  // solo el mismo ojo para traerla de vuelta. El panel de controles
+  // ya no existe fijo: viaja al final del capítulo. La preferencia
+  // vive en el almacén ("lectorInm"), igual que el modo tira/páginas.
   const inm = getJson("lectorInm", 0) ? true : false;
   const pg = state.inputs && typeof state.inputs.pgs === "number" && state.inputs.pgs >= 0
     ? state.inputs.pgs : 0;
@@ -4439,14 +4446,18 @@ function readerTree(state) {
       + medidas.length + " pág medidas · mediana " + (Math.round(ratioGuia * 100) / 100)
       + (desde > 0 ? " · retomado en la pág " + (desde + 1) : "")
       + " · pellizca para acercar";
-  const body = notaMuro.concat(notaMs).concat(avisoMs).concat([
-    cuerpo,
-    { type: "Row", key: "barraLector", hidden: inm ? true : undefined, gap: 12, padding: 16, mainAxisAlignment: "center", wrap: true, children: [
-
+  // v0.4.36 — el panel de capítulos ya no vive fijo abajo de la
+  // pantalla: la persona lee sin nada encima y el panel aparece al
+  // TERMINAR el capítulo, dentro del contenido (como los lectores de
+  // siempre, p. ej. ZonaTMO): «Fin del capítulo» + Anterior / Ir a
+  // capítulo / Siguiente (+ ventanita y modo cuando tocan).
+  const panelFin = { type: "Column", key: "finCap", padding: 16, gap: 10, crossAxisAlignment: "center", children: [
+    { type: "Text", key: "finTitulo", text: "Fin del capítulo" + (ch ? " " + ch.num : ""),
+      textEn: "End of chapter" + (ch ? " " + ch.num : ""), style: "h5", color: "muted" },
+    { type: "Row", key: "barraLector", gap: 12, mainAxisAlignment: "center", wrap: true, children: [
       { type: "ElevatedButton", icon: "arrow_back", labelText: "Anterior", labelTextEn: "Previous",
         onPressed: "prevChap", enabled: hasPrev },
       { type: "DropdownButton", key: "jumpChap", labelText: "Ir a capítulo", labelTextEn: "Go to chapter",
-
         value: String(idx), onChanged: "jumpChap",
         options: chapters.length ? chapters.map((c, i) => ({ value: String(i), label: "Capítulo " + c.num })) : [{ value: "0", label: "—" }] },
       { type: "ElevatedButton", labelText: hasNext ? "Siguiente" : "Último capítulo",
@@ -4455,25 +4466,30 @@ function readerTree(state) {
     ].concat(esMuro ? [btnVentanaLeer] : []).concat(pagesDisponible() ? [
       { type: "TextButton", key: "btnModo", labelText: modo === "paginas" ? "Modo tira" : "Modo páginas",
         labelTextEn: modo === "paginas" ? "Strip mode" : "Page mode", onPressed: "modoLector" },
-    ] : []).concat([
-      { type: "Text", text: barraTexto,
-        style: "caption", color: "muted" },
-    ]) },
-  ]);
-  // Modo inmersivo: el botoncito flotante (sin etiqueta, discreto)
-  // trae las barras de vuelta.
-  if (inm) body.push({ type: "FloatingActionButton", key: "verBarras", icon: "visibility",
-    tooltip: "Mostrar barras", tooltipEn: "Show bars",
-    onPressed: { event: "lectorInm" } });
+    ] : []) },
+    { type: "Text", key: "finInfo", text: barraTexto, style: "caption", color: "muted" },
+  ] };
+  if (modo === "paginas") cuerpo.children.push(panelFin);
+  else cuerpo.children[0].children.push(panelFin);
+  const body = notaMuro.concat(notaMs).concat(avisoMs).concat([cuerpo]);
+  // v0.4.36 — el ojo es ahora pantalla completa: esconde la barra de
+  // arriba. La fila de título es regla de la app y siempre queda una;
+  // con mergeWithKinoBar la nuestra la ocupa y en pantalla completa se
+  // queda en mínimos: sin título y sin atrás, SOLO el ojo — tocarlo
+  // trae la barra completa de vuelta.
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: inm ? undefined : { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
-      leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
-        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
-      actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
-        labelText: "Modo inmersivo (ocultar barras)", labelTextEn: "Immersive mode (hide bars)",
-        onPressed: { event: "lectorInm" } }] },
+    appBar: inm ? { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
+        leading: { type: "IconButton", key: "verBarra", icon: "visibility",
+          labelText: "Mostrar la barra", labelTextEn: "Show the bar",
+          onPressed: { event: "lectorInm" } } }
+      : { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
+        leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
+          labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+        actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
+          labelText: "Pantalla completa (ocultar la barra de arriba)", labelTextEn: "Fullscreen (hide the top bar)",
+          onPressed: { event: "lectorInm" } }] },
     body: { type: "Column", children: body },
   };
   return raiz;
@@ -5656,7 +5672,7 @@ export async function screenEvent(ev) {
       const ya = getJson("lectorInm", 0);
       setJson("lectorInm", ya ? 0 : 1);
       return { state: { inmTk: Date.now() },
-        toast: ya ? "Barras visibles de nuevo." : "Modo inmersivo: el botón flotante trae las barras de vuelta." };
+        toast: ya ? "Barra visible de nuevo." : "Pantalla completa: toca el ojo para traer la barra de vuelta." };
     }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
