@@ -15,6 +15,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.34 — el selector de fuentes de las apps de lectura: el nombre de
+// la fuente activa vive ahora en la barra del Inicio, al lado de la
+// lupa; al tocarlo se abre la lista de las 7 fuentes (la activa
+// rellena con su ✓ y su color) con AniList al final, elegir una la
+// activa y vuelve al Inicio cargado con su contenido. El riel de
+// fuentes de abajo del Inicio se retira: su lista vive en el selector.
 // v0.4.33 — la portada elegante: el Inicio estrena el «heroCard»
 // oficial de Kino (una serie destacada que rota cada día, con su
 // portada y botón directo a la serie), «Seguir leyendo» sube a
@@ -321,7 +327,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.33";
+const VERSION = "0.4.34";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3598,6 +3604,41 @@ function fuenteCard(nombre, nota, evento, arg) {
     ] };
 }
 
+// v0.4.34 — la lista de fuentes del selector de la barra (la receta de
+// las apps de lectura como AchyManga): cada fuente con la activa
+// RELENDA por selected (el color propio de Kino) y su ✓ del trailing;
+// tocar otra la activa, recarga el Inicio con su contenido y vuelve.
+// AniList al final para buscar y descubrir manga, como hacía el riel
+// viejo de fuentes que esta pantalla reemplaza.
+function fuentesTree() {
+  const f = fuenteActiva();
+  const items = [
+    { type: "Text", text: "Elige tu fuente de lectura", textEn: "Pick your reading source",
+      style: "caption", color: "muted", padding: { h: 16, v: 8 } },
+  ].concat(FUENTES.map(function (x) {
+    const activa = x.id === f.id;
+    const t = {
+      type: "ListTile", key: "fs-" + x.id, selected: activa,
+      title: x.nombre,
+      subtitle: activa ? "Fuente activa" : "Toca para cambiar",
+      subtitleEn: activa ? "Active source" : "Tap to switch",
+      onTap: activa ? { event: "fuenteActual" } : { event: "fuenteElegir", arg: x.id },
+    };
+    if (activa) t.trailing = { type: "Icon", name: "check", color: "primary" };
+    return t;
+  })).concat([
+    { type: "ListTile", key: "fs-anilist", title: "AniList",
+      subtitle: "Buscar y descubrir manga", subtitleEn: "Search and discover manga",
+      onTap: { event: "alOpen", arg: "anilist" } },
+  ]);
+  return { type: "Scaffold",
+    appBar: { type: "AppBar", key: "barFuentes", title: "Fuentes", titleEn: "Sources",
+      leading: { type: "IconButton", key: "backFuentes", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "ListView", key: "listaFuentes", items: items } };
+}
+
 async function homeTree() {
   const f = fuenteActiva();
   let html = "";
@@ -3852,17 +3893,9 @@ async function homeTree() {
           // v0.4.29 — mismo umbral bajo que los demás rieles.
           .concat(hTodos.length >= 3 ? [verMasCard("railHist")] : []) }] },
   ] : [];
-  const fuentes = [
-    { type: "Text", text: "Fuentes", textEn: "Sources", style: "h3", padding: 16 },
-    { type: "SingleChildScrollView", key: "railFuentes", direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8, children: FUENTES.map((x) =>
-        x.id === f.id
-          ? fuenteCard(x.nombre, "Activa", "fuenteActual", x.nombre)
-          : fuenteCard(x.nombre, "Toca para cambiar", "cambiarFuente", x.id)
-      ).concat([
-        fuenteCard("AniList", "Buscar y descubrir manga", "alOpen", "anilist"),
-      ]) }] },
-  ];
+  // v0.4.34 — el riel de fuentes se retira del Inicio: su lista
+  // vive ahora en el selector de la barra (fuenteBtn → pantalla
+  // «fuentes»), con la activa marcada y AniList al final.
   const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
       style: "h3", padding: 16 },
@@ -3953,9 +3986,8 @@ async function homeTree() {
     }
   }
   // v0.4.33 — orden de la portada: el hero, «Seguir leyendo» de
-  // protagonista, el contenido de la fuente y al final las fuentes
-  // y el catálogo (antes las fuentes abrían la página; ahora el
-  // contenido manda, como en las apps de lectura).
+  // protagonista, el contenido de la fuente y al final el catálogo
+  // (las fuentes viven en el selector de la barra desde la v0.4.34).
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(hero)
     .concat(railHist)
@@ -3964,8 +3996,7 @@ async function homeTree() {
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
     .concat(gridSeries)
-    .concat(catalogo)
-    .concat(fuentes) };
+    .concat(catalogo) };
 }
 
 function detalleSinCaps(url) {
@@ -4845,6 +4876,8 @@ export async function screen(ev) {
     // v0.4.27 — la sección de un riel en cuadrícula («Ver más»).
     if (route.name === "riel") return rielTree(String((route.params && route.params.key) || ""));
     if (route.name === "colElegir") return colElegirTree(state);
+    // v0.4.34 — la lista de fuentes del selector de la barra.
+    if (route.name === "fuentes") return fuentesTree();
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
     return errorTree((e && e.userMessage) ||
@@ -4853,7 +4886,17 @@ export async function screen(ev) {
   const body = await homeTree();
   return {
     type: "Scaffold",
-    appBar: { type: "AppBar", key: "barHome", title: "MangaTrack",
+    // v0.4.34 — el selector de fuentes de las apps de lectura: el
+    // título de la barra admite una fila de nodos, así que el nombre
+    // de la fuente activa viaja ahí, al lado de la lupa — al tocarlo
+    // se abre la lista de las 7 fuentes (y AniList) para cambiar.
+    appBar: { type: "AppBar", key: "barHome",
+      title: { type: "Row", gap: 6, children: [
+        { type: "Text", text: "MangaTrack", textEn: "MangaTrack", style: "h3" },
+        { type: "TextButton", key: "fuenteBtn", icon: "expand_more",
+          labelText: fuenteActiva().nombre, labelTextEn: fuenteActiva().nombre,
+          onPressed: { event: "fuentesOpen" } },
+      ] },
       actions: [
         { type: "IconButton", icon: "search", key: "goSearch",
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },
@@ -5231,6 +5274,21 @@ export async function screenEvent(ev) {
     }
     if (name === "fuenteActual") {
       return { toast: "Ya estás viendo " + fuenteActiva().nombre + "." };
+    }
+    // v0.4.34 — el selector de la barra: abre la lista de fuentes y
+    // elegir una la activa, vuelve al Inicio y lo recarga con el
+    // contenido de la nueva fuente (mismo efecto que el riel viejo,
+    // con el regreso a casa encima).
+    if (name === "fuentesOpen") {
+      return { route: { push: "fuentes" } };
+    }
+    if (name === "fuenteElegir") {
+      const f2 = fuentePorId(String(ev.arg || ""));
+      if (f2.id === fuenteActiva().id) return { toast: "Ya estás viendo " + f2.nombre + "." };
+      setJson("fuente", f2.id);
+      return { state: { detail: null, reader: null, results: null, resultsQ: null },
+        route: { pop: true },
+        toast: "Cambiando a " + f2.nombre + "…" };
     }
     if (name === "cambiarFuente") {
       const f2 = fuentePorId(String(ev.arg || ""));
