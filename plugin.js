@@ -15,6 +15,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.35 — preparado para el pintor con presentación: las docs vivas
+// de Kino traen Image.headers { Referer, User-Agent } (aditivo, llega
+// con la próxima versión de la app). Las portadas de las casas con
+// muro (Mangas.in y ManhwaWeb) viajan ahora con la misma presentación
+// con la que el plugin ya las bajaba a mano: un Kino actual las pide
+// desnudas como siempre (nada cambia) y el que traiga los headers las
+// dibuja directas del sitio, sin conversión. El lector y sus tandas
+// quedan como están hasta poder probar el Kino nuevo en un teléfono.
 // v0.4.34 — el selector de fuentes de las apps de lectura: el nombre de
 // la fuente activa vive ahora en la barra del Inicio, al lado de la
 // lupa; al tocarlo se abre la lista de las 7 fuentes (la activa
@@ -327,7 +335,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.34";
+const VERSION = "0.4.35";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -971,6 +979,24 @@ function imgLocalDe(url) {
   if (!u || u.indexOf("data:") === 0) return u || null;
   const hit = getJson("dimg:" + u, null);
   return hit && typeof hit === "string" ? hit : null;
+}
+
+// v0.4.35 — la presentación del pintor nuevo: `headers` en las Image
+// (docs vivas de Kino: Referer y User-Agent, aditivo, llega con la
+// PRÓXIMA versión de la app). Un Kino de hoy pide la imagen SIN ellos
+// y todo queda como siempre (fallback o copia convertida); el que
+// traiga los headers la dibuja DIRECTA del sitio, sin conversión. Es
+// la misma presentación con la que el plugin baja sus imágenes a mano
+// (la galleta no va: el pintor no la acepta, y las dos cabeceras
+// bastan para el muro); solo viaja hacia hosts ya declarados en el
+// manifiesto, como exigen las docs.
+function imgHeadersDeUrl(u) {
+  const s = String(u || "");
+  if (s.indexOf("/ms/") === 0 || /(^|[.])m440[.]in([/:]|$)/i.test(s))
+    return { Referer: MS_BASE + "/", "User-Agent": getJson("msUA", "") || UA_MOVIL };
+  if (s.indexOf("/mw/") === 0 || /img[12]mw[.]xyz|(^|[.])manhwaweb[.]com([/:]|$)/i.test(s))
+    return { Referer: MW_BASE + "/", "User-Agent": UA_MOVIL };
+  return null;
 }
 
 // Cambia las portadas de las tarjetas de las casas con muro por sus
@@ -3542,6 +3568,12 @@ function posterCard(it, prefix, rail) {
       children: [{ type: "Icon", name: "list", color: "muted" }] },
   };
   if (rail) img.width = 120;
+  // v0.4.35 — portadas de las casas con muro con su presentación para
+  // el pintor de Kino (inofensivo hoy: un Kino sin `headers` las pide
+  // desnudas como siempre y salta el mismo icono de siempre; la copia
+  // local convertida sigue ganando cuando existe).
+  const hdrs = imgHeadersDeUrl(it.url);
+  if (hdrs) img.headers = hdrs;
   return {
     type: "Card", key: serieKey(prefix, it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
@@ -4038,6 +4070,11 @@ function detailTree(state) {
     ? { type: "Image", url: imgLocalDe(meta.poster) || meta.poster, width: { compact: 120, expanded: 160 },
         aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } }
     : { type: "Icon", name: "list" };
+  // v0.4.35 — la portada del detalle de una serie con muro, con su
+  // presentación para el pintor nuevo (la copia local convertida sigue
+  // ganando si existe: esta es su red de respaldo).
+  const hdrsC = imgHeadersDeUrl(d.url);
+  if (hdrsC && meta.poster) cover.headers = hdrsC;
   const head = {
     type: "Row", gap: 16, padding: 16, crossAxisAlignment: "start", stackOnNarrow: true,
     children: [
