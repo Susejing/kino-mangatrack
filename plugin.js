@@ -15,6 +15,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.42 — EL CATÁLOGO DE LAS OTRAS CASAS, AL DÍA. Dos pedidos de la
+// persona: (1) LectorXd con la casilla de Género que tiene
+// LeerCapitulo — su web trae la lista en la misma página del catálogo
+// (labels con data-category-name y el número en input[name=tags]), se
+// lee en vivo, se guarda en el almacén y alimenta el desplegable; con
+// ella viajan la Demografía (shounen/seinen/shoujo/josei) y cuatro
+// órdenes más (más leyendo / por leer / completados / capítulos).
+// (2) ManhwaWeb concordando con la página: el catálogo pedía
+// «alfabetico» mientras el sitio enseña «Nuevas Obras» — ahora el
+// orden por defecto es «creacion» (verificado contra la API: devuelve
+// exactamente las series del home) y el desplegable de Orden lo deja
+// cambiar (más capítulos o A-Z); además, Género de verdad (los 27 de
+// su API con sus números), la demografía aparte (kodomo no existía;
+// shojo sí) y el número de capítulos de cada serie bajo el título de
+// las tarjetas. Los rieles de la portada siguen con su orden de
+// siempre para no mover lo que ya funciona.
 // v0.4.41 — LA BARRA LIMPIA, SIEMPRE. Probado en el teléfono: el ojo
 // hacía justo lo que la persona quiere ver — quitaba las letras y
 // dejaba la fila fina con solo la flechita de salida — pero vivía
@@ -397,7 +413,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.41";
+const VERSION = "0.4.42";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -789,16 +805,33 @@ const MW_API = "https://api.manhwaweb.com";
 const MW_ESTADOS = [["", "Cualquier estado"], ["publicandose", "Publicándose"],
   ["finalizado", "Finalizado"], ["pausado", "Pausado"], ["cancelado", "Cancelado"]];
 const MW_TIPOS = [["", "Cualquier tipo"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"]];
+// v0.4.42 — demografías de la API (kodomo no existe allá; shojo sí).
 const MW_DEMO = [["", "Cualquier demografía"], ["shonen", "Shonen"], ["seinen", "Seinen"],
-  ["josei", "Josei"], ["kodomo", "Kodomo"]];
+  ["shojo", "Shojo"], ["josei", "Josei"]];
+// v0.4.42 — los 27 géneros de la API de ManhwaWeb con sus números de
+// categoría (el &generes= de /manhwa/library los filtra por número).
+const MW_GENEROS = [["", "Todos los géneros"],
+  ["3", "Acción"], ["29", "Aventura"], ["18", "Comedia"], ["1", "Drama"],
+  ["42", "Recuentos de la vida"], ["2", "Romance"], ["5", "Venganza"], ["6", "Harem"],
+  ["23", "Fantasía"], ["31", "Sobrenatural"], ["25", "Tragedia"], ["43", "Psicológico"],
+  ["32", "Horror"], ["44", "Thriller"], ["28", "Historias cortas"], ["30", "Ecchi"],
+  ["34", "Gore"], ["27", "Girls love"], ["45", "Boys love"], ["41", "Reencarnación"],
+  ["37", "Sistema de niveles"], ["33", "Ciencia ficción"], ["38", "Apocalíptico"],
+  ["39", "Artes marciales"], ["40", "Superpoderes"], ["35", "Cultivación (cultivo)"],
+  ["8", "Milf"]];
+// v0.4.42 — orden del catálogo: por defecto las obras nuevas de la
+// página (creacion), que es lo que enseña el sitio en «Nuevas Obras».
+const ORDEN_MW = [["", "Nuevas obras (como la página)"], ["num_chapter", "Más capítulos"], ["alfabetico", "A-Z"]];
 
-// La consulta de biblioteca (la API cuenta sus páginas desde 0).
-function mwLib(estado, tipo, demo, pag) {
+// v0.4.42 — la biblioteca también acepta género y orden; el catálogo
+// pide «creacion» (las obras nuevas de la página) y los rieles de la
+// portada siguen con su orden de siempre (alfabético).
+function mwLib(estado, tipo, demo, pag, generes, orden) {
   return "/manhwa/library?buscar=&estado=" + encodeURIComponent(estado || "") +
     "&tipo=" + encodeURIComponent(tipo || "") +
     "&erotico=no&demografia=" + encodeURIComponent(demo || "") +
-    "&order_item=alfabetico&order_dir=desc&page=" + (Math.max(0, parseInt(pag, 10) || 0)) +
-    "&generes=";
+    "&order_item=" + encodeURIComponent(orden || "alfabetico") + "&order_dir=desc&page=" + (Math.max(0, parseInt(pag, 10) || 0)) +
+    "&generes=" + encodeURIComponent(generes || "");
 }
 
 async function mwGet(ruta) {
@@ -827,7 +860,11 @@ function mwCards(j, max) {
     const t = clean(String(m.name_esp || m.the_real_name || ""));
     if (!id || !t || seen[id]) continue;
     seen[id] = 1;
-    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || "") });
+    // v0.4.42 — la API entrega el número de capítulos de cada serie:
+    // se enseña bajo el título de la tarjeta del catálogo.
+    const nc = parseInt(m._numero_cap, 10) || 0;
+    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || ""),
+      label: nc ? nc + " caps" : "" });
   }
   log("MW tarjetas: " + out.length);
   return out;
@@ -846,7 +883,7 @@ async function mwBuscar(q) {
 async function mwCatalog(cat, page1) {
   const p = Math.max(0, (parseInt(page1, 10) || 1) - 1);
   const j = await mwGet(mwLib((cat && cat.status) || "", (cat && cat.type) || "",
-    (cat && cat.genre) || "", p));
+    (cat && cat.demo) || "", p, (cat && cat.genre) || "", (cat && cat.order) || "creacion"));
   const items = mwCards(j, 30);
   return { items: items, mas: items.length > 0 };
 }
@@ -4601,7 +4638,13 @@ const ESTADOS = [["", "Todos"], ["ongoing", "En emisión"], ["completed", "Final
 // Filtros del catálogo de LectorXd (mismos slugs que su extensión de Mihon).
 const TIPOS_LX = [["", "Todos"], ["manga", "Manga"], ["manhwa", "Manhwa"], ["manhua", "Manhua"], ["one_shot", "One Shot"]];
 const ESTADOS_LX = [["", "Todos"], ["en_emision", "En emisión"], ["completado", "Completado"]];
-const ORDEN_LX = [["", "Recientes"], ["rating", "Mejor valorados"], ["views", "Más vistos"]];
+// v0.4.42 — más órdenes del catálogo de LectorXd (los 7 de su web).
+const ORDEN_LX = [["", "Recientes"], ["rating", "Mejor valorados"], ["views", "Más vistos"],
+  ["leyendo", "Más leyendo"], ["por_leer", "Más por leer"], ["completado", "Más completados"],
+  ["chapters", "Más capítulos"]];
+// v0.4.42 — la demografía del catálogo de LectorXd (&demographics=).
+const DEMO_LX = [["", "Todas"], ["shounen", "Shounen"], ["seinen", "Seinen"],
+  ["shoujo", "Shoujo"], ["josei", "Josei"]];
 // Orden del catálogo de MangaDex (los nombres de orden de su API).
 const ORDEN_MD = [["followedCount", "Populares"], ["latestUploadedChapter", "Actualizados"], ["createdAt", "Recién añadidos"]];
 // Géneros oficiales de MangaDex (grupo "genre" de su API de tags: el
@@ -4643,6 +4686,9 @@ function catalogoUrlDe(f, cat, page) {
   let p = "/catalogo?filters=true&adult=safe&orderBy=" + (cat.order || "recent") + "&page=" + (page || 1);
   if (cat.type) p += "&types=" + encodeURIComponent(cat.type);
   if (cat.status) p += "&status=" + encodeURIComponent(cat.status);
+  // v0.4.42 — género por número (tags=) y demografía (demographics=).
+  if (cat.genre) p += "&tags=" + encodeURIComponent(cat.genre);
+  if (cat.demo) p += "&demographics=" + encodeURIComponent(cat.demo);
   return p;
 }
 
@@ -4652,6 +4698,33 @@ function catalogoUrl(cat, page) {
   if (cat.type) p += "&type=" + encodeURIComponent(cat.type);
   if (cat.status) p += "&status=" + encodeURIComponent(cat.status);
   return p;
+}
+
+// v0.4.42 — géneros del catálogo de LectorXd: su página los trae como
+// labels con data-category-name y un input[name=tags] con el número de
+// cada uno; se leen en vivo y se guardan en el almacén ("lxTags") para
+// el desplegable (la lista puede cambiar y así no queda vieja).
+function lxTagsDe(html) {
+  const out = [];
+  const re = /<label[^>]*data-category-name=["']([^"']*)["'][^>]*>([\s\S]*?)<\/label>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const name = clean(m[1]);
+    const im = m[2].match(/name=["']tags["'][^>]*value=["']([^"']*)["']/i) ||
+      m[2].match(/value=["']([^"']*)["'][^>]*name=["']tags["']/i);
+    const id = im ? im[1].trim() : "";
+    if (name && id && /^\d+$/.test(id)) out.push({ id: id, name: name });
+  }
+  return out;
+}
+
+function lxGeneros() {
+  const t = getJson("lxTags", null);
+  const base = [["", "Todos los géneros"]];
+  if (Array.isArray(t) && t.length) {
+    for (let i = 0; i < t.length && i < 50; i++) base.push([t[i].id, t[i].name]);
+  }
+  return base;
 }
 
 function catDrop(label, key, opciones, valor, evento) {
@@ -4674,6 +4747,8 @@ function catalogTree(c) {
   let drops = [];
   if (f.id === "lectorxd") {
     drops = [
+      catDrop("Género", "catGenre", lxGeneros(), c.genre, "catGenre"),
+      catDrop("Demografía", "catDemo", DEMO_LX, c.demo, "catDemo"),
       catDrop("Tipo", "catType", TIPOS_LX, c.type, "catType"),
       catDrop("Estado", "catStatus", ESTADOS_LX, c.status, "catStatus"),
       catDrop("Orden", "catOrder", ORDEN_LX, c.order, "catOrder"),
@@ -4690,13 +4765,14 @@ function catalogTree(c) {
   } else if (f.id === "mangasin") {
     drops = [catDrop("Orden", "catOrder", ORDEN_MS, c.order, "catOrder")];
   } else if (f.id === "manhwaweb") {
-    // v0.4.28 — los filtros de la API de ManhwaWeb: estado, tipo y
-    // demografía (la demografía viaja en el hueco del género, que el
-    // catálogo ya sabe mover).
+    // v0.4.42 — el catálogo de ManhwaWeb como la página: género (27 de
+    // su API), demografía aparte y el orden «Nuevas obras» por defecto.
     drops = [
       catDrop("Estado", "catStatus", MW_ESTADOS, c.status, "catStatus"),
       catDrop("Tipo", "catType", MW_TIPOS, c.type, "catType"),
-      catDrop("Demografía", "catGenre", MW_DEMO, c.genre, "catGenre"),
+      catDrop("Género", "catGenre", MW_GENEROS, c.genre, "catGenre"),
+      catDrop("Demografía", "catDemo", MW_DEMO, c.demo, "catDemo"),
+      catDrop("Orden", "catOrder", ORDEN_MW, c.order, "catOrder"),
     ];
   } else if (f.id === "leercapitulo") {
     drops = [
@@ -4771,6 +4847,15 @@ async function cargarCatalogo(cat, page, conRuta) {
     try { await mwPrecarga(nuevos, 12); } catch (e) { log("MW portadas catálogo: " + ((e && e.message) || e)); }
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
+    // v0.4.42 — LectorXd trae la lista de sus géneros en la misma
+    // página del catálogo: se guarda para el desplegable (la primera
+    // vez solo se ve «Todos los géneros»; al cargar de nuevo ya están).
+    if (f.id === "lectorxd") {
+      try {
+        const tags = lxTagsDe(html);
+        if (tags.length) setJson("lxTags", tags);
+      } catch (e) { log("LX géneros: " + ((e && e.message) || e)); }
+    }
     nuevos = cardsDe(f, html, CAT_POR_PAG);
     const tm = html.match(/([\d][\d,]*)\s*series/i);
     const num = tm ? tm[1].replace(/[^0-9]/g, "") : "";
@@ -4782,7 +4867,8 @@ async function cargarCatalogo(cat, page, conRuta) {
     (prevCat.genre || "") === (cat.genre || "") &&
     (prevCat.type || "") === (cat.type || "") &&
     (prevCat.status || "") === (cat.status || "") &&
-    (prevCat.order || "") === (cat.order || "") ? prevCat.items : [];
+    (prevCat.order || "") === (cat.order || "") &&
+    (prevCat.demo || "") === (cat.demo || "") ? prevCat.items : [];
   if (!totalTxt && prevCat && prevCat.totalTxt) totalTxt = prevCat.totalTxt;
   const vistos = {};
   const items = prev.concat(nuevos)
@@ -4805,7 +4891,7 @@ async function cargarCatalogo(cat, page, conRuta) {
   // avisa y NO se abre la pantalla (antes quedaba "cargando" para
   // siempre o el botón "Cargar más" fingía que no pasaba nada).
   const catOk = setJsonCache("cat", { f: f.id, items: items, start: start, page: page1, genre: cat.genre || "",
-    type: cat.type || "", status: cat.status || "", order: cat.order || "", totalTxt: totalTxt,
+    type: cat.type || "", status: cat.status || "", order: cat.order || "", demo: cat.demo || "", totalTxt: totalTxt,
     mas: mas === undefined ? null : mas, lleno: capLleno ? 1 : 0,
     ultimos: page1 > 1 ? Math.max(0, items.length - prev.length) : 0 });
   if (!catOk) return { toast: "El almacén del plugin está lleno: no pude guardar el catálogo." };
@@ -5036,7 +5122,7 @@ export async function screenEvent(ev) {
 
       if (r.name === "catalog") {
         const c = getJson("cat", null);
-        if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "" }, 1, false);
+        if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "", order: "", demo: "" }, 1, false);
       }
       return null;
     }
@@ -5161,7 +5247,7 @@ export async function screenEvent(ev) {
       }
     }
     if (name === "openCatalog") {
-      return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
+      return await cargarCatalogo({ genre: "", type: "", status: "", order: "", demo: "" }, 1, true);
     }
     // v0.4.27 — «Ver más»: la tarjetita del riel abre su sección en
     // cuadrícula; el botón de la cuadrícula trae la siguiente página
@@ -5404,23 +5490,24 @@ export async function screenEvent(ev) {
       return { state: { detail: null, reader: null, results: null, resultsQ: null },
         toast: "Cambiando a " + f2.nombre + "…" };
     }
-    if (name === "catGenre" || name === "catType" || name === "catStatus" || name === "catOrder") {
+    if (name === "catGenre" || name === "catType" || name === "catStatus" || name === "catOrder" || name === "catDemo") {
       const c = getJson("cat", {}) || {};
-      const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" };
+      const nuevo = { genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "", demo: c.demo || "" };
       const v = String(ev.value || "");
       if (name === "catGenre") nuevo.genre = v;
       else if (name === "catType") nuevo.type = v;
       else if (name === "catStatus") nuevo.status = v;
+      else if (name === "catDemo") nuevo.demo = v;
       else nuevo.order = v;
       return await cargarCatalogo(nuevo, 1, false);
     }
     if (name === "catMore") {
       const c = getJson("cat", null);
       if (!c || !Array.isArray(c.items) || !c.items.length) {
-        return await cargarCatalogo({ genre: "", type: "", status: "", order: "" }, 1, true);
+        return await cargarCatalogo({ genre: "", type: "", status: "", order: "", demo: "" }, 1, true);
       }
       const antes = c.items.length;
-      const r = await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "" },
+      const r = await cargarCatalogo({ genre: c.genre || "", type: c.type || "", status: c.status || "", order: c.order || "", demo: c.demo || "" },
         (c.page || 1) + 1, false);
       const c2 = getJson("cat", null) || {};
       const ahora = Array.isArray(c2.items) ? c2.items.length : 0;
