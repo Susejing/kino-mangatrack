@@ -15,6 +15,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.39 — el nombre por fin invisible: Kino también descartó el
+// título-nodo de espacio irrompible del 0.4.38 y «MangaTrack» siguió
+// en la barra. La última carta (la que sugieren las docs para un logo
+// en el lugar del nombre): el título es una IMAGEN PNG transparente
+// de 1x1 (73 bytes, alfa 0) — una imagen no es texto vacío que
+// descartar, se dibuja tal cual y no pinta nada: la fila en pantalla
+// completa queda [atrás][nada][campana]. Si un Kino no pudiera leer
+// la imagen, el respaldo es el mismo espacio (y si también lo
+// descarta, el nombre vuelve — nada se rompe).
 // v0.4.38 — el ojo se muda abajo: en pantalla completa la barra de
 // arriba queda en mínimos absolutos — sin nombre (un espacio
 // irrompible como título-nodo: Kino descartaba el espacio llano y
@@ -362,7 +371,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.38";
+const VERSION = "0.4.39";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4510,7 +4519,8 @@ function readerTree(state) {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
     appBar: inm ? { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
-        title: { type: "Text", key: "titInm", text: "\u00A0" },
+        title: { type: "Image", key: "titInm", url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEABf/6AAAAAAAABQABdoo2PQAAAABJRU5ErkJggg==",
+          fit: "contain", h: 32, aspect: "1:1", fallback: { type: "Text", text: "\u00A0" } },
         divider: false,
         leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
           labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } } }
