@@ -15,6 +15,20 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.41 — LA BARRA LIMPIA, SIEMPRE. Probado en el teléfono: el ojo
+// hacía justo lo que la persona quiere ver — quitaba las letras y
+// dejaba la fila fina con solo la flechita de salida — pero vivía
+// como botón flotante naranja que tapa la esquina de las páginas. El
+// lector queda ASÍ para siempre: barra siempre en mínimos (título
+// invisible PNG + flechita de salida, sin divisoria), sin ojo en
+// ningún lado y sin pantalla completa que activar — de la fila se
+// sale con la flechita y los controles siguen al final del capítulo.
+// También se retira la nota del muro al abrir el capítulo («Capítulo
+// con muro: X de N páginas…»): con las imágenes ya dibujándose en
+// directo (v0.4.40, probado ✓) no hay nada que explicar y solo
+// tapaba las páginas; el aviso de «el sitio no entregó ninguna
+// página» sigue (ese sí dice algo que hay que hacer) y el Registro y
+// la ventanita siguen de respaldo.
 // v0.4.40 — LAS PÁGINAS DEL MURO, EN DIRECTO. El pintor de imágenes de
 // Kino 0.9.83 aprendió a presentarse (Image.headers: Referer y
 // User-Agent, aditivo — un Kino anterior los ignora y sigue como
@@ -383,7 +397,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.40";
+const VERSION = "0.4.41";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4347,26 +4361,13 @@ function readerTree(state) {
   for (let gi = 0; gi < r.images.length; gi++) if (gset[gi]) grandeN++;
   const btnVentanaLeer = { type: "TextButton", key: "btnLeerVentana", labelText: "Leer en ventanita",
     labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
-  const notaMuro = (esMuro && convN > 0) ? [
-    { type: "Text",
-      text: "Capítulo con muro: " + convN + " de " + r.images.length
-        + " páginas ya guardadas en el almacén; las demás se dibujan en directo del sitio, con la presentación que su casa de imágenes exige."
-        + (grandeN ? " Las " + grandeN + " más pesadas no caben como copia local: solo se ven en directo." : "")
-        + " Al acercarte al final se van guardando (o con «Bajar más páginas»).",
-      textEn: "Walled chapter: " + convN + " of " + r.images.length + " pages already stored; the rest are drawn straight from the site, with the presentation its image house requires."
-        + (grandeN ? " The " + grandeN + " heaviest ones do not fit as a local copy: they only draw live." : "")
-        + " As you approach the end they get stored (or with «Download more pages»).",
-      style: "caption", color: "muted", padding: { h: 12 } },
-  ] : [];
-  const notaMs = ((esMs || esMw) && medidas.length && !convN) ? [
-    { type: "Column", padding: 12, gap: 8, crossAxisAlignment: "center", children: [
-      { type: "Text",
-        text: "Capítulo con muro: sus páginas se dibujan en directo del sitio, con la presentación que exige su casa de imágenes (función nueva del pintor, Kino 0.9.83). Si alguna no aparece, el Registro dice el motivo — y «Leer en ventanita» queda de respaldo.",
-        textEn: "Walled chapter: its pages are drawn straight from the site, with the presentation its image house demands (new painter feature, Kino 0.9.83). If one does not appear, the log says why — and «Read in the small window» remains as backup.",
-        style: "caption", color: "muted" },
-      Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaNota" }),
-    ] },
-  ] : [];
+  // v0.4.41 — las notas del muro al abrir el capítulo se retiran:
+  // pedidas por la persona tras probarlas en el teléfono («solo tapan
+  // más las páginas»). Con las imágenes ya dibujándose en directo
+  // (v0.4.40) no hay nada que explicar — el Registro y la ventanita
+  // (al final del capítulo) siguen de respaldo, y el aviso de «el
+  // sitio no entregó ninguna página» sigue: ese sí dice algo que
+  // hacer.
   const avisoMs = ((esMs || esMw) && !medidas.length && !convN) ? [
     { type: "Column", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text", text: "El sitio no entregó ninguna de las " + r.images.length + " páginas.",
@@ -4381,13 +4382,14 @@ function readerTree(state) {
     ] },
   ] : [];
   const modo = modoLectorEfectivo(r.images.length);
-  // Pantalla completa (v0.4.36): el OJO de la barra esconde la barra
-  // de arriba — la fila fina de la app siempre queda (regla de Kino),
-  // y con mergeWithKinoBar la nuestra la ocupa en mínimos: sin título,
-  // solo el mismo ojo para traerla de vuelta. El panel de controles
-  // ya no existe fijo: viaja al final del capítulo. La preferencia
-  // vive en el almacén ("lectorInm"), igual que el modo tira/páginas.
-  const inm = getJson("lectorInm", 0) ? true : false;
+  // v0.4.41 — LA BARRA LIMPIA, SIEMPRE: probado en el teléfono, el
+  // ojo ocultaba las letras y dejaba la fila fina con solo la
+  // flechita de salida — exactamente lo que la persona quiere ver
+  // SIEMPRE, sin botón naranja flotante que tape las páginas. El
+  // título invisible (PNG transparente) y la flechita de salida se
+  // quedan; el ojo (barra y flotante) y la pantalla completa se
+  // retiran. El panel de controles sigue viajando al final del
+  // capítulo.
   const pg = state.inputs && typeof state.inputs.pgs === "number" && state.inputs.pgs >= 0
     ? state.inputs.pgs : 0;
   let cuerpo;
@@ -4524,41 +4526,27 @@ function readerTree(state) {
   ] };
   if (modo === "paginas") cuerpo.children.push(panelFin);
   else cuerpo.children[0].children.push(panelFin);
-  const body = notaMuro.concat(notaMs).concat(avisoMs).concat([cuerpo]);
-  // v0.4.36 — el ojo es ahora pantalla completa: esconde la barra de
-  // arriba. La fila de título es regla de la app y siempre queda una;
-  // con mergeWithKinoBar la nuestra la ocupa y en pantalla completa se
-  // queda en mínimos: sin título y sin atrás, SOLO el ojo — tocarlo
-  // trae la barra completa de vuelta.
-  // v0.4.38 — el ojo se muda ABAJO: en pantalla completa la fila queda
-  // [atrás][nombre invisible][campana de Kino] — el título es un NODO
-  // con un espacio irrompible (Kino descartaba el espacio llano del
-  // 0.4.37 y ponía «MangaTrack» de vuelta), sin la línea divisoria
-  // (divider: false) — y el ojo vive como botón flotante en la esquina
-  // de abajo, sobre la página: tocarlo trae la barra completa. El
-  // color de la fila es del tema de Kino: sus barras solo aceptan
-  // roles de color fijos, sin transparente posible.
+  const body = avisoMs.concat([cuerpo]);
+  // v0.4.41 — la barra del lector es SIEMPRE la limpia: una sola fila
+  // compacta (56 dp, dense) fundida con la de Kino (mergeWithKinoBar),
+  // sin divisoria (divider: false), con la flechita de salida a la
+  // izquierda y el título invisible (Image PNG transparente de 1x1:
+  // una imagen no es texto vacío que descartar — probado en el
+  // teléfono, el nombre «MangaTrack» ya no aparece) — así la fila
+  // queda [flechita][nada][campana de Kino si hay avisos]. Sin ojo en
+  // ningún lado: de la fila se sale con la flechita y los controles
+  // siguen al final del capítulo.
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
-    appBar: inm ? { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
-        title: { type: "Image", key: "titInm", url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEABf/6AAAAAAAABQABdoo2PQAAAABJRU5ErkJggg==",
-          fit: "contain", h: 32, aspect: "1:1", fallback: { type: "Text", text: "\u00A0" } },
-        divider: false,
-        leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
-          labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } } }
-      : { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader", title: (ch ? "Capítulo " + ch.num : "Leyendo") + " · v" + VERSION,
-        leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
-          labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
-        actions: [{ type: "IconButton", key: "verBarra", icon: "visibility",
-          labelText: "Pantalla completa (ocultar la barra de arriba)", labelTextEn: "Fullscreen (hide the top bar)",
-          onPressed: { event: "lectorInm" } }] },
-    floatingActionButton: inm ? { type: "FloatingActionButton", key: "ojoFlotante", icon: "visibility",
-      tooltip: "Mostrar la barra", tooltipEn: "Show the bar",
-      onPressed: { event: "lectorInm" } } : undefined,
+    appBar: { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
+      title: { type: "Image", key: "titInm", url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEABf/6AAAAAAAABQABdoo2PQAAAABJRU5ErkJggg==",
+        fit: "contain", h: 32, aspect: "1:1", fallback: { type: "Text", text: "\u00A0" } },
+      divider: false,
+      leading: { type: "IconButton", key: "backFromReader", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } } },
     body: { type: "Column", children: body },
-  };
-  return raiz;
+  };  return raiz;
 }
 
 function searchTree(state) {
@@ -5733,12 +5721,6 @@ export async function screenEvent(ev) {
       syncPushFavs();
       return { state: { favTk: Date.now() },
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
-    }
-    if (name === "lectorInm") {
-      const ya = getJson("lectorInm", 0);
-      setJson("lectorInm", ya ? 0 : 1);
-      return { state: { inmTk: Date.now() },
-        toast: ya ? "Barra visible de nuevo." : "Pantalla completa: toca el ojo para traer la barra de vuelta." };
     }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
