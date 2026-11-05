@@ -15,6 +15,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.40 — LAS PÁGINAS DEL MURO, EN DIRECTO. El pintor de imágenes de
+// Kino 0.9.83 aprendió a presentarse (Image.headers: Referer y
+// User-Agent, aditivo — un Kino anterior los ignora y sigue como
+// siempre): la página SIN copia local ya no es un hueco — se dibuja
+// en directo del sitio con la presentación que su casa de imágenes
+// exige, y la baja el propio Kino (con su caché, de 4 en 4) SIN tope
+// de tamaño (los 200.000 caracteres eran solo de las data URLs): las
+// «demasiado grandes» (reader.grande), que jamás tuvieron copia
+// local posible, por fin se ven. La copia convertida del almacén
+// sigue ganando cuando existe (más rápida y sin red), las tandas
+// siguen guardando, y el hueco honrado queda de fallback si el muro
+// niega alguna — la ventanita sigue de respaldo.
 // v0.4.39 — el nombre por fin invisible: Kino también descartó el
 // título-nodo de espacio irrompible del 0.4.38 y «MangaTrack» siguió
 // en la barra. La última carta (la que sugieren las docs para un logo
@@ -371,7 +383,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.39";
+const VERSION = "0.4.40";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4235,6 +4247,28 @@ function pageNodes(p, i, ratioGuia, sinFallback) {
   return [nodo];
 }
 
+// v0.4.40 — la página de un capítulo con muro SIN copia local, dibujada
+// EN DIRECTO del sitio: el mismo Image de siempre con la presentación
+// nueva (headers, Kino 0.9.83) — la baja el propio Kino (caché, de 4
+// en 4) y sin tope de tamaño. La presentación solo viaja si la
+// dirección de la página y su Referer están en los hosts del
+// manifiesto (las casas del muro ya están); un Kino sin `headers` la
+// pide desnuda, el muro la niega y queda el hueco honrado del
+// fallback — la ventanita sigue de respaldo. En el modo páginas no
+// hay fallback (el tope de nodos del widget pages manda).
+function muroPageDirecta(p, i, ratioGuia, sinFallback) {
+  const nodo = pageNodes(p, i, ratioGuia, true)[0];
+  const hdrs = imgHeadersDeUrl(p && p.url);
+  if (hdrs) nodo.headers = hdrs;
+  if (!sinFallback) {
+    nodo.fallback = { type: "Text", key: "nf" + i,
+      text: "Página " + (i + 1) + " no se dibujó — abre el capítulo de nuevo o toca «Leer en ventanita»",
+      textEn: "Page " + (i + 1) + " did not draw — reopen the chapter or use «Read in the small window»",
+      color: "muted", style: "caption", padding: 12 };
+  }
+  return nodo;
+}
+
 // El widget pages (apiVersion 17, Kino 0.9.81): páginas a pantalla
 // completa que se pasan con el dedo, con la barra de progreso fina de
 // Kino y zoom en cada página. Un Kino más antiguo descarta el nodo,
@@ -4298,14 +4332,16 @@ function readerTree(state) {
   const esMuro = esMs || esMw;
   // v0.4.30 — el lector con muro dibuja las páginas CONVERTIDAS (las
   // copias locales «pgd:»: la receta de las portadas aplicada a las
-  // páginas). Las que aún no están muestran su hueco honrado y llegan
-  // solas al acercarse la persona al final (o con «Bajar más
-  // páginas»); la que el muro niega queda con su aviso en su sitio.
-  // La nota antigua solo sale cuando no hay NINGUNA convertida.
+  // páginas). v0.4.40 — la que aún no está guardada ya no es un hueco:
+  // se dibuja EN DIRECTO del sitio con presentación (Image.headers),
+  // y el hueco honrado solo queda de fallback si el muro la niega.
+  // Las tandas siguen guardando copias al acercarse la persona al
+  // final (o con «Bajar más páginas»).
   let convN = 0;
   if (esMuro) for (let ci = 0; ci < r.images.length; ci++) if (pgdDe(r.images[ci].url)) convN++;
-  // v0.4.31 — las demasiado grandes (reader.grande): su hueco avisa
-  // que solo se ven en la ventanita, y no cuentan como «por bajar».
+  // v0.4.31 — las demasiado grandes (reader.grande): nunca tendrán
+  // copia local posible (el tope de data URL), pero desde v0.4.40 se
+  // dibujan en directo sin tope; no cuentan como «por bajar».
   const gset = muroSetDe(r.grande);
   let grandeN = 0;
   for (let gi = 0; gi < r.images.length; gi++) if (gset[gi]) grandeN++;
@@ -4313,22 +4349,20 @@ function readerTree(state) {
     labelTextEn: "Read in the small window", onPressed: "msLeerVentana" };
   const notaMuro = (esMuro && convN > 0) ? [
     { type: "Text",
-      text: "Capítulo dibujado desde el almacén: " + convN + " de " + r.images.length
-        + " páginas bajadas con presentación y convertidas."
-        + (grandeN ? " " + grandeN + " pesan más de lo que el pintor de Kino acepta: esas solo se ven con «Leer en ventanita»." : "")
-        + " Las demás llegan solas al acercarte al final (o con «Bajar más páginas»).",
-      textEn: "Chapter drawn from storage: " + convN + " of " + r.images.length + " pages downloaded and converted."
-        + (grandeN ? " " + grandeN + " are heavier than Kino's painter accepts: those only open in the small window." : "")
-        + " The rest arrive as you approach the end.",
+      text: "Capítulo con muro: " + convN + " de " + r.images.length
+        + " páginas ya guardadas en el almacén; las demás se dibujan en directo del sitio, con la presentación que su casa de imágenes exige."
+        + (grandeN ? " Las " + grandeN + " más pesadas no caben como copia local: solo se ven en directo." : "")
+        + " Al acercarte al final se van guardando (o con «Bajar más páginas»).",
+      textEn: "Walled chapter: " + convN + " of " + r.images.length + " pages already stored; the rest are drawn straight from the site, with the presentation its image house requires."
+        + (grandeN ? " The " + grandeN + " heaviest ones do not fit as a local copy: they only draw live." : "")
+        + " As you approach the end they get stored (or with «Download more pages»).",
       style: "caption", color: "muted", padding: { h: 12 } },
   ] : [];
   const notaMs = ((esMs || esMw) && medidas.length && !convN) ? [
     { type: "Column", padding: 12, gap: 8, crossAxisAlignment: "center", children: [
       { type: "Text",
-        text: esMw
-          ? "Kino no puede dibujar las páginas de ManhwaWeb: su casa de imágenes las niega a quien no sabe presentarse, y el pintor de Kino no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio."
-          : "Kino no puede dibujar las páginas de Mangas.in: el sitio solo las sirve a quien sabe presentarse, y su pintor de imágenes no puede hacerlo. Toca «Leer en ventanita» y se abren en el lector del propio sitio.",
-        textEn: "Kino cannot draw this site's pages: the image host only serves identified requests, and Kino's image painter cannot identify itself. Tap «Read in the small window» and they open on the site's own reader.",
+        text: "Capítulo con muro: sus páginas se dibujan en directo del sitio, con la presentación que exige su casa de imágenes (función nueva del pintor, Kino 0.9.83). Si alguna no aparece, el Registro dice el motivo — y «Leer en ventanita» queda de respaldo.",
+        textEn: "Walled chapter: its pages are drawn straight from the site, with the presentation its image house demands (new painter feature, Kino 0.9.83). If one does not appear, the log says why — and «Read in the small window» remains as backup.",
         style: "caption", color: "muted" },
       Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaNota" }),
     ] },
@@ -4364,10 +4398,11 @@ function readerTree(state) {
     // cada página. La página en la que se quedó vive en
     // state.inputs.pgs y la guarda el evento pgChanged.
     // v0.4.30 — con muro: cada página convertida se dibuja desde el
-    // almacén y la que no, con su hueco; el botón «Bajar más páginas»
+    // almacén y la que no, EN DIRECTO del sitio con presentación
+    // (v0.4.40); el botón «Bajar más páginas» guarda copias locales y
     // va de última página del pages. Muy atrás de la página vista las
-    // convertidas se dibujan como hueco para no inflar el árbol: al
-    // volver a ellas, el aviso de página las convierte desde el caché.
+    // páginas se dibujan como texto barato para no inflar el árbol: al
+    // volver a ellas, el aviso de página las trae al presente.
     const maxPag = Math.min(r.images.length, 249);
     const ventIni = esMuro ? Math.max(0, pg - 25) : 0;
     const hijos = [];
@@ -4378,13 +4413,15 @@ function readerTree(state) {
         children: [dat
           ? pageNodes({ url: dat, w: p.w, h: p.h }, i, ratioGuia, true)[0]
           : (esMuro
-            ? { type: "Text", key: "np" + i, text: gset[i]
-                ? "Página " + (i + 1) + " demasiado grande para el pintor de Kino — se ve con «Leer en ventanita»"
-                : "Página " + (i + 1) + " sin bajar todavía — se baja sola al llegar a ella",
-                textEn: gset[i]
-                  ? "Page " + (i + 1) + " is too heavy for Kino's painter — open it with «Read in the small window»"
-                  : "Page " + (i + 1) + " not downloaded yet",
-                color: "muted", style: "caption", padding: 24 }
+            ? (i >= ventIni
+              // v0.4.40 — sin copia local pero a la vista: en directo
+              // del sitio con presentación (sin fallback: el tope de
+              // nodos del pages manda).
+              ? muroPageDirecta(p, i, ratioGuia, true)
+              : { type: "Text", key: "np" + i,
+                  text: "Página " + (i + 1) + " — se dibuja al llegar a ella",
+                  textEn: "Page " + (i + 1) + " — it draws as you reach it",
+                  color: "muted", style: "caption", padding: 24 })
             : pageNodes(p, i, ratioGuia, true)[0])] });
     }
     if (esMuro) {
@@ -4399,15 +4436,13 @@ function readerTree(state) {
             labelText: "Bajar más páginas", labelTextEn: "Download more pages", onPressed: "muroCarga" },
         ] });
       } else if (grandeN) {
-        // v0.4.31 — no queda nada por bajar: solo las demasiado
-        // grandes. Se dice y se ofrece la ventanita, sin botones que
-        // no puedan cumplir nada.
-        hijos.push({ type: "Column", key: "notaGrandes", padding: 24, gap: 8, crossAxisAlignment: "center", children: [
-          { type: "Text", text: "Las " + grandeN + " páginas que faltan pesan más de lo que el pintor de Kino acepta (unos 150 KB por imagen).",
-            textEn: "The " + grandeN + " missing pages are heavier than Kino's painter accepts (about 150 KB per picture).",
-            color: "muted", style: "caption" },
-          Object.assign({}, btnVentanaLeer, { key: "btnLeerVentanaGrandes" }),
-        ] });
+        // v0.4.40 — no queda nada por GUARDAR: las que faltan son las
+        // demasiado grandes para la copia local — pero ya se dibujan
+        // en directo del sitio con presentación, sin tope de tamaño.
+        hijos.push({ type: "Text", key: "notaGrandes", padding: 24,
+          text: "Las " + grandeN + " páginas que faltan son las más pesadas: no caben como copia local, pero se dibujan en directo del sitio.",
+          textEn: "The " + grandeN + " missing pages are the heaviest ones: they do not fit as a local copy, but they are drawn straight from the site.",
+          color: "muted", style: "caption" });
       }
     }
     cuerpo = { type: "pages", key: "pgs", flex: 1, progress: "bar", onPageChanged: "pgChanged",
@@ -4424,39 +4459,27 @@ function readerTree(state) {
     // Tira vertical de siempre: las páginas pegadas (gap 0) a ancho
     // completo — fit "width" toma el ancho de la caja y el alto propio
     // de la imagen — y zoom de pellizco en todo el capítulo. Con muro,
-    // las convertidas se dibujan desde el almacén y las demás con su
-    // hueco honrado; tras 12 huecos seguidos la tira se corta y el
-    // resto baja con el botón (una tira kilométrica no puede revolver
-    // el tope de 600 nodos de Kino).
+    // las convertidas se dibujan desde el almacén y las demás EN
+    // DIRECTO del sitio con presentación (v0.4.40): ya no hay corte a
+    // los 12 huecos — todas las páginas traen su dibujo, como en
+    // cualquier capítulo sin muro, y el hueco honrado queda de
+    // fallback si el muro niega alguna.
     let nodos = [];
-    let pendSeguidas = 0;
     let pendTotal = 0;
     for (let i = 0; i < visibles.length; i++) {
       const p = visibles[i];
       const dat = esMuro ? pgdDe(p.url) : null;
-      if (esMuro && !dat) {
-        pendTotal++;
-        pendSeguidas++;
-        if (pendSeguidas > 12) break;
-        const gix = desde + i;
-        nodos.push({ type: "Text", key: "np" + gix,
-          text: gset[gix]
-            ? "Página " + (gix + 1) + " demasiado grande para el pintor de Kino — se ve con «Leer en ventanita»"
-            : "Página " + (gix + 1) + " sin bajar todavía — toca «Bajar más páginas» abajo",
-          textEn: gset[gix]
-            ? "Page " + (gix + 1) + " is too heavy for Kino's painter — open it with «Read in the small window»"
-            : "Page " + (gix + 1) + " not downloaded yet", color: "muted", style: "caption", padding: 12 });
-      } else {
-        pendSeguidas = 0;
-        nodos.push(pageNodes(dat ? { url: dat, w: p.w, h: p.h } : p, desde + i, ratioGuia)[0]);
-      }
+      if (esMuro && !dat) pendTotal++;
+      nodos.push(esMuro && !dat
+        ? muroPageDirecta(p, desde + i, ratioGuia, false)
+        : pageNodes(dat ? { url: dat, w: p.w, h: p.h } : p, desde + i, ratioGuia)[0]);
     }
     const btnMasTira = (esMuro && pendTotal > 0) ? [
       { type: "Column", key: "btnMasTira", padding: 16, gap: 8, crossAxisAlignment: "center", children: [
         { type: "ElevatedButton", key: "btnMuroCarga", icon: "download",
           labelText: "Bajar más páginas (" + pendTotal + ")", labelTextEn: "Download more pages", onPressed: "muroCarga" },
-        { type: "Text", text: "Cada página se baja con presentación y se guarda convertida; el muro puede negar alguna.",
-          textEn: "Each page is downloaded with presentation and stored converted; the wall may deny some.",
+        { type: "Text", text: "Las páginas ya se dibujan en directo del sitio; este botón guarda sus copias locales (más rápidas y sin red). El muro puede negar alguna.",
+          textEn: "Pages already draw straight from the site; this button stores their local copies (faster and offline). The wall may deny some.",
           style: "caption", color: "muted" },
       ] },
     ] : [];
@@ -4467,7 +4490,7 @@ function readerTree(state) {
   const barraTexto = esMuro
     ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length
       + (modo === "paginas" ? " · pág " + (pg + 1) + " de " + r.images.length : "")
-      + " · " + convN + " de " + r.images.length + " páginas dibujadas · pellizca para acercar"
+      + " · " + convN + " de " + r.images.length + " páginas guardadas · pellizca para acercar"
       + (desde > 0 ? " · retomado en la pág " + (desde + 1) : "")
     : modo === "paginas"
     ? "v" + VERSION + " · cap. " + (idx + 1) + " de " + chapters.length + " · pág " + (pg + 1)
