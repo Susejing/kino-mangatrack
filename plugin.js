@@ -15,6 +15,15 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.47 — LOS +18 DE MANHWAWEB TAMBIÉN ABREN. Reporte del teléfono:
+// los mangas normales ya abrían pero tocar uno +18 no hacía nada. La
+// causa: los ids de las +18 rompen la forma limpia <slug>_<13 dígitos>
+// — traen MAYÚSCULAS, guiones bajos en medio y hasta espacios (11 de
+// 32 del feed, verificado en vivo), y la regla que valida la dirección
+// del toque los rechazaba: ni siquiera encontraba la fuente. La regla
+// ahora acepta cualquier id sin barra, y si la API falla con una serie
+// concreta (una con espacio en el id respondió «error»), el detalle
+// abre con el aviso honesto en vez de quedarse mudo.
 // v0.4.46 — MANHWAWEB VOLVIÓ A ABRIR SUS SERIES. Reporte del teléfono:
 // al abrir cualquier manga de ManhwaWeb salía «no entregó capítulos».
 // La causa NO fue la 0.4.45: la API del sitio CAMBIÓ la forma de sus
@@ -471,7 +480,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.46";
+const VERSION = "0.4.47";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -528,9 +537,14 @@ function fuenteDeUrl(url) {
   // Mangas.in: sus series se guardan con el prefijo /ms para no
   // chocar con las /manga/<slug>/ de LectorXd y LeerCapitulo.
   if (/^[/]ms[/]manga[/][a-z0-9-]+(?:[/][a-z0-9-]+)?[/]?$/.test(u)) return fuentePorId("mangasin");
-  // ManhwaWeb: sus ids son <slug>_<13 dígitos>; series en /mw/manhwa/ y
-  // capítulos en /mw/leer/ (el prefijo /mw evita chocar con las demás).
-  if (/^[/]mw[/](?:manhwa|leer)[/][a-z0-9-]+_[0-9]{10,}/.test(u)) return fuentePorId("manhwaweb");
+  // ManhwaWeb: sus ids son <slug>_<13 dígitos>… pero las series +18
+  // rompen esa forma (verificado en vivo: 11 de 32 del feed traen
+  // MAYÚSCULAS, guiones bajos en medio e incluso espacios —
+  // «I_am_the_only_male…», «Mom_eat_first…», «MONEY_GAME…»). La regla
+  // estrecha de antes las rechazaba y el toque no abría NADA; ahora se
+  // acepta cualquier id sin barra. Series en /mw/manhwa/ y capítulos en
+  // /mw/leer/ (el prefijo /mw evita chocar con las demás fuentes).
+  if (/^[/]mw[/](?:manhwa|leer)[/][^/]+_[0-9]{10,}/.test(u)) return fuentePorId("manhwaweb");
   return null;
 }
 
@@ -1066,7 +1080,12 @@ async function mwSerie(url) {
   const id = String(url || "").replace(/^[/]mw[/]manhwa[/]/, "").replace(/[/]$/, "");
   if (!id || id.indexOf("_") < 0) return { meta: { title: "Serie", poster: "", overview: "" },
     chapters: [], aviso: "Esa serie de ManhwaWeb no tiene una dirección válida." };
-  const j = await mwGet("/manhwa/see/" + encodeURIComponent(id));
+  // v0.4.47 — a veces la API falla con una serie puntual (respondió
+  // «error» con una de id con espacio): mejor el detalle honesto con 0
+  // capítulos que un toque que no abre nada.
+  let j = {};
+  try { j = await mwGet("/manhwa/see/" + encodeURIComponent(id)); }
+  catch (e) { log("MW serie falló (" + id + "): " + ((e && e.message) || e)); }
   const meta = { title: clean(String(j.name_esp || j.the_real_name || id)),
     poster: String(j._imagen || ""), overview: clean(String(j._sinopsis || "")) };
   const idReal = String(j._id || id);
