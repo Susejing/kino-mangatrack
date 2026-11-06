@@ -15,6 +15,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.44 — PRINCIPAL Y ADULTO +18 JUNTAS, Y EL BUSCADOR MÁS FINO.
+// La persona vio que el riel de «Nuevos capítulos» traía SOLO lo de la
+// pestaña Adulto +18 de la página y faltaba la Principal. La causa: la
+// extensión oficial aclara la forma de /latest/new-manhwa — el objeto
+// manhwas trae TRES listas: manhwas_esp (Principal), manhwas_raw y
+// _manhwas (las dos +18); el riel leía solo _manhwas. Ahora las tres
+// van JUNTAS, sin repetir series y de la subida más reciente a la más
+// vieja (como hace la página), con «+18» marcado en las que vienen de
+// las listas adultas. Y el buscador de la vinculación con AniList/MAL
+// gana precisión en ManhwaWeb y Mangas.in: (1) cada nombre de AniList
+// se prueba también en su versión SIN puntuación («¿…?», «…:», «!» —
+// esos buscadores se atragantan con ella); (2) ManhwaWeb guarda series
+// con su título en español Y el original — el calce automático ahora
+// acepta cualquiera de los dos contra cualquiera de los nombres de
+// AniList, así que más series vinculan solas y bien.
 // v0.4.43 — EL INICIO DE MANHWAWEB, COMO SU PÁGINA. La v0.4.42 puso el
 // CATÁLOGO al día, pero las capturas de la persona comparaban el
 // INICIO: los rieles seguían siendo «Biblioteca» (alfabético) y
@@ -425,7 +440,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.43";
+const VERSION = "0.4.44";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -875,8 +890,12 @@ function mwCards(j, max) {
     // v0.4.42 — la API entrega el número de capítulos de cada serie:
     // se enseña bajo el título de la tarjeta del catálogo.
     const nc = parseInt(m._numero_cap, 10) || 0;
+    // v0.4.44 — el nombre ORIGINAL viaja aparte (alt): el buscador de
+    // la vinculación con AniList puede calzar con él cuando el título
+    // en español no coincide con ninguno de sus nombres.
+    const alt = clean(String(m.name_esp ? m.the_real_name : ""));
     out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || ""),
-      label: nc ? nc + " caps" : "" });
+      label: nc ? nc + " caps" : "", alt: alt && alt !== t ? alt : "" });
   }
   log("MW tarjetas: " + out.length);
   return out;
@@ -902,23 +921,38 @@ function mwNuevas(j, max) {
   return out;
 }
 
-// v0.4.43 — «Nuevos Capítulos» de la página: /latest/new-manhwa trae
-// cada subida con su capítulo y el grupo que lo subió; de ahí la
-// etiqueta de la tarjeta. La lista segura es manhwas._manhwas.
+// v0.4.44 — «Nuevos Capítulos» de la página: la API trae TRES listas —
+// manhwas_esp (la pestaña Principal) y manhwas_raw + _manhwas (las dos
+// de Adulto +18, según la extensión oficial). Se juntan como en la
+// página: sin repetir series y de la subida más reciente a la más
+// vieja; las que vienen de las listas +18 van marcadas «+18».
 function mwUltimos(j, max) {
-  const arr = (j && j.manhwas && j.manhwas._manhwas) || [];
+  const mws = (j && j.manhwas) || {};
+  const filas = [];
+  const mete = (arr, adulto) => {
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length; i++) filas.push({ m: arr[i] || {}, ad: adulto ? 1 : 0 });
+  };
+  mete(mws.manhwas_esp, false);
+  mete(mws.manhwas_raw, true);
+  mete(mws._manhwas, true);
+  filas.sort((a, b) => ((b.m && b.m.create) || 0) - ((a.m && a.m.create) || 0));
   const out = [];
   const seen = {};
-  for (let i = 0; i < arr.length && out.length < max; i++) {
-    const m = arr[i] || {};
-    const id = String(m.id_manhwa || m.id_rel || "");
+  for (let i = 0; i < filas.length && out.length < max; i++) {
+    const m = filas[i].m;
+    const id = String(m.id_rel || m.id_manhwa || "");
     const t = clean(String(m.name_manhwa || ""));
     if (!id || !t || seen[id]) continue;
     seen[id] = 1;
     const cap = parseInt(m.chapter, 10) || 0;
     const gru = clean(String(m.gru_name || ""));
+    const partes = [];
+    if (cap) partes.push("Cap. " + cap);
+    if (gru) partes.push(gru);
+    if (filas[i].ad) partes.push("+18");
     out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m.img || ""),
-      label: (cap ? "Cap. " + cap : "") + (gru ? (cap ? " · " : "") + gru : "") });
+      label: partes.join(" · ") });
   }
   log("MW nuevos capítulos: " + out.length);
   return out;
@@ -5379,13 +5413,14 @@ export async function screenEvent(ev) {
       // v0.4.24 — ALCANCE: la serie puede llamarse distinto en cada
       // lado; se buscan TODOS sus nombres de AniList (inglés, romaji,
       // sinónimos — a veces el español está entre ellos — y el
-      // original), hasta seis intentos, hasta que la fuente dé
-      // resultados.
+      // original, cada uno también en su versión sin puntuación para
+      // los buscadores que se atragantan con ella) hasta que la fuente
+      // dé resultados.
       const nombres = alNombres(m);
       let results = [];
       let qUsada = "";
       let primerError = null;
-      for (let i = 0; i < nombres.length && i < 6 && !results.length; i++) {
+      for (let i = 0; i < nombres.length && i < 12 && !results.length; i++) {
         try {
           results = await buscarEnFuente(f, nombres[i]);
           qUsada = nombres[i];
@@ -5408,8 +5443,12 @@ export async function screenEvent(ev) {
       if (Object.keys(qSet).length) {
         for (let i = 0; i < results.length; i++) {
           const it = results[i];
+          // v0.4.44 — ManhwaWeb trae el nombre original de cada serie
+          // (alt): calza si el título en español O el original coinciden
+          // con cualquiera de los nombres de AniList.
           const nq = it && it.url ? normTituloMD(it.title) : "";
-          if (nq && qSet[nq]) {
+          const na = it && it.alt ? normTituloMD(it.alt) : "";
+          if ((nq && qSet[nq]) || (na && qSet[na])) {
             setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
             vinUrl = it.url;
             vinTitulo = it.title || "";
@@ -6182,7 +6221,17 @@ function alNombres(m) {
   mete(m.english); mete(m.romaji);
   if (Array.isArray(m.sinonimos)) for (let i = 0; i < m.sinonimos.length && i < 4; i++) mete(m.sinonimos[i]);
   mete(m.native);
-  return out.slice(0, 8);
+  // v0.4.44 — PRECISIÓN: los buscadores de ManhwaWeb y Mangas.in se
+  // atragantan con la puntuación de varios títulos («¿…?», «…:», «!»);
+  // por cada nombre se prueba también su versión limpia.
+  const base = out.slice(0);
+  for (let i = 0; i < base.length; i++) {
+    const limpio = String(base[i] || "")
+      .replace(/[\u00BF\u00A1?!:;,.()\u2014\u2013"'\u2026]+/g, " ")
+      .replace(/\s+/g, " ").trim();
+    if (limpio && limpio !== base[i]) mete(limpio);
+  }
+  return out.slice(0, 12);
 }
 
 // v0.4.24 — buscar en la fuente elegida con el buscador de siempre de
