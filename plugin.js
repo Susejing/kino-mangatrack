@@ -15,6 +15,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.53 — TODO LO QUE SE ARMA, SUBE. La persona lo recordó con
+// razón: las colecciones las pedimos juntos en la 0.4.21 (el corazón)
+// y los favoritos viven dentro desde la 0.4.22 — pero la subida a la
+// nube solo se disparaba con el corazón de favoritos y las reseñas:
+// crear/borrar una colección, meterle o quitarle una serie, y LEER un
+// capítulo (el historial) quedaban en el aparato hasta que otra cosa
+// subiera o alguien tocara «Sincronizar ahora». Ahora cada cambio de
+// colección (crear, borrar, meter, sacar) sube solo, y el historial
+// sube al abrir capítulos con FRENO (una subida cada 15 min como
+// máximo, para no martillar al bot; «Sincronizar ahora» sube
+// siempre). tgSubir anota la hora de la última subida (tgTs) para
+// que el freno sepa. Así la copia del chat va al día con TODO lo que
+// la persona arma, hoy y con lo que cree mañana, ella o cualquier
+// usuario: el respaldo es la lista COMPLETA, no un parche.
+// ANTES: v0.4.52 la nube lleva todo (colecciones e historial dentro).
 // v0.4.52 — LA NUBE LLEVA TODO. Petición de la persona: el botón de
 // «Sincronizar» vive en Mis favoritos, ¿pero lo de abajo también se
 // respalda? Honestidad de la 0.4.51: solo favoritos y reseñas iban al
@@ -554,7 +569,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.52";
+const VERSION = "0.4.53";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2510,6 +2525,9 @@ async function tgSubir() {
       catch (e2) { log("sync nube: la copia vieja quedó más abajo en el chat"); }
     }
   }
+  // v0.4.53 — la hora de la última subida la anota la subida misma:
+  // el freno del historial y la pantalla de «Sincronizar» la leen.
+  setJson("tgTs", Date.now());
   return datos;
 }
 // Busca el chat privado de la persona entre los mensajes que le
@@ -5904,12 +5922,20 @@ export async function screenEvent(ev) {
     if (name === "colNueva") {
       const r = colCrear((ev.value && ev.value.colNom) || "");
       if (r.err) return { toast: r.err };
+      // v0.4.53 — lo que se arma sube: la colección nueva viaja a la
+      // nube en cuanto existe (si está activada).
+      if (r.ok) { try { if (tgActiva()) await tgSubir(); }
+        catch (e) { log("sync subir cols: " + ((e && e.message) || e)); } }
       return { state: { colTk: Date.now() },
         toast: r.ok ? "✓ Colección «" + r.nom + "» creada." : "El almacén del plugin está lleno: no pude guardarla." };
     }
     if (name === "colDel") {
       const nom = String(ev.arg || "");
       if (!colBorrar(nom)) return { toast: "No encontré esa colección." };
+      // v0.4.53 — borrar también sube: la copia deja de traer lo
+      // borrado a las reinstalaciones.
+      try { if (tgActiva()) await tgSubir(); }
+      catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
       return { state: { colTk: Date.now() }, toast: "Colección «" + nom + "» borrada." };
     }
     if (name === "colAdd") {
@@ -5925,9 +5951,15 @@ export async function screenEvent(ev) {
       if (!pend || !cols()[nom]) return { toast: "No encontré esa colección." };
       if (colEn(nom, pend.url)) {
         if (!colSacar(nom, pend.url)) return { toast: "El almacén del plugin está lleno." };
+        // v0.4.53 — sacar una serie también sube.
+        try { if (tgActiva()) await tgSubir(); }
+        catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
         return { route: { pop: true }, toast: "Quitada de «" + nom + "»." };
       }
       if (!colMeter(nom, pend)) return { toast: "El almacén del plugin está lleno: no pude guardarla." };
+      // v0.4.53 — meter una serie también sube.
+      try { if (tgActiva()) await tgSubir(); }
+      catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
       return { route: { pop: true },
         toast: "✓ «" + String(pend.title || "Serie").slice(0, 40) + "» añadida a «" + nom + "»." };
     }
@@ -5935,8 +5967,16 @@ export async function screenEvent(ev) {
       const r = colCrear((ev.value && ev.value.colNom2) || "");
       if (r.err) return { toast: r.err };
       const pend = state.colPend;
-      if (!pend) return { route: { pop: true }, toast: "✓ Colección «" + r.nom + "» creada." };
+      if (!pend) {
+        // v0.4.53 — la colección estrenada sola también sube.
+        if (r.ok) { try { if (tgActiva()) await tgSubir(); }
+          catch (e) { log("sync subir cols: " + ((e && e.message) || e)); } }
+        return { route: { pop: true }, toast: "✓ Colección «" + r.nom + "» creada." };
+      }
       if (!r.ok || !colMeter(r.nom, pend)) return { toast: "El almacén del plugin está lleno: no pude guardarla." };
+      // v0.4.53 — estrenada con serie dentro también sube.
+      try { if (tgActiva()) await tgSubir(); }
+      catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
       return { route: { pop: true },
         toast: "✓ Colección «" + r.nom + "» creada con «" + String(pend.title || "Serie").slice(0, 40) + "» dentro." };
     }
@@ -7559,6 +7599,13 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     for (let i = 100; i < hk.length; i++) delete h[hk[i]]; }
   setJson("hist", h);
   syncPushHist();
+  // v0.4.53 — el historial también sube a la nube, con FRENO: como
+  // máximo una subida cada 15 minutos al abrir capítulos (para no
+  // martillar al bot con capítulo tras capítulo); «Sincronizar
+  // ahora» y los corazones/reseñas siguen subiendo siempre.
+  try {
+    if (tgActiva() && Date.now() - Number(getJson("tgTs", 0)) > 900000) await tgSubir();
+  } catch (e) { log("sync subir hist: " + ((e && e.message) || e)); }
   const reader = { images: images, idx: idx, tk: Date.now(), pend: pend, fallos: 0 };
   // v0.4.30 — el registro de las páginas que el muro negó (índices
   // chicos): el botón «Bajar más páginas» distingue «todas listas» de
