@@ -15,6 +15,13 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.64 — ADIÓS AL NOMBRE REPETIDO. La captura del teléfono lo
+// mostró claro: la barra de Kino (la de arriba, con el nombre del
+// plugin) y la nuestra DEBAJO repetían «MangaTrack» — la fusión
+// mergeWithKinoBar no existe en el Kino de la persona (es de Kino
+// 0.9.81+) y la barra de Kino no se puede quitar desde el plugin.
+// Nuestra barra ya no dice el nombre: queda la fuente + la lupa,
+// compacta (Kino ya pone el nombre arriba — el consejo de KinoDev).
 // v0.4.63 — VUELVEN LAS TARJETAS DEL TEMA (la elección de la persona
 // tras probar la 0.4.62 en el teléfono). Las tarjetas del Home de
 // Kino traen fondo negro FIJO que el plugin no puede pintar: con el
@@ -696,7 +703,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.63";
+const VERSION = "0.4.64";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5934,24 +5941,20 @@ export async function screen(ev) {
     // de la fuente activa viaja ahí, al lado de la lupa — al tocarlo
     // se abre la lista de las 7 fuentes (y AniList) para cambiar.
     appBar: { type: "AppBar", key: "barHome",
-      // v0.4.62/v0.4.63 — UNA sola barra, la de Kino
-      // (mergeWithKinoBar, el truco de los plugins de la casa
-      // xuper/latino): el título del plugin va donde Kino ponía el
-      // nombre, así "MangaTrack" ya no sale dos veces (el consejo de
-      // KinoDev). La fuente al lado y la lupa en las acciones: todo
-      // en la misma barra, compacto. v0.4.63 — la pastilla-logo de
-      // imagen de la 0.4.62 se retira: el pintor de la barra solo
-      // acepta https y en el teléfono de la persona no se dibujaba
-      // (el nombre de texto queda igual de limpio). En un Kino viejo
-      // que no conozca la fusión se dibuja como siempre: su barra
-      // arriba y esta debajo — ya sin el nombre repetido.
+      // v0.4.64 — la barra propia ya no repite el nombre del plugin:
+      // Kino dibuja SU barra arriba con «MangaTrack» (y su cerrar,
+      // campana y engranaje) y esa no se puede quitar desde el
+      // plugin. La fusión mergeWithKinoBar (una sola barra) es de
+      // Kino 0.9.81+ y en el teléfono de la persona no existe: se
+      // queda apuntada para el día que su Kino la conozca (en un
+      // Kino viejo se ignora sin romper nada). Abajo queda nuestra
+      // barra COMPACTA (dense, sin línea): solo el selector de la
+      // fuente con su flechita y la lupa en las acciones — el buscar
+      // en la MISMA barra, como pidió KinoDev.
       mergeWithKinoBar: true, dense: true, divider: false,
-      title: { type: "Row", key: "barHomeTitulo", gap: 6, crossAxisAlignment: "center", children: [
-        { type: "Text", text: "MangaTrack", textEn: "MangaTrack", style: "h3" },
-        { type: "TextButton", key: "fuenteBtn", icon: "expand_more",
-          labelText: fuenteActiva().nombre, labelTextEn: fuenteActiva().nombre,
-          onPressed: { event: "fuentesOpen" } },
-      ] },
+      title: { type: "TextButton", key: "fuenteBtn", icon: "expand_more",
+        labelText: fuenteActiva().nombre, labelTextEn: fuenteActiva().nombre,
+        onPressed: { event: "fuentesOpen" } },
       actions: [
         { type: "IconButton", icon: "search", key: "goSearch",
           labelText: "Buscar", labelTextEn: "Search", onPressed: { event: "goSearch" } },
