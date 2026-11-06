@@ -15,6 +15,23 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.45 — LA PÁGINA DE MANHWAWEB ENTERA, Y DETALLES EN MANGADEX. La
+// persona pidió traer lo que faltaba de la página y agregar en las
+// demás fuentes lo que tuvieran. Hallado en vivo: /manhwa/nuevos trae
+// MUCHO más que «Nuevas Obras» — también la pestaña Adulto +18 de las
+// mismas (utimos_mangas_creados_18), el «Lo más Leído» (top.manhwas_esp,
+// con visitas y capítulos por serie) y el RANKING DE GRUPOS SCAN
+// (top._manhwas, tipo scan, con sus capítulos subidos). El Inicio de
+// ManhwaWeb queda: «Nuevas obras» (Principal + Adulto +18 juntas, con
+// «+18» marcado), «Nuevos capítulos» (como la 0.4.44), «Lo más leído»
+// en su propio riel (con «N caps» bajo el título) y la vitrina «Top
+// grupos scan» con el ranking completo — las cuatro secciones de su
+// portada. En MangaDex, «más detalles»: cada tarjeta lleva el número
+// de su último capítulo («Cap. N», el lastChapter de su API) en el
+// Inicio, el catálogo y la búsqueda. Mangas.in no se pudo verificar
+// desde el servidor de pruebas (su muro niega el paso sin
+// presentación): sus posibles detalles quedan para el Registro del
+// teléfono.
 // v0.4.44 — PRINCIPAL Y ADULTO +18 JUNTAS, Y EL BUSCADOR MÁS FINO.
 // La persona vio que el riel de «Nuevos capítulos» traía SOLO lo de la
 // pestaña Adulto +18 de la página y faltaba la Principal. La causa: la
@@ -440,7 +457,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.44";
+const VERSION = "0.4.45";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -901,23 +918,67 @@ function mwCards(j, max) {
   return out;
 }
 
-// v0.4.43 — «Nuevas Obras» de la página de ManhwaWeb: su endpoint
-// propio (/manhwa/nuevos) trae las recién creadas con su nombre en
-// español; las +18 quedan fuera, como en toda la fuente.
+// v0.4.45 — «Nuevas Obras» de la página de ManhwaWeb: su endpoint
+// propio (/manhwa/nuevos) trae las recién creadas de la pestaña
+// Principal (utimos_mangas_creados) Y las de la pestaña Adulto +18
+// (utimos_mangas_creados_18) — las dos juntas, con «+18» en las adultas.
 function mwNuevas(j, max) {
-  const arr = (j && (j.utimos_mangas_creados || j.ultimos_mangas_creados)) || [];
+  const filas = [];
+  const mete = (arr) => {
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length; i++) filas.push(arr[i] || {});
+  };
+  mete(j && (j.utimos_mangas_creados || j.ultimos_mangas_creados));
+  mete(j && (j.utimos_mangas_creados_18 || j.ultimos_mangas_creados_18));
   const out = [];
   const seen = {};
-  for (let i = 0; i < arr.length && out.length < max; i++) {
-    const m = arr[i] || {};
-    if (String(m._erotico || "") === "si") continue;
+  for (let i = 0; i < filas.length && out.length < max; i++) {
+    const m = filas[i];
     const id = String(m.real_id || m._id || "");
     const t = clean(String(m.the_real_name || m.name_esp || ""));
     if (!id || !t || seen[id]) continue;
     seen[id] = 1;
-    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || "") });
+    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || ""),
+      label: String(m._erotico || "") === "si" ? "+18" : "" });
   }
   log("MW nuevas obras: " + out.length);
+  return out;
+}
+
+// v0.4.45 — «Lo más Leído» de la página (el top de /manhwa/nuevos):
+// las series con sus visitas (numero) y su número de capítulos (caps);
+// el link llega como /manhwa/<id> o /manga/<id>.
+function mwTop(j, max) {
+  const arr = (j && j.top && j.top.manhwas_esp) || [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    const slug = String(m.link || "").replace(/^[/](manga|manhwa)[/]/, "").replace(/[/]$/, "");
+    const t = clean(String(m.name || ""));
+    if (!slug || !t || seen[slug]) continue;
+    seen[slug] = 1;
+    const caps = parseInt(m.caps, 10) || 0;
+    out.push({ url: "/mw/manhwa/" + slug + "/", title: t, poster: String(m.imagen || ""),
+      label: caps ? caps + " caps" : "" });
+  }
+  log("MW lo más leído: " + out.length);
+  return out;
+}
+
+// v0.4.45 — el ranking de GRUPOS SCAN de la página (top._manhwas):
+// quiénes han subido más capítulos. No abre series: es la vitrina del
+// ranking, como en la página.
+function mwScans(j, max) {
+  const arr = (j && j.top && j.top._manhwas) || [];
+  const out = [];
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    if (String(m.tipo || "") !== "scan") continue;
+    const t = clean(String(m.name || ""));
+    if (!t) continue;
+    out.push({ name: t, caps: (m.numeros && (parseInt(m.numeros.ace, 10) || 0)) || 0 });
+  }
   return out;
 }
 
@@ -2213,7 +2274,11 @@ function mdCards(j, max) {
   for (let i = 0; i < arr.length && out.length < max; i++) {
     const m = arr[i];
     if (!m || !m.id) continue;
-    out.push({ url: "/title/" + m.id, title: mdTitulo(m), poster: mdPortada(m) });
+    // v0.4.45 — «más detalles»: MangaDex publica el número del último
+    // capítulo de cada serie (lastChapter); viaja bajo el título.
+    const lc = String((m.attributes && m.attributes.lastChapter) || "").trim();
+    out.push({ url: "/title/" + m.id, title: mdTitulo(m), poster: mdPortada(m),
+      label: /^\d+([.]\d+)?$/.test(lc) ? "Cap. " + lc : "" });
   }
   log("MD tarjetas: " + out.length);
   return out;
@@ -3866,6 +3931,8 @@ async function homeTree() {
   let actualizados = [];
   let mixtas = [];
   let msPopBloqueada = false;
+  // v0.4.45 — la vitrina del ranking de grupos scan (solo ManhwaWeb).
+  let seccionScans = [];
   // v0.4.27 — «Ver más»: qué secciones tienen más páginas en el sitio
   // (para el botón «Cargar más» de su cuadrícula) y por qué puerta se
   // piden las de Mangas.in (sus listas cambian de entrada).
@@ -4018,13 +4085,29 @@ async function homeTree() {
     try { await msPrecarga(populares, 8); await msPrecarga(recientes, 8); }
     catch (e) { log("MS portadas home: " + ((e && e.message) || e)); }
   } else if (f.id === "manhwaweb") {
-    // v0.4.43 — el Inicio de ManhwaWeb como su página: «Nuevas Obras»
-    // (/manhwa/nuevos) y «Nuevos Capítulos» (/latest/new-manhwa, con el
-    // capítulo y el grupo que lo subió). Las dos listas son finitas en
-    // la API (no pagina): sin «Cargar más», como en la página.
+    // v0.4.45 — el Inicio de ManhwaWeb como su página COMPLETA: la
+    // misma llamada (/manhwa/nuevos) trae «Nuevas Obras» (Principal y
+    // Adulto +18 juntas) y el top («Lo más leído» y el ranking de
+    // grupos scan); /latest/new-manhwa trae «Nuevos capítulos» (las
+    // tres listas, Principal y +18). Todas finitas: sin «Cargar más».
     titPop = "Nuevas obras de ManhwaWeb"; titPopEn = "New works on ManhwaWeb";
     titRec = "Nuevos capítulos de ManhwaWeb"; titRecEn = "New chapters on ManhwaWeb";
-    try { populares = mwNuevas(await mwGet("/manhwa/nuevos"), 20); } catch (e) { log("MW home nuevas: " + ((e && e.message) || e)); }
+    titUpd = "Lo más leído de ManhwaWeb"; titUpdEn = "Most read on ManhwaWeb";
+    try {
+      const jn = await mwGet("/manhwa/nuevos");
+      populares = mwNuevas(jn, 20);
+      actualizados = mwTop(jn, 20);
+      const sc = mwScans(jn, 10);
+      if (sc.length) {
+        seccionScans = [{ type: "Text", text: "Top grupos scan de ManhwaWeb",
+          textEn: "ManhwaWeb top scan groups", style: "h3", padding: 16 },
+          { type: "Column", key: "mwScans", padding: 16, gap: 4,
+            children: sc.map((s, i) => ({ type: "Text",
+              text: (i + 1) + ". " + s.name + " — " + String(s.caps).replace(/(\d)(?=(\d{3})+$)/g, "$1.") + " capítulos",
+              textEn: (i + 1) + ". " + s.name + " — " + String(s.caps) + " chapters",
+              style: "caption", color: "muted" })) }];
+      }
+    } catch (e) { log("MW home nuevas: " + ((e && e.message) || e)); }
     try { recientes = mwUltimos(await mwGet("/latest/new-manhwa"), 20); } catch (e) { log("MW home caps: " + ((e && e.message) || e)); }
     masPop = false; masRec = false;
     // v0.4.29 — portadas de verdad: se bajan con presentación y se
@@ -4174,6 +4257,9 @@ async function homeTree() {
   if (f.id === "manhwaweb" || f.id === "mangasin") {
     populares = decoraMuros(populares);
     recientes = decoraMuros(recientes);
+    // v0.4.45 — «Lo más leído» de ManhwaWeb también es de la casa con
+    // muro: su portada viaja como copia local cuando ya está.
+    actualizados = decoraMuros(actualizados);
   }
   // v0.4.33 — el hero del Inicio: una sola serie destacada arriba de
   // todo, el banner oficial de Kino (el mismo de la portada de su
@@ -4216,6 +4302,7 @@ async function homeTree() {
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
+    .concat(seccionScans)
     .concat(gridSeries)
     .concat(catalogo) };
 }
