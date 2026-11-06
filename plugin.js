@@ -15,6 +15,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.62 — EL INICIO ESTRENA LA CARA DE KINO (el consejo de KinoDev
+// mirando la portada). (1) UNA sola barra: mergeWithKinoBar junta la
+// barra del plugin con la de Kino, y el logo nuevo (la pastilla del
+// color naranja del plugin) va donde estaba el nombre — sin
+// "MangaTrack" dos veces; la fuente al lado del logo y la lupa en la
+// misma barra. (2) Los rieles con las tarjetas del Home de Kino
+// (titleCard): marco bonito, altura pareja y títulos sin cortes; el
+// «Ver más» sube a la derecha del título, donde lo esperan los dedos.
+// Las casas con muro (Mangas.in y ManhwaWeb) conservan su tarjeta de
+// siempre: sus portadas viajan con cabeceras o copia local, y la
+// tarjeta de Kino solo acepta https pelada.
 // v0.4.61 — MÁS ANILIST. (1) El catálogo ya no se corta a las 3
 // páginas: caben 240 series («Cargar más» sigue funcionando y se
 // retira con honestidad si se llena). (2) GÉNEROS: el desplegable de
@@ -673,7 +684,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.61";
+const VERSION = "0.4.62";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4394,6 +4405,13 @@ function twoLines(t) {
   return s.length > 42 ? [s.slice(0, 40) + "…", s.slice(40, 80)] : [s];
 }
 
+// v0.4.62 — el logo del Inicio: la pastilla naranja con el nombre,
+// del color del plugin (#E8722A). Va en la barra (donde Kino ponía
+// el nombre) dentro de una Image con data URL — el mismo truco del
+// header de los plugins de la casa (xuper/latino). PNG de 210x63
+// dibujado a mano: paleta con degradado y esquinas redondeadas.
+const LOGO_MT = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAANIAAAA/CAMAAACinWYsAAAANlBMVEUAAAD////oXRrpYRzpZB/qaCHrayTrbybscyntdivtei7ufTDvgTPvhTXwiDjxjDrxjz3ykz97m/hjAAAAEnRSTlMA//////////////////////9ewYY+AAAz+ElEQVR4AQHtMxLNAAAAAAAAAAAAAAAAAAMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARAAAAAAAAAAAAAAAAAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREAAAAAAAAAAAAAAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREQAAAAAAAAAAAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERAAAAAAAAAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREAAAAAAAICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBERERERAAAAAAICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBAREREREREAAAACAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQERERERERAAAAAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREQAAAAICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBAREREREREAAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQEBAQEBAQBAQEEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoBAQEBAQEBAQEBAQEBAQELCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEBAQEBAQEAQEBBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKAQEBAQEBAQEBAQEBAQEBCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAQEBAQEBAEBAQQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgEBAQEBAQEBAQEBAQEBAQsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEBAQEEBAQBAQEBAQEEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoBAQEKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8BAQEPDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAQEBBAQEAQEBAQEBBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKAQEBCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PAQEBDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQEBAQQEBAEBAQEBAQQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgEBAQoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDwEBAQ8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQBAQEEBAQBAQEEBAQEBQUBAQEBAQEBAQEFBQUGBgYBAQEBAQEBAQEGBgcHBwcHBwcHBwcBAQEBAQEBAQEICAgICAgICAgBAQEBAQEBAQEJCQkJCQoKCgoKCgoBAQEKCgoKCwsLCwsBAQELCwsBAQEBAQEMDAwMDAwMDAwBAQEBAQEBAQENDQ0NDQ0NDg4BAQEBAQEBAQEODg4PDw8BAQEPDw8PDw8BAQEQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEAQEBBAQEAQEBBAQEBAUFAQEBAQEBAQEBBQUFBgYGAQEBAQEBAQEBBgYHBwcHBwcHBwcHAQEBAQEBAQEBCAgICAgICAgIAQEBAQEBAQEBCQkJCQkKCgoKCgoKAQEBCgoKCgsLCwsLAQEBCwsLAQEBAQEBDAwMDAwMDAwMAQEBAQEBAQEBDQ0NDQ0NDQ4OAQEBAQEBAQEBDg4ODw8PAQEBDw8PDw8PAQEBEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAEBAQQEBAEBAQQEBAQFBQEBAQEBAQEBAQUFBQYGBgEBAQEBAQEBAQYGBwcHBwcHBwcHBwEBAQEBAQEBAQgICAgICAgICAEBAQEBAQEBAQkJCQkJCgoKCgoKCgEBAQoKCgoLCwsLCwEBAQsLCwEBAQEBAQwMDAwMDAwMDAEBAQEBAQEBAQ0NDQ0NDQ0ODgEBAQEBAQEBAQ4ODg8PDwEBAQ8PDw8PDwEBARAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQBAQEEBAQBAQEEBAQEBQUFBQUFBQUFBQUBAQEGBgYBAQEGBgYGBgYBAQEHBwcHBwcBAQEHBwcHCAgICAgBAQEICAgICAgJCQkJCQkJCQkBAQEJCQoKCgoKCgoBAQEKCgoKCwsLCwsBAQEBAQELCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0BAQENDQ0BAQEODg4ODg4ODg4ODg4PDw8BAQEPDw8BAQEPDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEAQEBBAQEAQEBBAQEBAUFBQUFBQUFBQUFAQEBBgYGAQEBBgYGBgYGAQEBBwcHBwcHAQEBBwcHBwgICAgIAQEBCAgICAgICQkJCQkJCQkJAQEBCQkKCgoKCgoKAQEBCgoKCgsLCwsLAQEBAQEBCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NAQEBDQ0NAQEBDg4ODg4ODg4ODg4ODw8PAQEBDw8PAQEBDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAEBAQQEBAEBAQQEBAQFBQUFBQUFBQUFBQEBAQYGBgEBAQYGBgYGBgEBAQcHBwcHBwEBAQcHBwcICAgICAEBAQgICAgICAkJCQkJCQkJCQEBAQkJCgoKCgoKCgEBAQoKCgoLCwsLCwEBAQEBAQsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQEBAQ0NDQEBAQ4ODg4ODg4ODg4ODg8PDwEBAQ8PDwEBAQ8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQEBAQEBAQBAQEEBAQEBQUBAQEBAQEBAQEBAQEGBgYBAQEGBgYGBgYGBgcBAQEHBwcBAQEHBwcHCAgICAgBAQEICAgICAgBAQEBAQEBAQEBAQEJCQoKCgoKCgoBAQEKCgoKCwsLCwsBAQELCwsLCwsMDAwMDAwMDAwMDAwBAQEBAQEBAQEBAQENDQ0BAQEODg4ODg4ODg4ODg4PDw8BAQEBAQEPDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEBAQEBAQEAQEBBAQEBAUFAQEBAQEBAQEBAQEBBgYGAQEBBgYGBgYGBgYHAQEBBwcHAQEBBwcHBwgICAgIAQEBCAgICAgIAQEBAQEBAQEBAQEBCQkKCgoKCgoKAQEBCgoKCgsLCwsLAQEBCwsLCwsLDAwMDAwMDAwMDAwMAQEBAQEBAQEBAQEBDQ0NAQEBDg4ODg4ODg4ODg4ODw8PAQEBAQEBDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAQEBAQEBAEBAQQEBAQFBQEBAQEBAQEBAQEBAQYGBgEBAQYGBgYGBgYGBwEBAQcHBwEBAQcHBwcICAgICAEBAQgICAgICAEBAQEBAQEBAQEBAQkJCgoKCgoKCgEBAQoKCgoLCwsLCwEBAQsLCwsLCwwMDAwMDAwMDAwMDAEBAQEBAQEBAQEBAQ0NDQEBAQ4ODg4ODg4ODg4ODg8PDwEBAQEBAQ8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQEBAQEBAQBAQEEBAQBAQEFBQUFBQUFBQUBAQEGBgYBAQEGBgYGBgYGBgcBAQEHBwcHBwcBAQEBAQEBAQEBAQEICAgBAQEJCQkJCQkJCQkBAQEJCQoKCgoKCgoBAQEKCgoKCwsLCwsBAQELCwsLCwsMDAwMDAwMDAwBAQEMDA0NDQ0NDQ0BAQENDQ0BAQEODg4ODg4ODg4ODg4PDw8BAQEPDw8BAQEPDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEBAQEBAQEAQEBBAQEAQEBBQUFBQUFBQUFAQEBBgYGAQEBBgYGBgYGBgYHAQEBBwcHBwcHAQEBAQEBAQEBAQEBCAgIAQEBCQkJCQkJCQkJAQEBCQkKCgoKCgoKAQEBCgoKCgsLCwsLAQEBCwsLCwsLDAwMDAwMDAwMAQEBDAwNDQ0NDQ0NAQEBDQ0NAQEBDg4ODg4ODg4ODg4ODw8PAQEBDw8PAQEBDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAQEBAQEBAEBAQQEBAEBAQUFBQUFBQUFBQEBAQYGBgEBAQYGBgYGBgYGBwEBAQcHBwcHBwEBAQEBAQEBAQEBAQgICAEBAQkJCQkJCQkJCQEBAQkJCgoKCgoKCgEBAQoKCgoLCwsLCwEBAQsLCwsLCwwMDAwMDAwMDAEBAQwMDQ0NDQ0NDQEBAQ0NDQEBAQ4ODg4ODg4ODg4ODg8PDwEBAQ8PDwEBAQ8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMBAQEDAwQEBAQEBAQBAQEEBAQEBQUBAQEBAQEBAQEBAQEGBgYBAQEGBgYGBgYGBgcBAQEHBwcHBwcHBwcHCAgICAgBAQEICAgICAgBAQEBAQEBAQEBAQEJCQoKCgoKCgoBAQEKCgoKCwsLCwsBAQELCwsLCwsMDAwMDAwMDAwMDAwBAQEBAQEBAQEBAQENDQ0NDg4BAQEBAQEBAQEODg4PDw8BAQEPDw8PDw8BAQEQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAQEBAwMEBAQEBAQEAQEBBAQEBAUFAQEBAQEBAQEBAQEBBgYGAQEBBgYGBgYGBgYHAQEBBwcHBwcHBwcHBwgICAgIAQEBCAgICAgIAQEBAQEBAQEBAQEBCQkKCgoKCgoKAQEBCgoKCgsLCwsLAQEBCwsLCwsLDAwMDAwMDAwMDAwMAQEBAQEBAQEBAQEBDQ0NDQ4OAQEBAQEBAQEBDg4ODw8PAQEBDw8PDw8PAQEBEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwEBAQMDBAQEBAQEBAEBAQQEBAQFBQEBAQEBAQEBAQEBAQYGBgEBAQYGBgYGBgYGBwEBAQcHBwcHBwcHBwcICAgICAEBAQgICAgICAEBAQEBAQEBAQEBAQkJCgoKCgoKCgEBAQoKCgoLCwsLCwEBAQsLCwsLCwwMDAwMDAwMDAwMDAEBAQEBAQEBAQEBAQ0NDQ0ODgEBAQEBAQEBAQ4ODg8PDwEBAQ8PDw8PDwEBARAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAICAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREREREQACAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREREAAgICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBARERERERERAAACAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQERERERERAAAAAgICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREREREQAAAAICAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBAREREREREAAAACAgICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQERERERERAAAAAAICAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBERERERAAAAAAACAgICAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBAREREREQAAAAAAAAICAgIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEREREQAAAAAAAAAAAgICAwMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQEBEREQAAAAAAAAAAAAACAgMDAwMDAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQEBAQEBAREQAAAAAAAAAAAAAAAAIDAwMDAwMDAwMDAwMDAwQEBAQEBAQEBAQEBAQEBQUFBQUFBQUFBQUFBQUGBgYGBgYGBgYGBgYGBgcHBwcHBwcHBwcHBwcHCAgICAgICAgICAgICAgJCQkJCQkJCQkJCQkJCQoKCgoKCgoKCgoKCgoKCwsLCwsLCwsLCwsLCwsMDAwMDAwMDAwMDAwMDA0NDQ0NDQ0NDQ0NDQ0NDg4ODg4ODg4ODg4ODg4PDw8PDw8PDw8PDw8PDxAQEBAQEBAQEBAQEBAQEQAAAAAAAAAAAAAAAAAAAAMDAwMDAwMDAwMDAwMEBAQEBAQEBAQEBAQEBAUFBQUFBQUFBQUFBQUFBgYGBgYGBgYGBgYGBgYHBwcHBwcHBwcHBwcHBwgICAgICAgICAgICAgICQkJCQkJCQkJCQkJCQkKCgoKCgoKCgoKCgoKCgsLCwsLCwsLCwsLCwsLDAwMDAwMDAwMDAwMDAwNDQ0NDQ0NDQ0NDQ0NDQ4ODg4ODg4ODg4ODg4ODw8PDw8PDw8PDw8PDw8QEBAQEBAQEBAQEBAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwMDAwMDAwMDBAQEBAQEBAQEBAQEBAQFBQUFBQUFBQUFBQUFBQYGBgYGBgYGBgYGBgYGBwcHBwcHBwcHBwcHBwcICAgICAgICAgICAgICAkJCQkJCQkJCQkJCQkJCgoKCgoKCgoKCgoKCgoLCwsLCwsLCwsLCwsLCwwMDAwMDAwMDAwMDAwMDQ0NDQ0NDQ0NDQ0NDQ0ODg4ODg4ODg4ODg4ODg8PDw8PDw8PDw8PDw8PEBAQEBAQEBAQAAAAAAAAAAAAAAAAu0LCMoRmS8AAAAAASUVORK5CYII=";
+
 function posterCard(it, prefix, rail) {
   const img = {
     type: "Image", url: it.poster || "", aspect: "2:3",
@@ -4420,6 +4438,28 @@ function posterCard(it, prefix, rail) {
   };
 }
 
+// v0.4.62 — la tarjeta de portada del Home de Kino (titleCard): el
+// mismo cartelesito lindo de su pantalla de inicio, con su marco, su
+// altura pareja y su título sin cortes (el consejo de KinoDev). El
+// tap abre la serie como siempre (openSeries); el "kind" va de
+// película para no exigir la lista de capítulos que el Home pide a
+// las series — la abre la pantalla propia del plugin.
+function kinoCard(it, prefix) {
+  const id = serieKey(prefix, it.url);
+  const item = { id: id, ref: it.url, title: String(it.title || ""), kind: "movie" };
+  if (/^https:\/\//i.test(it.poster || "")) item.poster = it.poster;
+  return { type: "titleCard", key: "tc-" + id, size: "medium", item: item,
+    onTap: { event: "openSeries", arg: it.url } };
+}
+
+// v0.4.62 — cada tarjeta elige su pintura: las casas con muro
+// (Mangas.in y ManhwaWeb) necesitan cabeceras o su copia local para
+// la portada, y la tarjeta de Kino solo acepta https pelada — esas
+// siguen con la tarjeta de siempre; el resto estrena la del Home.
+function homeCard(it, prefix) {
+  return imgHeadersDeUrl(it.url) ? posterCard(it, prefix, true) : kinoCard(it, prefix);
+}
+
 function gridOf(items, vacio) {
   if (!items || !items.length) return vacio;
   return {
@@ -4434,30 +4474,25 @@ const VACIO_SERIES = { type: "emptyState", icon: "list",
 const VACIO_BUSQUEDA = { type: "emptyState", icon: "search",
   title: "Sin resultados.", titleEn: "No results." };
 
-// v0.4.27 — la tarjetita «Ver más» al final de un riel: abre la
-// sección entera en cuadrícula (y con «Cargar más» donde la fuente
-// tiene más páginas de esa sección).
-function verMasCard(key) {
-  return { type: "Card", key: "vermas-" + key, flush: true,
-    onTap: { event: "verMas", arg: key },
-    children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
-      children: [
-        { type: "Icon", name: "arrow_forward", color: "muted" },
-        { type: "Text", text: "Ver más", textEn: "See more", style: "caption", color: "muted" },
-      ] }] };
-}
-
+// v0.4.62 — el «Ver más» del riel vive arriba, a la derecha del
+// título (ver railOf); la sección entera abre igual en cuadrícula.
+// v0.4.62 — el riel estrena el patrón de las apps lindas: el título
+// y su «Ver más» en una misma línea (el botón arriba a la derecha,
+// donde lo esperan los dedos, con las 3 series de siempre como
+// umbral), y debajo las tarjetas del Home de Kino — cada una con su
+// pintura (homeCard): la del Home donde la portada es https pelada,
+// la de siempre en las casas con muro.
 function railOf(titulo, tituloEn, items, key, prefix) {
   if (!items || !items.length) return [];
   return [
-    { type: "Text", text: titulo, textEn: tituloEn, style: "h3", padding: 16 },
+    { type: "Row", key: key + "-titulo", padding: { h: 16 }, gap: 8, crossAxisAlignment: "center",
+      children: [{ type: "Text", text: titulo, textEn: tituloEn, style: "h3" }]
+        .concat(items.length >= 3 ? [{ type: "Spacer", flex: 1 },
+          { type: "TextButton", key: "vermas-" + key, labelText: "Ver más", labelTextEn: "See more",
+            onPressed: { event: "verMas", arg: key } }] : []) },
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8,
-        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true))
-          // v0.4.29 — con 3 series o más ya sale la tarjetita que abre
-          // la sección entera (antes pedía 10 y las secciones chicas
-          // de LeerCapitulo/LectorXd se quedaban sin su «Ver más»).
-          .concat(items.length >= 3 ? [verMasCard(key)] : []) }] },
+      children: [{ type: "Row", gap: 12,
+        children: items.slice(0, 20).map((it) => homeCard(it, prefix)) }] },
   ];
 }
 
@@ -4776,25 +4811,33 @@ async function homeTree() {
   const railHist = hItems.length ? [
     // v0.4.33 — la insignia con el número de series en lectura da el
     // toque de las apps de manga al encabezado del riel protagonista.
-    { type: "Row", gap: 8, padding: { h: 16 }, children: [
-      { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3" },
-      { type: "Badge", text: String(hTodos.length) },
-    ] },
+    // v0.4.62 — el patrón nuevo del resto del Inicio: insignia junto
+    // al título y «Ver más» arriba a la derecha (abre el historial
+    // entero, hasta 100 series, en cuadrícula). La etiquetita de
+    // capítulo viaja solo en las tarjetas de siempre (las de muro):
+    // la del Home de Kino no trae etiqueta.
+    { type: "Row", key: "railHistTitulo", gap: 8, padding: { h: 16 }, crossAxisAlignment: "center",
+      children: [
+        { type: "Text", text: "Seguir leyendo", textEn: "Keep reading", style: "h3" },
+        { type: "Badge", text: String(hTodos.length) },
+      ].concat(hTodos.length >= 3 ? [{ type: "Spacer", flex: 1 },
+        { type: "TextButton", key: "vermas-railHist", labelText: "Ver más", labelTextEn: "See more",
+          onPressed: { event: "verMas", arg: "railHist" } }] : []) },
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8,
-        children: hItems.map((it) => posterCard(it, "h-", true))
-          // v0.4.27 — el riel enseña 15; «Ver más» abre el historial
-          // entero (hasta 100 series) en cuadrícula.
-          // v0.4.29 — mismo umbral bajo que los demás rieles.
-          .concat(hTodos.length >= 3 ? [verMasCard("railHist")] : []) }] },
+      children: [{ type: "Row", gap: 12,
+        children: hItems.map((it) => homeCard(it, "h-")) }] },
   ] : [];
   // v0.4.34 — el riel de fuentes se retira del Inicio: su lista
   // vive ahora en el selector de la barra (fuenteBtn → pantalla
   // «fuentes»), con la activa marcada y AniList al final.
+  // v0.4.62 — la cuadrícula de mixtas también con la pintura nueva:
+  // homeCard por tarjeta (la del Home de Kino o la de siempre según
+  // el muro de cada casa).
   const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
       style: "h3", padding: 16 },
-    gridOf(mixtas, VACIO_SERIES),
+    { type: "ListView", key: "grid", columns: { compact: 3, medium: 4, expanded: 6 },
+      items: mixtas.map((it) => homeCard(it, "c-")) },
   ] : [];
   const catalogo = [
     { type: "Card", key: "catEntry", flush: true, onTap: { event: "openCatalog" },
@@ -5906,8 +5949,18 @@ export async function screen(ev) {
     // de la fuente activa viaja ahí, al lado de la lupa — al tocarlo
     // se abre la lista de las 7 fuentes (y AniList) para cambiar.
     appBar: { type: "AppBar", key: "barHome",
-      title: { type: "Row", gap: 6, children: [
-        { type: "Text", text: "MangaTrack", textEn: "MangaTrack", style: "h3" },
+      // v0.4.62 — UNA sola barra, la de Kino (mergeWithKinoBar, el
+      // truco de los plugins de la casa xuper/latino): el logo va
+      // donde Kino ponía el nombre, así "MangaTrack" ya no sale dos
+      // veces (el consejo de KinoDev). La fuente al lado del logo y
+      // la lupa en las acciones: todo en la misma barra, compacto.
+      // En un Kino viejo que no conozca la fusión se dibuja como
+      // siempre: su barra arriba y esta debajo — ya sin el nombre
+      // repetido.
+      mergeWithKinoBar: true, dense: true, divider: false,
+      title: { type: "Row", key: "barHomeTitulo", gap: 10, crossAxisAlignment: "center", children: [
+        { type: "Image", key: "logoMT", url: LOGO_MT, aspect: "3.33:1",
+          fit: "contain", h: 40, alt: "MangaTrack", altEn: "MangaTrack" },
         { type: "TextButton", key: "fuenteBtn", icon: "expand_more",
           labelText: fuenteActiva().nombre, labelTextEn: fuenteActiva().nombre,
           onPressed: { event: "fuentesOpen" } },
@@ -7788,25 +7841,37 @@ function paraCard(it, rail) {
   };
 }
 
+// v0.4.62 — «Para ti» con la tarjeta del Home de Kino también: la
+// portada de AniList es https pelada, así que entra sin muro. La
+// etiqueta del porqué queda para la pantalla «Descubrir», donde hay
+// sitio para explicarse.
+function paraKinoCard(it) {
+  const item = { id: "pt-" + it.id, ref: String(it.id), title: alTitulo(it), kind: "movie" };
+  if (/^https:\/\//i.test(it.cover || "")) item.poster = it.cover;
+  return { type: "titleCard", key: "tc-pt-" + it.id, size: "medium", item: item,
+    onTap: { event: "paraAbrir", arg: String(it.id) } };
+}
+
 // El riel «Para ti» del Inicio: si ya hay sugerencias (caché de 12 h),
 // sus tarjetas; si todavía no, la puerta de entrada que las arma.
 function paraTiRail() {
   const p = getJson("paraTi", null);
   const items = (p && Array.isArray(p.items)) ? p.items.slice(0, 8) : [];
   if (items.length >= 3) return [
-    { type: "Text", text: "Para ti", textEn: "For you", style: "h3", padding: 16 },
+    // v0.4.62 — el patrón nuevo: título e insignia arriba, y
+    // «Descubrir» a la derecha (era la tarjetita del final del riel:
+    // botón en su línea queda más lindo y más a la mano).
+    { type: "Row", key: "railParaTitulo", padding: { h: 16 }, gap: 8, crossAxisAlignment: "center",
+      children: [
+        { type: "Text", text: "Para ti", textEn: "For you", style: "h3" },
+        { type: "Badge", text: String(items.length) },
+        { type: "Spacer", flex: 1 },
+        { type: "TextButton", key: "vermas-descubre", labelText: "Descubrir", labelTextEn: "Discover",
+          onPressed: { event: "descubreAbrir" } },
+      ] },
     { type: "SingleChildScrollView", key: "railPara", direction: "horizontal", padding: 16,
-      children: [{ type: "Row", gap: 8,
-        children: items.map((it) => paraCard(it, true)).concat([
-          { type: "Card", key: "vermas-descubre", flush: true,
-            onTap: { event: "descubreAbrir" },
-            children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
-              children: [
-                { type: "Icon", name: "explore", color: "muted" },
-                { type: "Text", text: "Descubrir", textEn: "Discover",
-                  style: "caption", color: "muted" },
-              ] }] },
-        ]) }] },
+      children: [{ type: "Row", gap: 12,
+        children: items.map((it) => paraKinoCard(it)) }] },
   ];
   return [{ type: "Card", key: "paraEntry", flush: true, onTap: { event: "descubreAbrir" },
     children: [
