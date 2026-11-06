@@ -15,6 +15,16 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.48 — EL INICIO VOLVIÓ A ABRIR. Reporte del teléfono: tras abrir
+// un +18 y volver, cada entrada al plugin caía en el mensaje rojo
+// «plugin answer too large». La causa: las portadas convertidas de las
+// casas con muro viajan como datos incrustados de hasta ~199 mil
+// caracteres DENTRO de la respuesta, y el caché se había ido llenando
+// con cada visita (los +18 traen portadas grandes) hasta cruzar el
+// tope de 2 millones de Kino. El adorno de portadas ahora tiene
+// PRESUPUESTO compartido por respuesta: se adornan las primeras de
+// cada riel (lo que se ve) hasta ~700 mil caracteres y el resto viaja
+// con su URL de siempre — la pantalla abre aunque el caché esté lleno.
 // v0.4.47 — LOS +18 DE MANHWAWEB TAMBIÉN ABREN. Reporte del teléfono:
 // los mangas normales ya abrían pero tocar uno +18 no hacía nada. La
 // causa: los ids de las +18 rompen la forma limpia <slug>_<13 dígitos>
@@ -480,7 +490,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.47";
+const VERSION = "0.4.48";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1304,15 +1314,36 @@ function imgHeadersDeUrl(u) {
 // Cambia las portadas de las tarjetas de las casas con muro por sus
 // copias locales ya en el almacén (las tarjetas de otras fuentes
 // pasan igualitas).
+// v0.4.48 — las portadas convertidas son data URLs de hasta ~199.000
+// caracteres cada una y viajan DENTRO de la respuesta; Kino la rechaza
+// ENTERA si pasa de 2 millones («plugin answer too large», el mensaje
+// rojo que rompía la entrada al plugin). Con el almacén lleno de
+// portadas ya convertidas (los +18 traen portadas grandes y las
+// visitas iban llenando el caché), el Inicio cruzó el tope. El adorno
+// ahora tiene PRESUPUESTO compartido: se adorna en orden — lo primero
+// de cada riel, que es lo que se ve — hasta llenarlo; el resto viaja
+// con su URL (su icono de siempre si el muro la niega al pintor) y la
+// pantalla ABRE aunque el caché esté lleno.
+let decoraRestante = 0;
+function decoraMurosReset(tope) { decoraRestante = tope || 700000; }
+// Para las respuestas de UNA lista (búsqueda, catálogo, riel): cada
+// respuesta estrena su propio presupuesto.
+function decoraNueva(items) { decoraMurosReset(); return decoraMuros(items); }
 function decoraMuros(items) {
   const arr = Array.isArray(items) ? items : [];
+  let adornadas = 0;
   const out = arr.map(function (it) {
     if (!it || !it.poster) return it;
     const u = String(it.url || "");
     if (u.indexOf("/mw/") !== 0 && u.indexOf("/ms/") !== 0) return it;
     const d = imgLocalDe(it.poster);
-    return d ? Object.assign({}, it, { poster: d }) : it;
+    // Sin copia local o sin presupuesto: la tarjeta conserva su URL.
+    if (!d || d.length > decoraRestante) return it;
+    decoraRestante -= d.length;
+    adornadas++;
+    return Object.assign({}, it, { poster: d });
   });
+  if (!adornadas && arr.length) log("decora: 0 portadas (sin copias o presupuesto " + Math.round(decoraRestante / 1000) + "k)");
   return out;
 }
 
@@ -4309,6 +4340,7 @@ async function homeTree() {
   // desde la v0.4.30, Mangas.in) se cambian por sus copias locales
   // del almacén.
   if (f.id === "manhwaweb" || f.id === "mangasin") {
+    decoraMurosReset();
     populares = decoraMuros(populares);
     recientes = decoraMuros(recientes);
     // v0.4.45 — «Lo más leído» de ManhwaWeb también es de la casa con
@@ -4834,7 +4866,7 @@ function searchTree(state) {
             submit: true },
         ] },
         results
-          ? (results.length ? gridOf(decoraMuros(results), VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
+          ? (results.length ? gridOf(decoraNueva(results), VACIO_BUSQUEDA) : VACIO_BUSQUEDA)
           : { type: "Text", text: "Escribe un título y pulsa Buscar.",
               textEn: "Type a title and press Search.", color: "muted", padding: 16 },
       ] },
@@ -4970,7 +5002,7 @@ function catalogTree(c) {
   const start = Math.max(0, parseInt(c.start, 10) || 0);
   // v0.4.29 — las portadas MW de la ventana visible se cambian por
   // sus copias locales (si ya están en el almacén).
-  const items = decoraMuros(todos.slice(start, start + CAT_TOPE));
+  const items = decoraNueva(todos.slice(start, start + CAT_TOPE));
   const total = parseInt(String(c.totalTxt || "").replace(/[^0-9]/g, ""), 10) || 0;
   const hayMas = c.mas === undefined || c.mas === null
     ? (todos.length < total)
@@ -5161,7 +5193,7 @@ function rielTree(key) {
   const start = Math.max(0, parseInt(r.start, 10) || 0);
   // v0.4.29 — la ventana visible se dibuja con las portadas MW ya
   // convertidas (copias locales del almacén, sin red).
-  const items = decoraMuros(todos.slice(start, start + RIEL_TOPE));
+  const items = decoraNueva(todos.slice(start, start + RIEL_TOPE));
   const cuantos = todos.length + (todos.length === 1 ? " serie" : " series") +
     (r.f === "hist" ? "" : " · " + f.nombre);
   return {
