@@ -15,6 +15,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.54 — LO VISTO LLEGA AL PLUGIN. La vuelta de la integración con
+// AniTrack: hasta ahora el flujo era de una sola mano (leer aquí
+// marcaba el capítulo en AniList/MAL); la persona pidió el círculo
+// completo — si en AniList o MyAnimeList va por el capítulo 10 o 20,
+// que aquí también salga como visto. Al abrir una serie, MangaTrack
+// pregunta por la puerta "progress" (nueva en AniTrack 0.11.0)
+// cuántos capítulos hay leídos HOY en esas listas y, si van más
+// adelantados que el historial local, las marcas ✓ suben hasta ahí
+// (el índice absoluto del último capítulo con num <= progreso) y
+// «Llevas N de M» se pinta solo. NUNCA baja lo ya leído aquí. Con
+// caché por serie (6 h si trajo progreso, 2 h si no) para no repetir
+// el pedido en cada apertura; sin AniTrack o sin sesión no pasa nada
+// (un mensaje de Registro, no un error). Solo series VINCULADAS
+// (ids exactos de AniList/MAL): las de MangaDex los traen solos, las
+// demás se vinculan desde la sección AniList.
 // v0.4.53 — TODO LO QUE SE ARMA, SUBE. La persona lo recordó con
 // razón: las colecciones las pedimos juntos en la 0.4.21 (el corazón)
 // y los favoritos viven dentro desde la 0.4.22 — pero la subida a la
@@ -569,7 +584,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.53";
+const VERSION = "0.4.54";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -7737,6 +7752,67 @@ async function cargarSerie(url, conRuta) {
   let capsTotal = full.length;
   if (full.length > chapters.length) {
     try { if (!setJsonCache("caps:" + url, full)) log("caps sin guardar: almacén lleno"); } catch (e) { log("caps sin guardar: " + e); }
+  }
+  // v0.4.54 — LO VISTO LLEGA AL PLUGIN: la otra mano de la integración
+  // con AniTrack. Si esta serie tiene ids de AniList/MAL (los de
+  // MangaDex vienen en meta; las demás series se vinculan en la
+  // sección AniList y quedan en "alId:<url>"), se pregunta por la
+  // puerta "progress" cuántos capítulos hay leídos HOY en las listas
+  // de la persona, y si van MÁS adelantados que el historial local,
+  // las marcas ✓ suben hasta ese capítulo (índice absoluto en `full`).
+  // Nunca baja lo ya leído aquí; sin AniTrack o sin sesión, solo una
+  // línea de Registro (adorno, no error). Caché por serie: 6 h si
+  // trajo progreso, 2 h si no (cubre sin-lista y fallos de red).
+  try {
+    const alVinc = getJson("alId:" + url, null);
+    const alId = (meta && meta.anilistId) || (alVinc && alVinc.al) || 0;
+    const malId = (meta && meta.malId) || (alVinc && alVinc.mal) || 0;
+    if ((alId || malId) && full && full.length) {
+      const ahora = Date.now();
+      const clave = "alProg:" + url;
+      let visto = null;
+      let cache = null;
+      try { cache = getJson(clave, null); } catch (eC) { cache = null; }
+      if (cache && typeof cache === "object" && typeof cache.n === "number"
+        && ahora - (cache.ts || 0) < (cache.n > 0 ? 21600000 : 7200000)) {
+        visto = cache;
+      } else {
+        let r = null;
+        try {
+          r = await kino.plugins.call("anitrack", "progress",
+            { title: String((meta && meta.title) || "").slice(0, 200), anilistId: alId, malId: malId });
+        } catch (eP) {
+          log("anitrack progress: " + ((eP && (eP.message || eP.code)) || eP));
+        }
+        visto = { ts: ahora, n: (r && r.found && typeof r.progress === "number")
+          ? Math.max(0, Math.floor(r.progress)) : 0,
+          where: (r && r.where) || "" };
+        try { setJson(clave, visto); } catch (eS) { /* almacén lleno */ }
+      }
+      if (visto && visto.n > 0) {
+        // Índice del ÚLTIMO capítulo ascendente con num <= lo visto.
+        let idx = -1;
+        for (let i = 0; i < full.length; i++) {
+          if (Number(full[i].num) <= visto.n) idx = i;
+          else break;
+        }
+        if (idx >= 0) {
+          const h = hist();
+          const actual = h[url];
+          if (!actual || (actual.idx || 0) < idx) {
+            h[url] = { url: full[idx].url, num: full[idx].num, idx: idx, ts: Date.now(),
+              title: (meta && meta.title) || (actual && actual.title) || "",
+              poster: (meta && meta.poster) || (actual && actual.poster) || "" };
+            setJson("hist", h);
+            syncPushHist();
+            log("visto importado de " + (visto.where || "AniList/MAL") + ": «"
+              + ((meta && meta.title) || url) + "» hasta cap. " + full[idx].num);
+          }
+        }
+      }
+    }
+  } catch (ePro) {
+    log("anitrack progress (importar): " + ((ePro && ePro.message) || ePro));
   }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " de " + capsTotal + " capítulos");
   // Con 0 capítulos también se abre el detalle: ahí explica por qué

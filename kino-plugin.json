@@ -1,7 +1,7 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.53",
+  "version": "0.4.54",
   "creator": "Susejing",
   "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni, Mangas.in y ManhwaWeb) con el panel de capítulos al final de la lectura y la barra limpia mientras lees.",
   "apiVersion": 19,
@@ -60,7 +60,8 @@
           "repo": "Susejing/kino-anitrack",
           "door": "manga",
           "calls": [
-            "markChapter"
+            "markChapter",
+            "progress"
           ]
         }
       }
