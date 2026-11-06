@@ -15,6 +15,26 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.57 — EL INICIO VUELVE A DIBUJAR SUS PORTADAS. La 0.4.55/0.4.56
+// dejó el Inicio con TODAS las portadas vacías (capturas: ni el riel
+// «Para ti» ni las de la fuente dibujaban; las MISMAS tarjetas sí
+// dibujaban en el Descubrir) y el log confesaba «para ti gustos:
+// HTTP 400» dos veces por tanda. DOS bichos de raíz: (1) paraCard en
+// el RIEL llevaba la imagen SIN width — todas las tarjetas de riel
+// del plugin ponen width: 120 desde siempre; sin un ancho, la imagen
+// queda sin tamaño en el eje infinito del desplazamiento lateral y el
+// pintor de esa pantalla se rompía entera (en la cuadrícula la celda
+// la acota y por eso el Descubrir sí dibujaba). Ahora el riel la pide
+// con width: 120 como sus vecinas. (2) la consulta de gustos declaraba
+// $g: [MediaGenre] y AniList espera los géneros como [String] (su
+// ejemplo oficial): HTTP 400 seguro, y el respaldo repetía el mismo
+// error; ahora van [String], sin géneros no se pregunta y el tag_in
+// solo viaja cuando hay tags. Además la cuadrícula del Descubrir usa
+// la portada «large» (la medium de la 0.4.56 salía borrosa al
+// estirarse en la pantalla del teléfono), la del riel sigue siendo
+// la medium chiquita, y la caché de «Para ti» se rearma sola al
+// actualizar (pv: 3) para ganar la portada grande y las sugerencias
+// de gustos que el 400 se comía. Sin hosts ni capacidades nuevas.
 // v0.4.56 — PORTADAS LIGERAS EN «PARA TI». En el teléfono de la
 // persona el Inicio se quedó con todas las portadas cargando para
 // siempre tras usar «Para ti»: el riel y la pantalla Descubrir pedían
@@ -612,7 +632,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.56";
+const VERSION = "0.4.57";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -7255,7 +7275,7 @@ async function alBuscar(q, page, order, conRuta, anadir) {
 // muestra lo de moda mientras tanto.
 const PARA_TI_TTL = 43200000; // 12 h
 const PARA_CAMPOS = "id idMal title { romaji english native } synonyms " +
-  "coverImage { medium extraLarge } format chapters averageScore";
+  "coverImage { medium large extraLarge } format chapters averageScore";
 
 async function paraTiJson(query, variables) {
   const r = await kino.fetch("https://graphql.anilist.co", { method: "POST",
@@ -7319,13 +7339,13 @@ async function paraTiComputar(forzar) {
   const sig = base.map((x) => x.al).join(",");
   const cache = getJson("paraTi", null);
   const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
-  if (!forzar && cache && cache.pv === 2 && cache.sig === sig && Array.isArray(cache.items) &&
+  if (!forzar && cache && cache.pv === 3 && cache.sig === sig && Array.isArray(cache.items) &&
       (cache.motivo === "sin-vinculos" ? edad < 3600000 : edad < PARA_TI_TTL)) {
     return { items: cache.items, motivo: cache.motivo || "" };
   }
   if (!base.length) {
     const tendencias = await paraTiTendencias();
-    setJson("paraTi", { pv: 2, ts: Date.now(), sig: sig, base: 0,
+    setJson("paraTi", { pv: 3, ts: Date.now(), sig: sig, base: 0,
       motivo: "sin-vinculos", items: tendencias });
     return { items: tendencias, motivo: "sin-vinculos" };
   }
@@ -7371,23 +7391,33 @@ async function paraTiComputar(forzar) {
   const tagSet = {}; for (let i = 0; i < topTag.length; i++) tagSet[topTag[i]] = 1;
   const gustos = {};
   let cand = [];
-  try {
-    const qg = "query ($g: [MediaGenre], $t: [String], $a: Boolean) { " +
-      "Page(perPage: 30) { media(type: MANGA, isAdult: $a, genre_in: $g, tag_in: $t, " +
-      "sort: [POPULARITY_DESC]) { " + PARA_CAMPOS + " genres tags { name } } } }";
-    const jn = await paraTiJson(qg, { g: topGen.slice(0, 3), t: topTag.slice(0, 4), a: false });
-    cand = (jn && jn.data && jn.data.Page && jn.data.Page.media) || [];
-    const ja = await paraTiJson(qg, { g: topGen.slice(0, 3), t: topTag.slice(0, 4), a: true });
-    cand = cand.concat((ja && ja.data && ja.data.Page && ja.data.Page.media) || []);
-  } catch (e) {
-    log("para ti gustos: " + ((e && e.message) || e));
+  // v0.4.57 — AniList espera los géneros como [String] (su ejemplo
+  // oficial los declara así): [MediaGenre] era un HTTP 400 seguro y el
+  // respaldo traía el mismo error de raíz. Sin géneros no se pregunta,
+  // y el tag_in solo va cuando hay tags (su variable y su valor).
+  if (topGen.length) {
     try {
-      const qg2 = "query ($g: [MediaGenre]) { Page(perPage: 40) { " +
-        "media(type: MANGA, genre_in: $g, sort: [POPULARITY_DESC]) { " +
-        PARA_CAMPOS + " genres tags { name } } } }";
-      const jn2 = await paraTiJson(qg2, { g: topGen.slice(0, 2) });
-      cand = (jn2 && jn2.data && jn2.data.Page && jn2.data.Page.media) || [];
-    } catch (e2) { log("para ti gustos respaldo: " + ((e2 && e2.message) || e2)); }
+      const qg = "query ($g: [String]" + (topTag.length ? ", $t: [String]" : "") +
+        ", $a: Boolean) { " +
+        "Page(perPage: 30) { media(type: MANGA, isAdult: $a, genre_in: $g" +
+        (topTag.length ? ", tag_in: $t" : "") + ", " +
+        "sort: [POPULARITY_DESC]) { " + PARA_CAMPOS + " genres tags { name } } } }";
+      const vars = { g: topGen.slice(0, 3), a: false };
+      if (topTag.length) vars.t = topTag.slice(0, 4);
+      const jn = await paraTiJson(qg, vars);
+      cand = (jn && jn.data && jn.data.Page && jn.data.Page.media) || [];
+      const ja = await paraTiJson(qg, Object.assign({}, vars, { a: true }));
+      cand = cand.concat((ja && ja.data && ja.data.Page && ja.data.Page.media) || []);
+    } catch (e) {
+      log("para ti gustos: " + ((e && e.message) || e));
+      try {
+        const qg2 = "query ($g: [String]) { Page(perPage: 40) { " +
+          "media(type: MANGA, genre_in: $g, sort: [POPULARITY_DESC]) { " +
+          PARA_CAMPOS + " genres tags { name } } } }";
+        const jn2 = await paraTiJson(qg2, { g: topGen.slice(0, 2) });
+        cand = (jn2 && jn2.data && jn2.data.Page && jn2.data.Page.media) || [];
+      } catch (e2) { log("para ti gustos respaldo: " + ((e2 && e2.message) || e2)); }
+    }
   }
   for (let i = 0; i < cand.length; i++) {
     const m = cand[i];
@@ -7425,7 +7455,7 @@ async function paraTiComputar(forzar) {
     }
   }
   const recorte = items.slice(0, 24);
-  const okGuardar = setJson("paraTi", { pv: 2, ts: Date.now(), sig: sig, base: base.length,
+  const okGuardar = setJson("paraTi", { pv: 3, ts: Date.now(), sig: sig, base: base.length,
     motivo: "", items: recorte });
   if (!okGuardar) log("para ti sin guardar: almacén lleno");
   return { items: recorte, motivo: "" };
@@ -7451,6 +7481,7 @@ function paraTiItem(r, porque) {
     native: String(t.native || ""),
     sinonimos: (r.synonyms || []).map(String).slice(0, 8),
     cover: ((r.coverImage && (r.coverImage.medium || r.coverImage.extraLarge)) || ""),
+    coverG: ((r.coverImage && (r.coverImage.large || r.coverImage.extraLarge)) || ""),
     nota: typeof r.averageScore === "number" ? r.averageScore : null,
     formato: String(r.format || ""),
     caps: (typeof r.chapters === "number" && r.chapters) || 0,
@@ -7458,15 +7489,25 @@ function paraTiItem(r, porque) {
   };
 }
 
-function paraCard(it) {
+// v0.4.57 — en el RIEL la imagen lleva width: 120 como TODAS las
+// tarjetas de riel del plugin (posterCard lo hace desde siempre): sin
+// un ancho, la imagen queda sin tamaño en el eje infinito del
+// desplazamiento lateral y el pintor del Inicio se rompía — ninguna
+// portada de la pantalla dibujaba, ni la de este riel ni la de los
+// demás. En la cuadrícula del Descubrir la celda ya la acota: ahí la
+// imagen es la «large» de AniList (la medium de la 0.4.56 salía
+// borrosa al estirarse), con la medium de respaldo.
+function paraCard(it, rail) {
   const titulo = alTitulo(it);
+  const img = { type: "Image",
+    url: (rail ? (it.cover || "") : (it.coverG || it.cover || "")),
+    aspect: "2:3", alt: titulo, altEn: titulo,
+    fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+      children: [{ type: "Icon", name: "list", color: "muted" }] } };
+  if (rail) img.width = 120;
   return { type: "Card", key: "pt-" + it.id, flush: true,
     onTap: { event: "paraAbrir", arg: String(it.id) },
-    children: [
-      { type: "Image", url: it.cover || "", aspect: "2:3", alt: titulo, altEn: titulo,
-        fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
-          children: [{ type: "Icon", name: "list", color: "muted" }] } },
-    ].concat(twoLines(titulo).map((ln) => (
+    children: [img].concat(twoLines(titulo).map((ln) => (
       { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
       .concat(it.porque ? [{ type: "Text", text: it.porque, textEn: it.porque,
         style: "caption", color: "muted", padding: 8 }] : []),
@@ -7482,7 +7523,7 @@ function paraTiRail() {
     { type: "Text", text: "Para ti", textEn: "For you", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railPara", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: items.map((it) => paraCard(it)).concat([
+        children: items.map((it) => paraCard(it, true)).concat([
           { type: "Card", key: "vermas-descubre", flush: true,
             onTap: { event: "descubreAbrir" },
             children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
