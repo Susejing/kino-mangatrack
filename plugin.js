@@ -15,6 +15,25 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.51 — LA NUBE ES TELEGRAM (y GitHub se retira). El usuario no
+// quería que cada quien cree repos ni pegara tokens de GitHub: la
+// petición volvió a su idea original — Telegram. Lo que antes parecía
+// imposible (los bots no leen el historial) tiene solución oficial:
+// el truco de Sync-Gram, el plugin de referencia de Kino. La copia
+// viaja como archivo mangatrack.json enviado al chat privado de la
+// persona con SU PROPIO bot (creado con @BotFather) y se FIJA
+// (pinChatMessage); para leerla no hace falta leer el historial —
+// getChat devuelve el mensaje fijado y getFile entrega el archivo.
+// La vinculación: pegar el token (se comprueba con getMe) y «Buscar
+// mi chat» (getUpdates reconoce el último humano que le escribió al
+// bot; la lectura reconoce los mensajes con offset para no releer).
+// Todo lo demás igual que la nube de GitHub que retira: baja y une al
+// abrir, sube la lista completa al cambiar algo (la copia vieja se
+// borra o desfija), «Sincronizar» prueba y deja activar/desactivar a
+// mano. HONESTO: el último que sube manda; el token nunca va en
+// mensajes ni registros (tgLimpio lo tapa); un mensaje que la persona
+// fije por su cuenta nunca se lee ni se toca (aviso honesto).
+// ANTES: v0.4.50 solo el token (GitHub); v0.4.49 reseñas y nube.
 // v0.4.50 — SOLO EL TOKEN. Petición de la persona: que cada usuario
 // pegue únicamente su token y nada más. GitHub le dice al plugin a
 // cuáles repos alcanza ese token (uno fine-grained de un solo repo
@@ -517,7 +536,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.50";
+const VERSION = "0.4.51";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2229,129 +2248,127 @@ function syncPullResenas() {
   if (changed) { setJson("resenas", local); syncPushResenas(); }
 }
 
-// ------------------------------------------------- v0.4.49 — la nube propia
-// Respaldo de favoritos y reseñas en un repositorio del usuario en
-// GitHub: sobrevive a las reinstalaciones del plugin (el espacio
-// compartido de Kino viaja entre aparatos VINCULADOS, pero no devuelve
-// lo perdido al reinstalar). Cada aparato lleva su propio token
-// (fine-grained, permiso Contents: lectura y escritura, SOLO ese
-// repo). Al abrir el plugin se baja y se une lo que falte; al cambiar
-// algo se sube la lista completa. HONESTO: el último aparato que sube
-// manda — si dos aparatos cambian cosas a la vez sin abrirse entre
-// medias, el cambio más nuevo en la nube puede taparse; «Sincronizar
-// ahora» (baja y vuelve a subir) lo deja derecho.
-const GH_API = "https://api.github.com";
-const GH_RUTA = "/repos/REPO/contents/data/mangatrack.json";
+// ------------------------------------------------- v0.4.51 — la nube propia
+// (v0.4.49 la creó sobre GitHub; v0.4.51 la muda a TELEGRAM, la idea
+// original del usuario, con la receta del plugin de referencia
+// Sync-Gram de Kino). Respaldo de favoritos y reseñas en el chat
+// privado de la persona con SU PROPIO bot de Telegram (creado con
+// @BotFather): sobrevive a las reinstalaciones del plugin (el espacio
+// compartido de Kino viaja entre aparatos VINCULADOS, pero no
+// devuelve lo perdido al reinstalar). La copia viaja como archivo
+// mangatrack.json FIJADO en ese chat: para leerla no hace falta leer
+// el historial (los bots no pueden) — getChat devuelve el mensaje
+// fijado y getFile entrega el archivo. Al abrir el plugin se baja y
+// se une lo que falte; al cambiar algo se sube la lista completa (la
+// copia nueva se fija y la vieja se borra o desfija). HONESTO: el
+// último aparato que sube manda — si dos aparatos cambian cosas a la
+// vez sin abrirse entre medias, el cambio más nuevo puede taparse;
+// «Sincronizar ahora» (baja y vuelve a subir) lo deja derecho. El
+// token del bot jamás viaja en mensajes ni registros (tgLimpio lo
+// tapa), y un mensaje que la persona fije por su cuenta nunca se lee
+// ni se toca (se avisa honesto).
+const TG_API = "https://api.telegram.org";
+const TG_ARCHIVO = "mangatrack.json";
+const TG_TOKEN_FORMA = /^(\d{5,15}):[A-Za-z0-9_-]{30,}$/;
 
-function ghCfg() {
-  const c = getJson("ghSync", null);
-  return c && typeof c === "object" && c.token && c.repo ? c : null;
+function tgCfg() {
+  const c = getJson("tgSync", null);
+  return c && typeof c === "object" && c.token &&
+    TG_TOKEN_FORMA.test(String(c.token)) ? c : null;
 }
-function ghActiva() {
-  const c = ghCfg();
-  return !!(c && c.on);
+function tgActiva() {
+  const c = tgCfg();
+  return !!(c && c.on && c.chatId > 0);
 }
-function ghHeaders(cfg) {
-  return { Accept: "application/vnd.github+json",
-    Authorization: "Bearer " + cfg.token,
-    "X-GitHub-Api-Version": "2022-11-28" };
-}
-function ghUrl(cfg) {
-  return GH_API + GH_RUTA.replace("REPO",
-    String(cfg.repo).replace(/[^a-zA-Z0-9_.\-/]/g, ""));
-}
-// El texto del respaldo viaja como base64: aquí el ida y vuelta en
-// UTF-8 de verdad (los emojis de una reseña son 4 bytes y un par de
-// sustitutos — se codifican bien o GitHub devolvería basura).
-function b64DeTexto(txt) {
-  const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  const bytes = [];
-  for (let i = 0; i < txt.length; i++) {
-    const c = txt.charCodeAt(i);
-    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < txt.length) {
-      const c2 = txt.charCodeAt(i + 1);
-      if (c2 >= 0xDC00 && c2 <= 0xDFFF) {
-        const cp = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00);
-        bytes.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 63),
-          0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
-        i++;
-        continue;
-      }
-    }
-    if (c < 0x80) bytes.push(c);
-    else if (c < 0x800) bytes.push(0xC0 | (c >> 6), 0x80 | (c & 63));
-    else bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+// El token jamás en un texto (mensajes, toasts o el registro).
+function tgLimpio(texto) {
+  let s = String(texto == null ? "" : texto);
+  const c = tgCfg();
+  if (c) {
+    s = s.split(c.token).join("…");
+    const secreto = c.token.slice(c.token.indexOf(":") + 1);
+    if (secreto.length >= 8) s = s.split(secreto).join("…");
   }
-  let out = "";
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i];
-    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
-    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
-    out += T.charAt(b0 >> 2) + T.charAt(((b0 & 3) << 4) | (b1 >> 4));
-    out += i + 1 < bytes.length ? T.charAt(((b1 & 15) << 2) | (b2 >> 6)) : "=";
-    out += i + 2 < bytes.length ? T.charAt(b2 & 63) : "=";
-  }
-  return out;
+  return s.replace(/\d{5,15}:[A-Za-z0-9_-]{20,}/g, "…")
+    .replace(/\/(file\/)?bot[^/\s)]*/g, "/$1bot…");
 }
-function textoDeBytes(bytes) {
-  let out = "";
-  let i = 0;
-  while (i < bytes.length) {
-    const b = bytes[i];
-    let cp = 0, n = 1;
-    if (b < 0x80) cp = b;
-    else if ((b & 0xE0) === 0xC0) { cp = b & 31; n = 2; }
-    else if ((b & 0xF0) === 0xE0) { cp = b & 15; n = 3; }
-    else { cp = b & 7; n = 4; }
-    for (let k = 1; k < n && i + k < bytes.length; k++) cp = (cp << 6) | (bytes[i + k] & 63);
-    if (cp > 0xFFFF) {
-      cp -= 0x10000;
-      out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 1023));
-    } else out += String.fromCharCode(cp);
-    i += n;
-  }
-  return out;
+// Texto como bytes UTF-8 en «cadena binaria» (un carácter por byte),
+// lo que btoa codifica (receta de Sync-Gram).
+function utf8Binario(texto) {
+  const bytes = new TextEncoder().encode(texto);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return s;
 }
-async function ghLeer(cfg) {
-  const r = await kino.fetch(ghUrl(cfg), { headers: ghHeaders(cfg) });
-  if (r.status === 404) return { nuevo: true };
-  if (!r.ok) throw new Error("GitHub respondió HTTP " + r.status);
-  const j = JSON.parse(await r.text());
-  if (!j || typeof j !== "object") return { nuevo: true };
-  let datos = null;
+// Una llamada a la Bot API: responde su result o lanza Error con la
+// frase honesta (nunca el token).
+async function tgApi(token, metodo, params, opciones) {
+  const op = opciones || {};
+  let r = null;
   try {
-    datos = JSON.parse(textoDeBytes(deB64(String(j.content || "").replace(/[^A-Za-z0-9+/=]/g, ""))));
-  } catch (e) { log("sync nube: respaldo ilegible: " + ((e && e.message) || e)); }
-  return { sha: j.sha, datos: datos };
+    r = await kino.fetch(TG_API + "/bot" + token + "/" + metodo, {
+      method: "POST", redirect: "manual", cookies: false,
+      headers: op.body ? op.headers : { "Content-Type": "application/json" },
+      body: op.body || { json: params || {} }, timeoutMs: op.timeoutMs || 15000 });
+  } catch (e) {
+    throw new Error("No pude llegar a Telegram: revisa la conexión. (" + ((e && e.code) || "red") + ")");
+  }
+  let j = null;
+  try { j = JSON.parse(await r.text()); } catch (e) { j = null; }
+  if (!r.ok || !j || j.ok !== true) {
+    const desc = j && j.description ? String(j.description) : "";
+    if (r.status === 401 || r.status === 404) throw new Error("Telegram no reconoce el token del bot: cópialo otra vez de @BotFather.");
+    if (r.status === 429) throw new Error("Telegram pide esperar un momento: prueba otra vez en un rato.");
+    if (r.status === 409) throw new Error("Otro programa lee este bot (otro plugin o un webhook): usa un bot solo para MangaTrack.");
+    if (r.status === 403) throw new Error("Tu bot está bloqueado o no lo has iniciado: ábrelo en Telegram y toca Iniciar.");
+    throw new Error("Telegram respondió HTTP " + r.status + (desc ? " (" + desc.slice(0, 120) + ")" : "") + ".");
+  }
+  return j.result;
 }
-async function ghEscribir(cfg, datos, sha) {
-  const cuerpo = { message: "MangaTrack: " + (datos.favs ? datos.favs.length : 0) + " favoritos y "
-      + (datos.resenas ? Object.keys(datos.resenas).length : 0) + " reseñas",
-    content: b64DeTexto(JSON.stringify(datos)) };
-  if (sha) cuerpo.sha = sha;
-  const r = await kino.fetch(ghUrl(cfg), { method: "PUT", headers: ghHeaders(cfg),
-    body: { json: cuerpo } });
-  if (!r.ok) throw new Error("GitHub respondió HTTP " + r.status);
-  return true;
+// El mensaje fijado del chat como copia nuestra, o null. Solo cuenta
+// un archivo mangatrack.json que envió ESTE bot: lo que la persona fije
+// por su cuenta (ajeno) nunca se lee ni se toca — solo se avisa.
+async function tgFijado(token, chatId) {
+  const info = await tgApi(token, "getChat", { chat_id: chatId });
+  const m = info && info.pinned_message;
+  if (!m) return { ajeno: false, copia: null };
+  const botId = Number(String(token).split(":")[0]);
+  const nuestro = m.document && m.document.file_id && m.document.file_name === TG_ARCHIVO
+    && m.from && Number(m.from.id) === botId;
+  if (!nuestro) return { ajeno: true, copia: null };
+  return { ajeno: false, copia: { id: m.message_id, fileId: m.document.file_id } };
 }
 // Baja el respaldo y UNE lo que falte (favoritos sin repetir; reseñas
 // con la más reciente por serie). No borra nada local.
-async function ghBajar() {
-  const cfg = ghCfg();
-  if (!cfg) throw new Error("Configura primero el token y el repositorio (Sincronizar).");
-  const r = await ghLeer(cfg);
-  const remoto = r.datos && typeof r.datos === "object" ? r.datos : {};
+async function tgBajar() {
+  const c = tgCfg();
+  if (!c || !(c.chatId > 0)) throw new Error("Configura primero tu bot de Telegram (Sincronizar).");
+  const f = await tgFijado(c.token, c.chatId);
+  if (f.ajeno) {
+    log("sync nube: hay un mensaje tuyo fijado encima de la copia — desfíjalo en el chat con tu bot");
+    return { ajeno: true, favs: 0, resenas: 0 };
+  }
+  if (!f.copia) return { favs: 0, resenas: 0 };
+  const file = await tgApi(c.token, "getFile", { file_id: f.copia.fileId });
+  if (!file || !file.file_path) throw new Error("Telegram no entregó la copia guardada.");
+  const ruta = String(file.file_path).split("/").map(encodeURIComponent).join("/");
+  const r = await kino.fetch(TG_API + "/file/bot" + c.token + "/" + ruta,
+    { method: "GET", redirect: "manual", cookies: false, timeoutMs: 30000 });
+  if (!r.ok) throw new Error("Bajar la copia falló (HTTP " + r.status + ").");
+  let remoto = {};
+  try { remoto = JSON.parse(await r.text()) || {}; }
+  catch (e) { log("sync nube: respaldo ilegible: " + ((e && e.message) || e)); return { favs: 0, resenas: 0 }; }
   const local = favs();
   const have = {};
   for (let i = 0; i < local.length; i++) have[local[i].url] = 1;
   const rf = Array.isArray(remoto.favs) ? remoto.favs : [];
   let nuevosF = 0;
   for (let i = 0; i < rf.length && i < 200; i++) {
-    const f = rf[i];
-    if (!favValido(f) || have[f.url]) continue;
-    local.push({ url: f.url, title: String(f.title || "").slice(0, 200),
-      poster: typeof f.poster === "string" ? f.poster.slice(0, 500) : "" });
-    have[f.url] = 1;
+    const f2 = rf[i];
+    if (!favValido(f2) || have[f2.url]) continue;
+    local.push({ url: f2.url, title: String(f2.title || "").slice(0, 200),
+      poster: typeof f2.poster === "string" ? f2.poster.slice(0, 500) : "" });
+    have[f2.url] = 1;
     nuevosF++;
   }
   if (local.length > 100) local.length = 100;
@@ -2373,14 +2390,64 @@ async function ghBajar() {
   if (nuevasR) { setJson("resenas", lr); syncPushResenas(); }
   return { favs: nuevosF, resenas: nuevasR };
 }
-// Sube la lista completa (borra en la nube lo que ya no esté aquí).
-async function ghSubir() {
-  const cfg = ghCfg();
-  if (!cfg) throw new Error("Configura primero el token y el repositorio (Sincronizar).");
-  const r = await ghLeer(cfg);
+// Sube la lista completa como archivo fijado en el chat: la copia nueva
+// se fija (sin sonido) y la de antes se borra (o al menos se desfija).
+async function tgSubir() {
+  const c = tgCfg();
+  if (!c || !(c.chatId > 0)) throw new Error("Configura primero tu bot de Telegram (Sincronizar).");
+  const antes = await tgFijado(c.token, c.chatId);
+  if (antes.ajeno) log("sync nube: mensaje ajeno fijado — la copia nueva se fija encima");
   const datos = { v: 1, ts: Date.now(), favs: favs(), resenas: resenas() };
-  await ghEscribir(cfg, datos, r.sha);
+  // Cuerpo multipart armado a mano (receta de Sync-Gram): los campos de
+  // texto y el archivo mangatrack.json con las reseñas tal cual; el
+  // cuerpo entero viaja como base64 de sus bytes UTF-8.
+  const borde = "MangaTrack" + String(Date.now() % 100000000) + "x";
+  let cuerpo = "";
+  cuerpo += "--" + borde + "\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n" + c.chatId + "\r\n";
+  cuerpo += "--" + borde + "\r\nContent-Disposition: form-data; name=\"disable_notification\"\r\n\r\ntrue\r\n";
+  cuerpo += "--" + borde + "\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\nCopia de respaldo de MangaTrack. No la borres ni la desfijes.\r\n";
+  cuerpo += "--" + borde + "\r\nContent-Disposition: form-data; name=\"document\"; filename=\"" + TG_ARCHIVO + "\"\r\nContent-Type: application/json\r\n\r\n";
+  cuerpo += JSON.stringify(datos) + "\r\n--" + borde + "--\r\n";
+  const enviado = await tgApi(c.token, "sendDocument", null, {
+    headers: { "Content-Type": "multipart/form-data; boundary=" + borde },
+    body: { base64: btoa(utf8Binario(cuerpo)) }, timeoutMs: 30000 });
+  const id = enviado && enviado.message_id;
+  if (!(id >= 0)) throw new Error("Telegram no confirmó la copia.");
+  try {
+    await tgApi(c.token, "pinChatMessage", { chat_id: c.chatId, message_id: id, disable_notification: true });
+  } catch (e) { log("sync nube: no pude fijar la copia (" + tgLimpio((e && e.message) || e) + ")"); }
+  if (antes.copia && antes.copia.id !== id) {
+    try { await tgApi(c.token, "deleteMessage", { chat_id: c.chatId, message_id: antes.copia.id }); }
+    catch (e) {
+      try { await tgApi(c.token, "unpinChatMessage", { chat_id: c.chatId, message_id: antes.copia.id }); }
+      catch (e2) { log("sync nube: la copia vieja quedó más abajo en el chat"); }
+    }
+  }
   return datos;
+}
+// Busca el chat privado de la persona entre los mensajes que le
+// llegaron al bot (getUpdates): el último humano que le escribió. La
+// lectura reconoce los mensajes (offset) para no volver a leerlos.
+async function tgBuscarChat(token) {
+  const params = { timeout: 0, limit: 100, allowed_updates: ["message"] };
+  const offset = Number(getJson("tgOffset", 0)) || 0;
+  if (offset) params.offset = offset;
+  const ups = await tgApi(token, "getUpdates", params);
+  const lista = Array.isArray(ups) ? ups : [];
+  let hallado = null;
+  let ultimo = 0;
+  for (let i = 0; i < lista.length; i++) {
+    const u = lista[i];
+    if (u && Number.isSafeInteger(u.update_id) && u.update_id > ultimo) ultimo = u.update_id;
+    const m = u && u.message;
+    if (!m || !m.chat || m.chat.type !== "private" || !m.from || m.from.is_bot ||
+        Number(m.from.id) !== Number(m.chat.id)) continue;
+    const nombre = m.from.username ? "@" + m.from.username
+      : String(m.from.first_name || "").slice(0, 40);
+    hallado = { id: Number(m.chat.id), nombre: nombre || "tu cuenta" };
+  }
+  if (ultimo) setJson("tgOffset", ultimo + 1);
+  return hallado;
 }
 
 // Capítulos de una serie: enlaces /leer/<id>/<slug>/<número>/
@@ -5615,7 +5682,7 @@ export async function screenEvent(ev) {
       // v0.4.49 — con la nube propia activada, al abrir se baja el
       // respaldo y se une lo que falte (sin bloquear la entrada: si
       // falla, queda en el Registro y la pantalla abre igual).
-      try { if (ghActiva()) await ghBajar(); }
+      try { if (tgActiva()) await tgBajar(); }
       catch (e) { log("sync bajar: " + ((e && e.message) || e)); }
       const r = ev.route || {};
       if (r.name === "detail") {
@@ -5637,78 +5704,88 @@ export async function screenEvent(ev) {
     // v0.4.49 — la nube propia y las reseñas.
     if (name === "syncAbrir") return { route: { push: "sync" } };
     if (name === "resenaAbrir") return { route: { push: "resena" } };
-    if (name === "syncGuardar") {
-      const token = String((ev.value && ev.value.ghToken) || "").trim();
-      const repo = String((ev.value && ev.value.ghRepo) || "").trim();
-      if (!token) return { toast: "Pega tu token de GitHub." };
-      const cfg = { token: token, repo: repo.replace(/[^a-zA-Z0-9_.\-/]/g, ""), on: true };
+    if (name === "tgGuardar") {
+      const token = String((ev.value && ev.value.tgToken) || "").trim();
+      if (!TG_TOKEN_FORMA.test(token)) return { toast: "Ese no parece un token de bot: son números, dos puntos y unas 35 letras. Cópialo de @BotFather." };
       try {
-        // v0.4.50 — SOLO EL TOKEN: sin repo escrito, GitHub cuenta a
-        // cuáles repos alcanza el token (uno fine-grained de un solo
-        // repo trae exactamente ese). Un solo alcanzable → ese; de
-        // varios, el primero que diga «mangatrack»; y si no hay
-        // ninguno, se intenta CREAR el repo privado kino-mangatrack
-        // (posible solo si el token trae permiso de Administración).
-        if (!cfg.repo) {
-          const rl = await kino.fetch("https://api.github.com/user/repos?per_page=100&sort=created",
-            { headers: ghHeaders(cfg) });
-          if (!rl.ok) return { toast: "GitHub respondió HTTP " + rl.status + " al buscar tu repositorio: revisa el token o escribe el repo a mano." };
-          let lista = [];
-          try { lista = JSON.parse(await rl.text()) || []; } catch (e2) { lista = []; }
-          if (!Array.isArray(lista)) lista = [];
-          let elegido = "";
-          if (lista.length === 1) elegido = String(lista[0].full_name || "");
-          else for (let i = 0; i < lista.length; i++) {
-            if (/mangatrack/i.test(String(lista[i].name || ""))) {
-              elegido = String(lista[i].full_name || ""); break; }
-          }
-          if (!elegido) {
-            const cr = await kino.fetch("https://api.github.com/user/repos",
-              { method: "POST", headers: ghHeaders(cfg),
-                body: { json: { name: "kino-mangatrack", private: true,
-                  description: "Respaldo de MangaTrack" } } });
-            if (cr.ok) {
-              let nuevo = {};
-              try { nuevo = JSON.parse(await cr.text()) || {}; } catch (e2) { nuevo = {}; }
-              elegido = String(nuevo.full_name || "");
-            }
-          }
-          if (!elegido) return { toast: "El token no alcanza ningún repositorio: crea en GitHub un repo (p. ej. kino-mangatrack) con permiso Contents en el token, o escribe su nombre a mano." };
-          cfg.repo = elegido;
-        }
-        const r = await kino.fetch("https://api.github.com/repos/" + cfg.repo,
-          { headers: ghHeaders(cfg) });
-        if (!r.ok) return { toast: "GitHub respondió HTTP " + r.status + " (¿token o repo?): revisa los datos." };
-        setJson("ghSync", cfg);
-        setJson("ghSyncTs", Date.now());
+        // Se comprueba el token con Telegram antes de guardarlo: uno
+        // que no funciona nunca se queda. Un token nuevo es OTRO bot:
+        // el chat vinculado con el anterior ya no sirve.
+        const me = await tgApi(token, "getMe", {});
+        const bot = me && me.username ? "@" + me.username : "tu bot";
+        const viejo = getJson("tgSync", null) || {};
+        const cfg = { token: token,
+          chatId: viejo.token === token && viejo.chatId > 0 ? viejo.chatId : 0,
+          chatName: viejo.token === token ? (viejo.chatName || "") : "",
+          on: true };
+        setJson("tgSync", cfg);
         return { state: { syncTk: Date.now() },
-          toast: "✓ Conexión lista: respaldo en " + cfg.repo + "." };
-      } catch (e) { return { toast: "No pude conectar con GitHub: " + ((e && e.message) || e) }; }
+          toast: cfg.chatId > 0 ? "✓ " + bot + " listo: la nube sigue activada."
+            : "✓ " + bot + " listo. Ahora ábrelo en Telegram, toca Iniciar y escríbele algo; después, «Buscar mi chat»." };
+      } catch (e) { return { state: { syncTk: Date.now() }, toast: tgLimpio((e && e.message) || e) }; }
+    }
+    if (name === "tgBuscar") {
+      const c = tgCfg();
+      if (!c) return { toast: "Primero guarda el token de tu bot." };
+      try {
+        const r = await tgBuscarChat(c.token);
+        if (!r) return { state: { syncTk: Date.now() },
+          toast: "Aún no hay mensajes de nadie: abre tu bot en Telegram, toca Iniciar y escríbele algo. Vuelve a tocar aquí." };
+        c.pend = r.id;
+        c.pendNombre = r.nombre;
+        setJson("tgSync", c);
+        return { state: { syncTk: Date.now() },
+          toast: "Te escribió " + r.nombre + " desde esa cuenta de Telegram. Confirma que eres tú (abajo)." };
+      } catch (e) { return { state: { syncTk: Date.now() }, toast: tgLimpio((e && e.message) || e) }; }
+    }
+    if (name === "tgConfirmar") {
+      const c = tgCfg();
+      if (c && c.pend) {
+        c.chatId = c.pend;
+        c.chatName = c.pendNombre || "";
+        delete c.pend;
+        delete c.pendNombre;
+        setJson("tgSync", c);
+        return { state: { syncTk: Date.now() },
+          toast: "✓ Chat vinculado" + (c.chatName ? " (" + c.chatName + ")" : "") + ": tu nube queda lista." };
+      }
+      return { toast: "Primero toca «Buscar mi chat»." };
+    }
+    if (name === "tgRechazar") {
+      const c = tgCfg();
+      if (c && c.pend) { delete c.pend; delete c.pendNombre; setJson("tgSync", c); }
+      return { state: { syncTk: Date.now() }, toast: "Descartado: vuelve a tocar «Buscar mi chat»." };
+    }
+    if (name === "tgOlvidar") {
+      setJson("tgSync", null);
+      return { state: { syncTk: Date.now() }, toast: "Bot olvidado: la nube quedó apagada." };
     }
     if (name === "syncOnOff") {
-      const c = ghCfg();
-      if (!c) return { toast: "Primero guarda tu token." };
+      const c = tgCfg();
+      if (!c) return { toast: "Primero guarda el token de tu bot." };
+      if (!(c.chatId > 0)) return { toast: "Primero vincula tu chat con «Buscar mi chat»." };
       c.on = !c.on;
-      setJson("ghSync", c);
+      setJson("tgSync", c);
       return { state: { syncTk: Date.now() },
         toast: c.on ? "Sincronización activada." : "Sincronización desactivada." };
     }
     if (name === "syncAhora") {
-      if (!ghActiva()) return { toast: "Activa primero la sincronización." };
+      if (!tgActiva()) return { toast: "Activa primero la sincronización." };
       try {
-        const r = await ghBajar();
-        await ghSubir();
-        setJson("ghSyncTs", Date.now());
+        const r = await tgBajar();
+        await tgSubir();
+        setJson("tgTs", Date.now());
         return { state: { favTk: Date.now(), revTk: Date.now(), syncTk: Date.now() },
-          toast: "✓ Sincronizado con GitHub" +
+          toast: (r && r.ajeno ? "Hay un mensaje tuyo fijado encima de la copia: desfíjalo en el chat con tu bot. " : "") +
+            "✓ Sincronizado con Telegram" +
             (r && r.favs ? " (" + r.favs + " favoritos traídos)" : "") + "." };
-      } catch (e) { return { toast: "No pude sincronizar: " + ((e && e.message) || e) }; }
+      } catch (e) { return { toast: "No pude sincronizar: " + tgLimpio((e && e.message) || e) }; }
     }
     if (name === "resenaSave") {
       const d = state.detail;
       if (!d || !d.url) return { toast: "Abre una serie primero." };
       const ok = resenaGuardar(d.url, (ev.value && ev.value.resTxt) || "");
-      if (ok) { try { if (ghActiva()) await ghSubir(); }
+      if (ok) { try { if (tgActiva()) await tgSubir(); }
         catch (e) { log("sync subir: " + ((e && e.message) || e)); } }
       return { state: { revTk: Date.now() }, route: { pop: true },
         toast: ok ? "✓ Reseña guardada." : "El almacén del plugin está lleno: no pude guardarla." };
@@ -5717,7 +5794,7 @@ export async function screenEvent(ev) {
       const d = state.detail;
       if (d && d.url) {
         resenaGuardar(d.url, "");
-        try { if (ghActiva()) await ghSubir(); }
+        try { if (tgActiva()) await tgSubir(); }
         catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       }
       return { state: { revTk: Date.now() }, route: { pop: true }, toast: "Reseña borrada." };
@@ -6407,7 +6484,7 @@ export async function screenEvent(ev) {
       syncPushFavs();
       // v0.4.49 — con la nube propia activada, todo cambio de
       // favoritos sube el respaldo (la lista completa).
-      try { if (ghActiva()) await ghSubir(); }
+      try { if (tgActiva()) await tgSubir(); }
       catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       return { state: { favTk: Date.now() },
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
@@ -6647,9 +6724,9 @@ function favsTree() {
         children: [{ type: "Row", padding: 16, gap: 12, children: [
           { type: "Icon", name: "sync", color: "muted" },
           { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
-            { type: "Text", text: "Sincronizar con GitHub", textEn: "Sync with GitHub", style: "h4" },
-            { type: "Text", text: "Respaldo en tu nube: los favoritos y reseñas sobreviven a las reinstalaciones",
-              textEn: "Backed up to your cloud: favourites and reviews survive reinstalls",
+            { type: "Text", text: "Sincronizar", textEn: "Sync", style: "h4" },
+            { type: "Text", text: "Respaldo en tu chat de Telegram: los favoritos y reseñas sobreviven a las reinstalaciones",
+              textEn: "Backed up to your Telegram chat: favourites and reviews survive reinstalls",
               style: "caption", color: "muted" },
           ] }] }] },
       mf.length
@@ -6682,8 +6759,8 @@ function resenaTree(state) {
     body: { type: "SingleChildScrollView", key: "resBody", children: [{ type: "Column", children: [
       { type: "Text", text: titulo, textEn: titulo, style: "h3", padding: 16 },
       { type: "Text",
-        text: "Tu opinión de la serie. Se guarda en este aparato, viaja a tus aparatos vinculados y, con la sincronización activada, queda respaldada en tu nube de GitHub.",
-        textEn: "Your take on the series. Saved on this device, shared with your linked devices and, with sync on, backed up to your GitHub cloud.",
+        text: "Tu opinión de la serie. Se guarda en este aparato, viaja a tus aparatos vinculados y, con la sincronización activada, queda respaldada en tu chat de Telegram.",
+        textEn: "Your take on the series. Saved on this device, shared with your linked devices and, with sync on, backed up to your Telegram chat.",
         style: "caption", color: "muted", padding: 16 },
       { type: "Form", key: "resForm", onSubmitted: "resenaSave", gap: 8, padding: 16, children: [
         { type: "TextField", key: "resTxt",
@@ -6701,13 +6778,14 @@ function resenaTree(state) {
 }
 
 // ------------------------------------------------- v0.4.49 — sincronizar
-// La nube propia de GitHub: el respaldo de favoritos y reseñas en un
-// repositorio del usuario. Se configura una vez por aparato con un
-// token fine-grained (Contents: lectura y escritura, SOLO ese repo).
+// La nube propia: el respaldo de favoritos y reseñas. v0.4.49 lo puso
+// en un repositorio de GitHub del usuario; v0.4.51 lo muda a Telegram
+// (un bot propio de cada usuario): GitHub se retira del todo.
 function syncTree(state) {
-  const c = getJson("ghSync", null) || {};
-  const ts = getJson("ghSyncTs", 0);
+  const c = getJson("tgSync", null) || {};
+  const ts = getJson("tgTs", 0);
   const hace = ts ? Math.max(1, Math.round((Date.now() - ts) / 60000)) : 0;
+  const tokenOk = TG_TOKEN_FORMA.test(c.token || "");
   return {
     type: "Scaffold",
     appBar: { type: "AppBar", key: "barSync", title: "Sincronizar", titleEn: "Sync",
@@ -6715,25 +6793,41 @@ function syncTree(state) {
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "SingleChildScrollView", key: "syncBody", children: [{ type: "Column", children: [
-      { type: "Text", text: "Tu nube de respaldo (GitHub)", textEn: "Your backup cloud (GitHub)",
+      { type: "Text", text: "Tu nube de respaldo (Telegram)", textEn: "Your backup cloud (Telegram)",
         style: "h3", padding: 16 },
       { type: "Text",
-        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en un repositorio tuyo de GitHub, para que sobrevivan aunque reinstales el plugin. Solo pega tu token fine-grained (permiso Contents: lectura y escritura) y toca «Guardar y probar»: el repositorio se encuentra solo.",
-        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own GitHub repository, so they survive a plugin reinstall. Just paste your fine-grained token (Contents: read & write) and tap «Save and test»: the repository is found on its own.",
+        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en tu propio chat de Telegram, con un bot que creas tú, para que sobrevivan aunque reinstales el plugin.",
+        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own Telegram chat, with a bot you create, so they survive a plugin reinstall.",
         style: "caption", color: "muted", padding: 16 },
-      { type: "Form", key: "syncForm", onSubmitted: "syncGuardar", gap: 8, padding: 16, children: [
-        { type: "TextField", key: "ghToken",
-          labelText: "Token de GitHub", labelTextEn: "GitHub token",
-          hintText: "github_pat_…", hintEn: "github_pat_…",
-          value: c.token || "" },
-        { type: "TextField", key: "ghRepo",
-          labelText: "Repositorio (opcional)", labelTextEn: "Repository (optional)",
-          hintText: "Se encuentra solo — llénalo solo si quieres otro", hintEn: "Found on its own — fill only to use another",
-          value: c.repo || "" },
+      !tokenOk ? { type: "Form", key: "syncForm", onSubmitted: "tgGuardar", gap: 8, padding: 16, children: [
+        { type: "Text",
+          text: "1. Abre @BotFather en Telegram, pídele un bot con /newbot y copia el token que te da.",
+          textEn: "1. Open @BotFather in Telegram, ask for a bot with /newbot and copy the token it gives you.",
+          style: "caption", color: "muted" },
+        { type: "TextField", key: "tgToken", obscureText: true,
+          labelText: "Token del bot", labelTextEn: "Bot token",
+          hintText: "123456789:AAH…", hintEn: "123456789:AAH…" },
         { type: "ElevatedButton", icon: "cloud_done",
-          labelText: "Guardar y probar", labelTextEn: "Save and test", submit: true },
-      ] },
-      c.token && c.repo ? { type: "Card", key: "syncOnOff", flush: true,
+          labelText: "Guardar", labelTextEn: "Save", submit: true },
+      ] } : null,
+      tokenOk && !(c.chatId > 0) ? { type: "Column", padding: 16, gap: 8, children: [
+        { type: "Text",
+          text: "2. Abre tu bot en Telegram, toca «Iniciar» y escríbele algo (p. ej. «hola»).",
+          textEn: "2. Open your bot in Telegram, tap «Start» and write something to it (e.g. «hello»).",
+          style: "caption", color: "muted" },
+        { type: "ElevatedButton", key: "syncBuscar", icon: "person_search",
+          labelText: "Buscar mi chat", labelTextEn: "Find my chat", onPressed: "tgBuscar" },
+        c.pend ? { type: "Text", text: "Te escribió " + (c.pendNombre || "una cuenta") + " desde esa cuenta de Telegram. ¿Eres tú?",
+          textEn: (c.pendNombre || "An account") + " wrote to the bot from that Telegram account. Is it you?",
+          style: "h4" } : null,
+        c.pend ? { type: "Row", gap: 12, children: [
+          { type: "ElevatedButton", key: "syncSi", icon: "check",
+            labelText: "Sí, soy yo", labelTextEn: "Yes, it's me", onPressed: "tgConfirmar" },
+          { type: "TextButton", key: "syncNo", icon: "close",
+            labelText: "No soy yo", labelTextEn: "Not me", onPressed: "tgRechazar" },
+        ] } : null,
+      ].filter(Boolean) } : null,
+      tokenOk && (c.chatId > 0) ? { type: "Card", key: "syncOnOff", flush: true,
         onTap: { event: "syncOnOff" },
         children: [{ type: "Row", padding: 16, gap: 12, children: [
           { type: "Icon", name: c.on ? "sync" : "sync_disabled", color: "muted" },
@@ -6743,15 +6837,27 @@ function syncTree(state) {
             { type: "Text", text: "Tocar la " + (c.on ? "desactiva" : "activa"),
               textEn: "Tap to turn " + (c.on ? "it off" : "it on"),
               style: "caption", color: "muted" },
+            { type: "Text", text: "Vinculado: " + (c.chatName || "tu chat"),
+              textEn: "Linked: " + (c.chatName || "your chat"),
+              style: "caption", color: "muted" },
           ] }] }] } : null,
-      { type: "Column", padding: 16, children: [
+      tokenOk && (c.chatId > 0) ? { type: "Column", padding: 16, gap: 8, children: [
         { type: "ElevatedButton", key: "syncAhora", icon: "sync",
           labelText: "Sincronizar ahora", labelTextEn: "Sync now",
-          onPressed: "syncAhora", enabled: !!(c.token && c.repo && c.on) } ] },
-      { type: "Text",
-        text: hace ? "Última sincronización: hace " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + ". Al abrir el plugin se baja el respaldo y todo cambio sube solo." : "",
-        textEn: hace ? "Last sync: " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + " ago. On open the backup is pulled and every change uploads on its own." : "",
-        style: "caption", color: "muted", padding: 16 },
+          onPressed: "syncAhora", enabled: !!(c.on && c.chatId > 0) },
+        { type: "Text",
+          text: hace ? "Última sincronización: hace " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + ". Al abrir el plugin se baja el respaldo y todo cambio sube solo."
+            : "Aún no has sincronizado. Al abrir el plugin se bajará el respaldo y todo cambio subirá solo.",
+          textEn: hace ? "Last sync: " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + " ago. On open the backup is pulled and every change uploads on its own."
+            : "You haven't synced yet. On open the backup will be pulled and every change will upload on its own.",
+          style: "caption", color: "muted" },
+        { type: "Text",
+          text: "La copia queda FIJADA en el chat con tu bot: no la borres ni la desfijes. Puedes silenciar el chat para que las copias no avisen.",
+          textEn: "The backup stays PINNED in your bot chat: don't delete or unpin it. You can mute the chat so copies don't notify.",
+          style: "caption", color: "muted" },
+        { type: "TextButton", key: "syncOlvidar", icon: "link_off",
+          labelText: "Olvidar el bot", labelTextEn: "Forget the bot", onPressed: "tgOlvidar" },
+      ] } : null,
     ].filter(Boolean) }] },
   };
 }
