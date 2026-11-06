@@ -15,6 +15,24 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.52 — LA NUBE LLEVA TODO. Petición de la persona: el botón de
+// «Sincronizar» vive en Mis favoritos, ¿pero lo de abajo también se
+// respalda? Honestidad de la 0.4.51: solo favoritos y reseñas iban al
+// chat de Telegram (las colecciones ni siquiera viajaban entre
+// aparatos vinculados — solo favoritos, reseñas e historial). Ahora
+// la copia mangatrack.json (v2) lleva favoritos, reseñas,
+// COLECCIONES e HISTORIAL: al bajar se unen sin borrar nada local
+// (colecciones por nombre y, dentro, por serie con la copia más
+// nueva; historial por serie como las reseñas, gana el avance más
+// nuevo, tope de 100 series igual que siempre), y al subir va la
+// lista completa de las cuatro cosas. Así una reinstallación devuelve
+// TODO lo que la persona había armado. Verificado el mismo día (ver
+// la 0.4.51): las portadas grises del riel «Recién actualizados» de
+// LeerCapitulo NO son del plugin — el sitio manda enlaces de portada
+// muertos (404 de verdad) para las series publicadas hace pocas
+// horas; sus páginas de serie sí traen la portada buena. No hay nada
+// que arreglar aquí: el detalle de esas series abre con su portada.
+// ANTES: v0.4.51 la nube es Telegram.
 // v0.4.51 — LA NUBE ES TELEGRAM (y GitHub se retira). El usuario no
 // quería que cada quien cree repos ni pegara tokens de GitHub: la
 // petición volvió a su idea original — Telegram. Lo que antes parecía
@@ -536,7 +554,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.51";
+const VERSION = "0.4.52";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2338,8 +2356,9 @@ async function tgFijado(token, chatId) {
   if (!nuestro) return { ajeno: true, copia: null };
   return { ajeno: false, copia: { id: m.message_id, fileId: m.document.file_id } };
 }
-// Baja el respaldo y UNE lo que falte (favoritos sin repetir; reseñas
-// con la más reciente por serie). No borra nada local.
+// Baja el respaldo y UNE lo que falte: favoritos sin repetir, reseñas
+// e historial con la más reciente por serie, colecciones por nombre y
+// serie (v0.4.52 — la copia lleva TODO). No borra nada local.
 async function tgBajar() {
   const c = tgCfg();
   if (!c || !(c.chatId > 0)) throw new Error("Configura primero tu bot de Telegram (Sincronizar).");
@@ -2388,7 +2407,74 @@ async function tgBajar() {
     nuevasR++;
   }
   if (nuevasR) { setJson("resenas", lr); syncPushResenas(); }
-  return { favs: nuevosF, resenas: nuevasR };
+  // v0.4.52 — las COLECCIONES también viajan en la copia: se unen por
+  // nombre y, dentro de cada una, por serie — la copia más nueva de
+  // cada serie gana y nunca se borra nada local.
+  const rc = remoto.cols && typeof remoto.cols === "object" ? remoto.cols : {};
+  const lc = cols();
+  let nuevasC = 0;
+  const nomsC = Object.keys(rc).slice(0, 50);
+  for (let i = 0; i < nomsC.length; i++) {
+    const nom = String(nomsC[i]).slice(0, 40);
+    const rCol = rc[nomsC[i]];
+    if (!nom || !rCol || typeof rCol !== "object" ||
+        typeof rCol.items !== "object" || rCol.items === null) continue;
+    const ks = Object.keys(rCol.items).slice(0, 200);
+    if (!lc[nom]) {
+      const items = {};
+      for (let j = 0; j < ks.length; j++) {
+        const it = rCol.items[ks[j]];
+        if (!it || typeof it.url !== "string" || !fuenteDeUrl(it.url)) continue;
+        items[it.url] = { url: it.url, title: String(it.title || "").slice(0, 200),
+          poster: typeof it.poster === "string" ? it.poster.slice(0, 500) : "", ts: it.ts || 0 };
+        nuevasC++;
+      }
+      if (Object.keys(items).length) lc[nom] = { ts: rCol.ts || 0, items: items };
+    } else {
+      let changed = false;
+      lc[nom].items = lc[nom].items || {};
+      for (let j = 0; j < ks.length; j++) {
+        const it = rCol.items[ks[j]];
+        if (!it || typeof it.url !== "string" || !fuenteDeUrl(it.url)) continue;
+        const l = lc[nom].items[it.url];
+        if (l && (l.ts || 0) >= (it.ts || 0)) continue;
+        lc[nom].items[it.url] = { url: it.url, title: String(it.title || "").slice(0, 200),
+          poster: typeof it.poster === "string" ? it.poster.slice(0, 500) : "", ts: it.ts || 0 };
+        changed = true;
+        nuevasC++;
+      }
+      if (changed) lc[nom].ts = Math.max(lc[nom].ts || 0, rCol.ts || 0);
+    }
+  }
+  if (nuevasC) setJson("cols", lc);
+  // v0.4.52 — el HISTORIAL también: por serie gana el avance más nuevo
+  // (como las reseñas); las que solo existen aquí no se tocan, y el
+  // tope de 100 series es el de siempre.
+  const rh = remoto.hist && typeof remoto.hist === "object" ? remoto.hist : {};
+  const lh = hist();
+  let nuevasH = 0;
+  const ksH = Object.keys(rh).slice(0, 200);
+  for (let i = 0; i < ksH.length; i++) {
+    const v = rh[ksH[i]];
+    if (!v || typeof v !== "object" || typeof v.url !== "string" || !fuenteDeUrl(v.url)) continue;
+    const l = lh[v.url];
+    if (l && (l.ts || 0) >= (v.ts || 0)) continue;
+    lh[v.url] = { url: v.url, num: typeof v.num === "string" ? v.num.slice(0, 12) : v.num,
+      idx: v.idx || 0, ts: v.ts || 0,
+      title: String(v.title || "").slice(0, 200),
+      poster: typeof v.poster === "string" ? v.poster.slice(0, 500) : "" };
+    nuevasH++;
+  }
+  if (nuevasH) {
+    const todos = Object.keys(lh);
+    if (todos.length > 100) {
+      todos.sort((a, b) => (lh[b].ts || 0) - (lh[a].ts || 0));
+      for (let i = 100; i < todos.length; i++) delete lh[todos[i]];
+    }
+    setJson("hist", lh);
+    syncPushHist();
+  }
+  return { favs: nuevosF, resenas: nuevasR, cols: nuevasC, hist: nuevasH };
 }
 // Sube la lista completa como archivo fijado en el chat: la copia nueva
 // se fija (sin sonido) y la de antes se borra (o al menos se desfija).
@@ -2397,7 +2483,8 @@ async function tgSubir() {
   if (!c || !(c.chatId > 0)) throw new Error("Configura primero tu bot de Telegram (Sincronizar).");
   const antes = await tgFijado(c.token, c.chatId);
   if (antes.ajeno) log("sync nube: mensaje ajeno fijado — la copia nueva se fija encima");
-  const datos = { v: 1, ts: Date.now(), favs: favs(), resenas: resenas() };
+  const datos = { v: 2, ts: Date.now(), favs: favs(), resenas: resenas(),
+    cols: cols(), hist: hist() };
   // Cuerpo multipart armado a mano (receta de Sync-Gram): los campos de
   // texto y el archivo mangatrack.json con las reseñas tal cual; el
   // cuerpo entero viaja como base64 de sus bytes UTF-8.
@@ -5775,10 +5862,17 @@ export async function screenEvent(ev) {
         const r = await tgBajar();
         await tgSubir();
         setJson("tgTs", Date.now());
+        // v0.4.52 — el resumen cuenta lo que la copia trajo de las
+        // cuatro cosas (favoritos, colecciones, historial, reseñas).
+        const tr = [];
+        if (r && r.favs) tr.push(r.favs + " favorito" + (r.favs === 1 ? "" : "s"));
+        if (r && r.cols) tr.push(r.cols + " a colecciones");
+        if (r && r.hist) tr.push(r.hist + " con historial");
+        if (r && r.resenas) tr.push(r.resenas + " reseña" + (r.resenas === 1 ? "" : "s"));
         return { state: { favTk: Date.now(), revTk: Date.now(), syncTk: Date.now() },
           toast: (r && r.ajeno ? "Hay un mensaje tuyo fijado encima de la copia: desfíjalo en el chat con tu bot. " : "") +
             "✓ Sincronizado con Telegram" +
-            (r && r.favs ? " (" + r.favs + " favoritos traídos)" : "") + "." };
+            (tr.length ? " (traje " + tr.join(", ") + ")" : "") + "." };
       } catch (e) { return { toast: "No pude sincronizar: " + tgLimpio((e && e.message) || e) }; }
     }
     if (name === "resenaSave") {
@@ -6725,8 +6819,8 @@ function favsTree() {
           { type: "Icon", name: "sync", color: "muted" },
           { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
             { type: "Text", text: "Sincronizar", textEn: "Sync", style: "h4" },
-            { type: "Text", text: "Respaldo en tu chat de Telegram: los favoritos y reseñas sobreviven a las reinstalaciones",
-              textEn: "Backed up to your Telegram chat: favourites and reviews survive reinstalls",
+            { type: "Text", text: "Respaldo en tu chat de Telegram: favoritos, reseñas, colecciones e historial sobreviven a las reinstalaciones",
+              textEn: "Backed up to your Telegram chat: favourites, reviews, collections and history survive reinstalls",
               style: "caption", color: "muted" },
           ] }] }] },
       mf.length
@@ -6796,8 +6890,8 @@ function syncTree(state) {
       { type: "Text", text: "Tu nube de respaldo (Telegram)", textEn: "Your backup cloud (Telegram)",
         style: "h3", padding: 16 },
       { type: "Text",
-        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en tu propio chat de Telegram, con un bot que creas tú, para que sobrevivan aunque reinstales el plugin.",
-        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own Telegram chat, with a bot you create, so they survive a plugin reinstall.",
+        text: "Los favoritos, las reseñas y el historial ya viajan entre tus aparatos vinculados; aquí respaldas TODO (favoritos, reseñas, colecciones e historial) en tu propio chat de Telegram, con un bot que creas tú, para que sobreviva aunque reinstales el plugin.",
+        textEn: "Favourites, reviews and history already travel between your linked devices; here you back up EVERYTHING (favourites, reviews, collections and history) to your own Telegram chat, with a bot you create, so it survives a plugin reinstall.",
         style: "caption", color: "muted", padding: 16 },
       !tokenOk ? { type: "Form", key: "syncForm", onSubmitted: "tgGuardar", gap: 8, padding: 16, children: [
         { type: "Text",
