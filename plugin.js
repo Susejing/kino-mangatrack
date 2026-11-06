@@ -15,6 +15,20 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.46 — MANHWAWEB VOLVIÓ A ABRIR SUS SERIES. Reporte del teléfono:
+// al abrir cualquier manga de ManhwaWeb salía «no entregó capítulos».
+// La causa NO fue la 0.4.45: la API del sitio CAMBIÓ la forma de sus
+// capítulos — antes cada fila traía el número y el enlace público con
+// la subida tras el último guion («…-<cap>_<subida>»); ahora cada fila
+// trae el número limpio y sus subidas DENTRO (versions: [{link, joint,
+// create}]) y el id del capítulo es el tramo tras «/leer/» del enlace.
+// El lector viejo exigía que ese tramo tuviera «_» y saltaba TODAS las
+// filas → 0 capítulos. Ahora se leen las subidas de «versions» (con la
+// fila misma como respaldo del formato viejo), se acepta el id
+// interno en el enlace cambiándolo por el real (la receta de la
+// extensión oficial) y de varias subidas del mismo capítulo se queda
+// la más reciente — verificado en vivo: /chapters/see/<id>-<cap>
+// sigue entregando sus páginas igual.
 // v0.4.45 — LA PÁGINA DE MANHWAWEB ENTERA, Y DETALLES EN MANGADEX. La
 // persona pidió traer lo que faltaba de la página y agregar en las
 // demás fuentes lo que tuvieran. Hallado en vivo: /manhwa/nuevos trae
@@ -457,7 +471,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.45";
+const VERSION = "0.4.46";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -886,8 +900,11 @@ async function mwGet(ruta) {
   const t = await r.text();
   // v0.4.28 — a veces manda JSON con saltos crudos dentro de las
   // cadenas (lección del intento viejo de esta fuente): se limpian.
+  // v0.4.46 — y a veces el salto cae en medio de un NÚMERO
+  // («174101865\n91448»): se re-pega antes de blanquear el resto.
   try { return JSON.parse(t); } catch (e) {
-    return JSON.parse(t.replace(/[\u0000-\u001F]/g, " "));
+    return JSON.parse(t.replace(/(\d)[\u0000-\u001F]+(\d)/g, "$1$2")
+      .replace(/[\u0000-\u001F]/g, " "));
   }
 }
 
@@ -1037,10 +1054,14 @@ async function mwCatalog(cat, page1) {
   return { items: items, mas: items.length > 0 };
 }
 
-// La serie con TODOS sus capítulos (asc: del 1 al más nuevo). Cada
-// fila de chapters trae el número y el enlace público «…-<cap>_<ver>»;
-// la parte tras el último guion nombra la subida, y de varias subidas
-// del mismo capítulo se queda la más reciente.
+// La serie con TODOS sus capítulos (asc: del 1 al más nuevo). La API
+// de ManhwaWeb CAMBIÓ la forma de sus capítulos (v0.4.46): cada fila
+// trae el número limpio y sus subidas DENTRO (versions: [{link,
+// joint, create}]) y el id público del capítulo es el tramo tras
+// «/leer/» del enlace; de varias subidas del mismo capítulo se queda
+// la más reciente (la receta de la extensión oficial). El formato
+// viejo (fila con su link y la subida tras el último guion) también
+// se acepta, por si la casa vuelve atrás.
 async function mwSerie(url) {
   const id = String(url || "").replace(/^[/]mw[/]manhwa[/]/, "").replace(/[/]$/, "");
   if (!id || id.indexOf("_") < 0) return { meta: { title: "Serie", poster: "", overview: "" },
@@ -1048,6 +1069,7 @@ async function mwSerie(url) {
   const j = await mwGet("/manhwa/see/" + encodeURIComponent(id));
   const meta = { title: clean(String(j.name_esp || j.the_real_name || id)),
     poster: String(j._imagen || ""), overview: clean(String(j._sinopsis || "")) };
+  const idReal = String(j._id || id);
   const rows = Array.isArray(j.chapters) ? j.chapters : (Array.isArray(j._chapters) ? j._chapters : []);
   const porNum = {};
   const orden = [];
@@ -1056,12 +1078,25 @@ async function mwSerie(url) {
     let num = String(c.chapter || "").trim();
     const mn = num.match(/^(\d+(?:[.]\d+)?)_/);
     if (mn) num = mn[1];
-    const version = String(c.link || "").split("-").pop();
-    if (!num || version.indexOf("_") < 0) continue;
-    const prev = porNum[num];
-    if (!prev) { orden.push(num); }
-    if (!prev || (c.create || 0) > (prev.create || 0)) {
-      porNum[num] = { create: c.create || 0, cid: id + "-" + version };
+    if (!num) continue;
+    // v0.4.46 — las subidas del capítulo vienen dentro de «versions»;
+    // sin ellas, la fila misma es la subida (formato viejo).
+    const vers = Array.isArray(c.versions) && c.versions.length ? c.versions : [c];
+    for (let k = 0; k < vers.length; k++) {
+      const v = vers[k] || {};
+      let slug = String(v.link || "").replace(/^.*[/]leer[/]/, "").replace(/[/]$/, "").trim();
+      if (!slug) continue;
+      // El enlace puede traer el id interno en vez del real (la
+      // extensión lo cambia): aquí igual, para que /chapters/see lo
+      // encuentre.
+      if (idReal && idReal !== id && slug.indexOf(idReal) >= 0) {
+        slug = slug.split(idReal).join(id);
+      }
+      if (slug.indexOf(id) < 0) continue;
+      const cr = v.create || c.create || 0;
+      const prev = porNum[num];
+      if (!prev) { orden.push(num); porNum[num] = { create: cr, cid: slug }; }
+      else if (cr > (prev.create || 0)) { porNum[num] = { create: cr, cid: slug }; }
     }
   }
   const caps = orden.sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0))
