@@ -15,6 +15,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.55 — PARA TI: EL DESCUBRIMIENTO POR GUSTO. La persona pidió que
+// descubrir mangas fuera más cómodo e intuitivo: sugerencias basadas
+// en SUS favoritos y demás. La base son sus series (favoritos peso 3,
+// colecciones peso 2, historial peso 1), cada una con su id de AniList
+// (vínculo «alId:», mapa de títulos verificados o MangaDex por título,
+// hasta 6 rescates por tanda con su caché). Con esos ids AniList da
+// dos cosas: las recomendaciones de la COMUNIDAD sobre sus series (a
+// quien le gustó tu serie, qué le gustó — la voz de miles de lectores
+// reales) y los géneros/tags que más se repiten entre ellas (para
+// buscar populares parecidos, CON +18: la persona lo eligió así). El
+// resultado vive en el almacén 12 h y sale en un riel «Para ti» del
+// Inicio + la pantalla «Descubrir» con la lista completa, su porqué y
+// «Buscar de nuevo». Tocar una sugerencia abre el mismo flujo de la
+// sección AniList: buscarla en la fuente y vincularla exacta. Sin
+// series vinculadas, honesto: lo de moda de AniList y el aviso de
+// vincular series para afinar. Sin hosts ni capacidades nuevas.
 // v0.4.54 — LO VISTO LLEGA AL PLUGIN. La vuelta de la integración con
 // AniTrack: hasta ahora el flujo era de una sola mano (leer aquí
 // marcaba el capítulo en AniList/MAL); la persona pidió el círculo
@@ -584,7 +600,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.54";
+const VERSION = "0.4.55";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4725,7 +4741,10 @@ async function homeTree() {
           style: "caption", color: "muted", padding: 16 },
       ] },
   ] : [];
-  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length) return VACIO_SERIES;
+  // v0.4.55 — el riel «Para ti» se dibuja también cuando la fuente
+  // no trajo nada: la puerta del descubrimiento siempre visible.
+  const paraRail = paraTiRail();
+  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length && !paraRail.length) return VACIO_SERIES;
   // v0.4.27 — cada riel deja su sección en el almacén para su «Ver
   // más»: la cuadrícula la lee de ahí (el patrón del catálogo), y el
   // botón «Cargar más del sitio» solo aparece donde mas dice que la
@@ -4792,6 +4811,7 @@ async function homeTree() {
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(hero)
     .concat(railHist)
+    .concat(paraRail)
     .concat(msAviso)
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
@@ -5758,6 +5778,8 @@ export async function screen(ev) {
     if (route.name === "colElegir") return colElegirTree(state);
     // v0.4.34 — la lista de fuentes del selector de la barra.
     if (route.name === "fuentes") return fuentesTree();
+    // v0.4.55 — la pantalla «Descubrir» de Para ti.
+    if (route.name === "descubre") return descubreTree(getJson("paraTi", null));
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
     return errorTree((e && e.userMessage) ||
@@ -6137,88 +6159,18 @@ export async function screenEvent(ev) {
       const id = parseInt(String(ev.arg || ""), 10) || 0;
       const m = a && Array.isArray(a.items) ? a.items.filter((x) => x && x.id === id)[0] : null;
       if (!m) return null;
-      const tituloAL = alTitulo(m);
-      if (!tituloAL) return { toast: "Esa serie no tiene título en AniList." };
-      const f = fuenteActiva();
-      // v0.4.24 — ALCANCE: la serie puede llamarse distinto en cada
-      // lado; se buscan TODOS sus nombres de AniList (inglés, romaji,
-      // sinónimos — a veces el español está entre ellos — y el
-      // original, cada uno también en su versión sin puntuación para
-      // los buscadores que se atragantan con ella) hasta que la fuente
-      // dé resultados.
-      const nombres = alNombres(m);
-      let results = [];
-      let qUsada = "";
-      let primerError = null;
-      for (let i = 0; i < nombres.length && i < 12 && !results.length; i++) {
-        try {
-          results = await buscarEnFuente(f, nombres[i]);
-          qUsada = nombres[i];
-        } catch (e) { if (!primerError) primerError = e; }
-      }
-      if (!results.length && primerError) {
-        return { toast: (primerError && primerError.userMessage) || ("No se pudo buscar en " + f.nombre + ".") };
-      }
-      // v0.4.24 — PRECISIÓN: vínculo exacto si la fuente tiene la
-      // serie con el mismo título (normalizado) que CUALQUIER nombre de
-      // AniList — el título oficial o cualquiera de sus sinónimos.
-      // Se guarda el vínculo ya, sin esperar a la mano: el registro
-      // pasa a ser exacto, nunca por parecido.
-      let vinUrl = "", vinTitulo = "";
-      const qSet = {};
-      for (let i = 0; i < nombres.length; i++) {
-        const n = normTituloMD(nombres[i]);
-        if (n) qSet[n] = 1;
-      }
-      if (Object.keys(qSet).length) {
-        for (let i = 0; i < results.length; i++) {
-          const it = results[i];
-          // v0.4.44 — ManhwaWeb trae el nombre original de cada serie
-          // (alt): calza si el título en español O el original coinciden
-          // con cualquiera de los nombres de AniList.
-          const nq = it && it.url ? normTituloMD(it.title) : "";
-          const na = it && it.alt ? normTituloMD(it.alt) : "";
-          if ((nq && qSet[nq]) || (na && qSet[na])) {
-            setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
-            vinUrl = it.url;
-            vinTitulo = it.title || "";
-            break;
-          }
-        }
-      }
-      // v0.4.24 — IDENTIDAD: si la fuente activa no la tuvo clara,
-      // MangaDex puede tenerla — y publica el enlace de AniList de
-      // cada serie: si su id coincide con el de la serie tocada, es
-      // LA serie, sin duda de parecido. Con la fuente activa en
-      // MangaDex el vínculo se da por bueno ahí mismo; leyendo en otra
-      // fuente, la pantalla de vincular la ofrece arriba.
-      let mdSegura = null;
-      if (!vinUrl) {
-        for (let i = 0; i < nombres.length && i < 3 && !mdSegura; i++) {
-          mdSegura = await mdVerificarAl(nombres[i], m.id);
-        }
-        if (mdSegura && f.id === "mangadex") {
-          setJson("alId:" + mdSegura.url, { al: m.id, mal: m.mal || 0 });
-          vinUrl = mdSegura.url;
-          vinTitulo = mdSegura.title;
-          mdSegura = null;
-        }
-      }
-      // v0.4.12 — pantalla de vinculación: el título de AniList casi
-      // nunca es el que la fuente muestra en español; aquí la persona
-      // busca con SU título y toca la serie correcta.
-      const vin = { al: m.id, mal: m.mal || 0, titulo: tituloAL,
-        q: qUsada || tituloAL, fuente: f.id, res: results.slice(0, 30),
-        linked: vinUrl, linkedTitle: vinTitulo, mdSegura: mdSegura };
-      if (!setJsonCache("vin", vin)) {
-        return { toast: "El almacén del plugin está lleno: no pude abrir la vinculación." };
-      }
-      return { state: { vinTk: Date.now() }, route: { push: "vincular" },
-        toast: vinUrl
-          ? "✓ Vinculada automáticamente: si no es la serie que lees, búscala abajo con el título en español."
-          : (vin.mdSegura
-            ? "Sin vínculo claro en " + f.nombre + ", pero MangaDex la tiene verificada por id: tócala arriba para abrirla ya vinculada."
-            : "Elige tu fuente, busca con el título en español y toca la serie correcta.") };
+      return await alVincularFlujo(m);
+    }
+    if (name === "paraAbrir") {
+      // v0.4.55 — la sugerencia de «Para ti» abre el mismo flujo de
+      // vinculación de siempre: la serie se busca en su fuente con
+      // todos sus nombres y la persona toca la correcta.
+      const pPara = getJson("paraTi", null);
+      const pid = parseInt(String(ev.arg || ""), 10) || 0;
+      const mPara = pPara && Array.isArray(pPara.items)
+        ? pPara.items.filter((x) => x && x.id === pid)[0] : null;
+      if (!mPara) return { toast: "Esa sugerencia ya no está: toca «Descubrir» para armar la lista de nuevo." };
+      return await alVincularFlujo(mPara);
     }
     if (name === "vinFuente") {
       const v = getJson("vin", null) || {};
@@ -6637,6 +6589,32 @@ export async function screenEvent(ev) {
       catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       return { state: { favTk: Date.now() },
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
+    }
+    // v0.4.55 — «Para ti»: arma (o reusa) las sugerencias y abre la
+    // pantalla Descubrir; «Buscar de nuevo» las recalcula hoy mismo.
+    if (name === "descubreAbrir") {
+      try {
+        const r = await paraTiComputar(false);
+        return { state: { paraTk: Date.now() }, route: { push: "descubre" },
+          toast: r.motivo === "sin-vinculos"
+            ? "Mientras vinculas series en AniList: esto es lo de moda. Las sugerencias tuyas llegan solas."
+            : (r.items.length
+              ? "Para ti: " + r.items.length + " sugerencias. Toca una para buscarla en tu fuente."
+              : "No pude armar sugerencias ahora: prueba «Buscar de nuevo».") };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudieron armar las sugerencias. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "descubreRefrescar") {
+      try {
+        const r = await paraTiComputar(true);
+        return { state: { paraTk: Date.now() },
+          toast: r.motivo === "sin-vinculos"
+            ? "Sin series vinculadas no hay gusto que leer: mientras, lo de moda."
+            : "✓ " + r.items.length + " sugerencias." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudieron actualizar. Inténtalo de nuevo." };
+      }
     }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
@@ -7242,6 +7220,410 @@ async function alBuscar(q, page, order, conRuta, anadir) {
   const resp = { state: { alTk: Date.now() } };
   if (conRuta) resp.route = { push: "anilist" };
   return { resp: resp, n: nuevos.length, ok: alOk };
+}
+
+
+
+// ------------------------------------------------ Para ti (v0.4.55)
+
+// v0.4.55 — PARA TI: descubrimiento de mangas según el gusto de la
+// persona. La base son SUS series: favoritos (peso 3), colecciones
+// (peso 2) e historial de lectura (peso 1), cada una con su id de
+// AniList (el vínculo «alId:», el mapa de títulos verificados y,
+// hasta 6 rescates por tanda, MangaDex por título — su caché evita
+// repetir búsquedas). Con esos ids AniList cuenta dos cosas: (1) las
+// RECOMENDACIONES DE LA COMUNIDAD sobre cada serie suya (a quien le
+// gustó tu serie, qué le gustó — la voz de miles de lectores reales,
+// no un parecido de géneros) y (2) los géneros y tags que más se
+// repiten entre sus series, para buscar series populares que los
+// compartan (con y sin +18: la persona lo eligió así). Tocar una
+// sugerencia abre el MISMO flujo de la sección AniList: se busca en
+// su fuente con todos los nombres y se vincula exacta. Sin series
+// vinculadas no hay gusto que leer: la pantalla lo dice honesto y
+// muestra lo de moda mientras tanto.
+const PARA_TI_TTL = 43200000; // 12 h
+const PARA_CAMPOS = "id idMal title { romaji english native } synonyms " +
+  "coverImage { extraLarge } format chapters averageScore";
+
+async function paraTiJson(query, variables) {
+  const r = await kino.fetch("https://graphql.anilist.co", { method: "POST",
+    body: { json: { query: query, variables: variables } } });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con AniList. Inténtalo de nuevo.",
+  });
+  return await r.json();
+}
+
+// Las series de la persona con su id de AniList, sin repetir y
+// ordenadas por peso (favoritos > colecciones > historial).
+async function paraTiBase() {
+  const vistos = {};
+  const mete = (url, title, peso) => {
+    const u = String(url || "");
+    const t = String(title || "").trim();
+    if (!u || !t) return;
+    if (vistos[u]) { if (peso > vistos[u].peso) vistos[u].peso = peso; return; }
+    vistos[u] = { url: u, title: t.slice(0, 120), peso: peso };
+  };
+  const fs = favs();
+  for (let i = 0; i < fs.length; i++) mete(fs[i].url, fs[i].title, 3);
+  const cs = cols();
+  for (const nom in cs) {
+    const items = (cs[nom] && cs[nom].items) || {};
+    for (const u in items) mete(u, items[u].title, 2);
+  }
+  const h = hist();
+  for (const u in h) mete(u, h[u].title, 1);
+  let lista = Object.keys(vistos).map((u) => vistos[u]);
+  lista.sort((a, b) => b.peso - a.peso);
+  lista = lista.slice(0, 14);
+  const res = [];
+  let rescates = 0;
+  for (let i = 0; i < lista.length; i++) {
+    const it = lista[i];
+    let al = 0;
+    const vinc = getJson("alId:" + it.url, null);
+    if (vinc && vinc.al) al = vinc.al;
+    if (!al) {
+      const esp = idsEspeciales(it.title, tituloLimpioMD(it.title));
+      if (esp && esp.al) al = esp.al;
+    }
+    if (!al && rescates < 6) {
+      rescates++;
+      try {
+        const ids = await idsPorTitulo(tituloLimpioMD(it.title) || it.title);
+        if (ids && ids.al) al = ids.al;
+      } catch (e) { log("para ti ids: " + ((e && e.message) || e)); }
+    }
+    if (al) res.push({ al: al, title: it.title, peso: it.peso });
+  }
+  return res.slice(0, 12);
+}
+
+// Arma (o reusa) la lista «Para ti». Sin series vinculadas quedan las
+// tendencias de AniList y el aviso honesto de vincular para afinar.
+async function paraTiComputar(forzar) {
+  const base = await paraTiBase();
+  const sig = base.map((x) => x.al).join(",");
+  const cache = getJson("paraTi", null);
+  const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
+  if (!forzar && cache && cache.sig === sig && Array.isArray(cache.items) &&
+      (cache.motivo === "sin-vinculos" ? edad < 3600000 : edad < PARA_TI_TTL)) {
+    return { items: cache.items, motivo: cache.motivo || "" };
+  }
+  if (!base.length) {
+    const tendencias = await paraTiTendencias();
+    setJson("paraTi", { ts: Date.now(), sig: sig, base: 0,
+      motivo: "sin-vinculos", items: tendencias });
+    return { items: tendencias, motivo: "sin-vinculos" };
+  }
+  // (1) Perfil y recomendaciones de la comunidad: una sola consulta
+  // con un alias por serie de la base.
+  const alias = base.map((x, i) => "m" + i + ": Media(id: " + x.al + ") { genres " +
+    "tags { name rank isGeneralSpoiler } " +
+    "recommendations(sort: RATING_DESC, perPage: 6) { nodes { rating " +
+    "mediaRecommendation { " + PARA_CAMPOS + " } } } }").join(" ");
+  const j1 = await paraTiJson("query { " + alias + " }", null);
+  const d1 = (j1 && j1.data) || {};
+  const genC = {}, tagC = {}, recs = {};
+  const baseIds = {};
+  base.forEach((x) => { baseIds[x.al] = 1; });
+  for (let i = 0; i < base.length; i++) {
+    const m = d1["m" + i];
+    if (!m) continue;
+    const w = base[i].peso;
+    const gens = Array.isArray(m.genres) ? m.genres : [];
+    for (let g = 0; g < gens.length; g++) genC[gens[g]] = (genC[gens[g]] || 0) + w;
+    const tgs = Array.isArray(m.tags) ? m.tags : [];
+    for (let t = 0; t < tgs.length; t++) {
+      const tg = tgs[t];
+      if (tg && tg.name && !tg.isGeneralSpoiler)
+        tagC[tg.name] = (tagC[tg.name] || 0) + w * (1 + ((tg.rank || 0) / 100));
+    }
+    const nodos = (m.recommendations && m.recommendations.nodes) || [];
+    for (let k = 0; k < nodos.length; k++) {
+      const n = nodos[k];
+      const r = n && n.mediaRecommendation;
+      if (!r || !r.id || !(n.rating > 0) || baseIds[r.id]) continue;
+      if (!recs[r.id]) recs[r.id] = { item: paraTiItem(r,
+        "por «" + String(base[i].title || "").slice(0, 24) + "»"), puntos: 0, votos: 0 };
+      recs[r.id].puntos += w * (1 + (n.rating / 100));
+      recs[r.id].votos += 1;
+    }
+  }
+  // (2) Los géneros y tags que más se repiten entre sus series: su
+  // gusto, para buscar series populares parecidas (con y sin +18).
+  const topGen = Object.keys(genC).sort((a, b) => genC[b] - genC[a]).slice(0, 4);
+  const topTag = Object.keys(tagC).sort((a, b) => tagC[b] - tagC[a]).slice(0, 6);
+  const genSet = {}; for (let i = 0; i < topGen.length; i++) genSet[topGen[i]] = 1;
+  const tagSet = {}; for (let i = 0; i < topTag.length; i++) tagSet[topTag[i]] = 1;
+  const gustos = {};
+  let cand = [];
+  try {
+    const qg = "query ($g: [MediaGenre], $t: [String], $a: Boolean) { " +
+      "Page(perPage: 30) { media(type: MANGA, isAdult: $a, genre_in: $g, tag_in: $t, " +
+      "sort: [POPULARITY_DESC]) { " + PARA_CAMPOS + " genres tags { name } } } }";
+    const jn = await paraTiJson(qg, { g: topGen.slice(0, 3), t: topTag.slice(0, 4), a: false });
+    cand = (jn && jn.data && jn.data.Page && jn.data.Page.media) || [];
+    const ja = await paraTiJson(qg, { g: topGen.slice(0, 3), t: topTag.slice(0, 4), a: true });
+    cand = cand.concat((ja && ja.data && ja.data.Page && ja.data.Page.media) || []);
+  } catch (e) {
+    log("para ti gustos: " + ((e && e.message) || e));
+    try {
+      const qg2 = "query ($g: [MediaGenre]) { Page(perPage: 40) { " +
+        "media(type: MANGA, genre_in: $g, sort: [POPULARITY_DESC]) { " +
+        PARA_CAMPOS + " genres tags { name } } } }";
+      const jn2 = await paraTiJson(qg2, { g: topGen.slice(0, 2) });
+      cand = (jn2 && jn2.data && jn2.data.Page && jn2.data.Page.media) || [];
+    } catch (e2) { log("para ti gustos respaldo: " + ((e2 && e2.message) || e2)); }
+  }
+  for (let i = 0; i < cand.length; i++) {
+    const m = cand[i];
+    if (!m || !m.id || baseIds[m.id] || recs[m.id]) continue;
+    let pts = 0;
+    const matchG = [], matchT = [];
+    const gens = Array.isArray(m.genres) ? m.genres : [];
+    for (let g = 0; g < gens.length; g++) if (genSet[gens[g]]) { pts += 2; matchG.push(gens[g]); }
+    const tgs = Array.isArray(m.tags) ? m.tags : [];
+    for (let t = 0; t < tgs.length; t++)
+      if (tgs[t] && tgs[t].name && tagSet[tgs[t].name]) { pts += 1; matchT.push(tgs[t].name); }
+    if (pts < 4) continue;
+    const por = (matchG.slice(0, 2).join(" · ")) || (matchT.slice(0, 2).join(" · "));
+    gustos[m.id] = { item: paraTiItem(m, por), puntos: pts };
+  }
+  // (3) La mezcla: primero las recos de la comunidad (cuantas más
+  // series tuyas la recomiendan, mejor), luego las de gustos
+  // parecidos; si AniList quedó parco, tendencias honestas.
+  const items = [];
+  const seen = {};
+  const listaRec = Object.keys(recs).map((k) => recs[k])
+    .sort((a, b) => (b.votos - a.votos) || (b.puntos - a.puntos));
+  for (let i = 0; i < listaRec.length && items.length < 12; i++) {
+    if (!seen[listaRec[i].item.id]) { seen[listaRec[i].item.id] = 1; items.push(listaRec[i].item); }
+  }
+  const listaGus = Object.keys(gustos).map((k) => gustos[k])
+    .sort((a, b) => b.puntos - a.puntos);
+  for (let i = 0; i < listaGus.length && items.length < 24; i++) {
+    if (!seen[listaGus[i].item.id]) { seen[listaGus[i].item.id] = 1; items.push(listaGus[i].item); }
+  }
+  if (items.length < 6) {
+    const ten = await paraTiTendencias();
+    for (let i = 0; i < ten.length && items.length < 6; i++) {
+      if (!seen[ten[i].id]) { seen[ten[i].id] = 1; items.push(ten[i]); }
+    }
+  }
+  const recorte = items.slice(0, 24);
+  const okGuardar = setJson("paraTi", { ts: Date.now(), sig: sig, base: base.length,
+    motivo: "", items: recorte });
+  if (!okGuardar) log("para ti sin guardar: almacén lleno");
+  return { items: recorte, motivo: "" };
+}
+
+// Lo de moda hoy en AniList (manga), para cuando no hay base o la
+// mezcla quedó corta — siempre con su porqué honesto.
+async function paraTiTendencias() {
+  const j = await paraTiJson("query { Page(perPage: 12) { " +
+    "media(type: MANGA, isAdult: false, sort: [TRENDING_DESC]) { " + PARA_CAMPOS + " } } }", null);
+  const med = (j && j.data && j.data.Page && j.data.Page.media) || [];
+  return med.map((m) => paraTiItem(m, "de moda en AniList"));
+}
+
+// Del objeto Media de AniList a la tarjeta de sugerencia — la misma
+// forma que los resultados de la sección AniList, así el flujo de
+// vinculación es el mismo de siempre.
+function paraTiItem(r, porque) {
+  const t = (r && r.title) || {};
+  return {
+    id: r.id, mal: r.idMal || 0,
+    romaji: String(t.romaji || ""), english: String(t.english || ""),
+    native: String(t.native || ""),
+    sinonimos: (r.synonyms || []).map(String).slice(0, 8),
+    cover: ((r.coverImage && r.coverImage.extraLarge) || ""),
+    nota: typeof r.averageScore === "number" ? r.averageScore : null,
+    formato: String(r.format || ""),
+    caps: (typeof r.chapters === "number" && r.chapters) || 0,
+    porque: String(porque || "").slice(0, 40),
+  };
+}
+
+function paraCard(it) {
+  const titulo = alTitulo(it);
+  return { type: "Card", key: "pt-" + it.id, flush: true,
+    onTap: { event: "paraAbrir", arg: String(it.id) },
+    children: [
+      { type: "Image", url: it.cover || "", aspect: "2:3", alt: titulo, altEn: titulo,
+        fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+          children: [{ type: "Icon", name: "list", color: "muted" }] } },
+    ].concat(twoLines(titulo).map((ln) => (
+      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+      .concat(it.porque ? [{ type: "Text", text: it.porque, textEn: it.porque,
+        style: "caption", color: "muted", padding: 8 }] : []),
+  };
+}
+
+// El riel «Para ti» del Inicio: si ya hay sugerencias (caché de 12 h),
+// sus tarjetas; si todavía no, la puerta de entrada que las arma.
+function paraTiRail() {
+  const p = getJson("paraTi", null);
+  const items = (p && Array.isArray(p.items)) ? p.items.slice(0, 12) : [];
+  if (items.length >= 3) return [
+    { type: "Text", text: "Para ti", textEn: "For you", style: "h3", padding: 16 },
+    { type: "SingleChildScrollView", key: "railPara", direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: items.map((it) => paraCard(it)).concat([
+          { type: "Card", key: "vermas-descubre", flush: true,
+            onTap: { event: "descubreAbrir" },
+            children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
+              children: [
+                { type: "Icon", name: "explore", color: "muted" },
+                { type: "Text", text: "Descubrir", textEn: "Discover",
+                  style: "caption", color: "muted" },
+              ] }] },
+        ]) }] },
+  ];
+  return [{ type: "Card", key: "paraEntry", flush: true, onTap: { event: "descubreAbrir" },
+    children: [
+      { type: "Text", text: "Para ti — descubre mangas según tu gusto",
+        textEn: "For you — discover manga by your taste", style: "h3", padding: 16 },
+      { type: "Text",
+        text: "Sugerencias armadas con tus favoritos, colecciones e historial. Toca para armarlas.",
+        textEn: "Suggestions from your favorites, collections and history. Tap to build them.",
+        style: "caption", color: "muted", padding: 16 },
+    ] }];
+}
+
+// La pantalla «Descubrir»: la lista completa con su porqué y el botón
+// de volver a buscar hoy.
+function descubreTree(p) {
+  const items = (p && Array.isArray(p.items)) ? p.items : [];
+  const base = (p && p.base) || 0;
+  if (!p || typeof p !== "object" || !p.ts) {
+    return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+      { type: "CircularProgressIndicator" },
+      { type: "Text", text: "Armando tus sugerencias…",
+        textEn: "Building your suggestions…", color: "muted" },
+      { type: "ElevatedButton", key: "paraRetry", icon: "explore",
+        labelText: "Descubrir", labelTextEn: "Discover", onPressed: { event: "descubreAbrir" } },
+    ] };
+  }
+  return { type: "Scaffold",
+    appBar: { type: "AppBar", key: "barDescubre", title: "Descubrir · Para ti",
+      titleEn: "Discover · For you",
+      leading: { type: "IconButton", key: "backDescubre", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "descBody", children: [{
+      type: "Column", children: [
+        base
+          ? { type: "Text",
+              text: "Según tus " + base + " series (favoritos, colecciones e historial): las recomendaciones de los lectores de AniList y lo popular que comparte tus géneros. Toca una: se busca en tu fuente y se vincula para registrar lo que leas.",
+              textEn: "From your " + base + " series (favorites, collections and history): AniList readers' recommendations and popular series sharing your genres. Tap one: it gets searched on your source and linked.",
+              style: "caption", color: "muted", padding: 16 }
+          : { type: "Text",
+              text: "Aún no hay series vinculadas a AniList, así que no hay gusto que leer: vincula tus favoritos desde la sección AniList (se tocan y se elige la serie de tu fuente) y esto se afina solo. Mientras tanto, lo de moda.",
+              textEn: "No series linked to AniList yet, so there is no taste to read: link your favorites from the AniList section (tap and pick your source's series) and this refines itself. Meanwhile, what is trending.",
+              style: "caption", color: "muted", padding: 16 },
+        { type: "Row", gap: 8, padding: 16, children: [
+          { type: "ElevatedButton", key: "descRefrescar", icon: "refresh",
+            labelText: "Buscar de nuevo", labelTextEn: "Search again",
+            onPressed: { event: "descubreRefrescar" } },
+        ] },
+        items.length ? { type: "ListView", key: "paraGrid",
+          columns: { compact: 2, medium: 3, expanded: 4 },
+          items: items.map((it) => paraCard(it)) } :
+          { type: "Text", text: "Sin sugerencias todavía.",
+            textEn: "No suggestions yet.", color: "muted", padding: 16 },
+      ].filter(Boolean) }] },
+  };
+}
+
+// v0.4.55 — el flujo de vincular una serie de AniList con la fuente:
+// antes era el cuerpo del evento «alAbrir»; «Para ti» lo reusa tal
+// cual (buscarla con todos sus nombres, proponer el vínculo
+// exacto y abrir la pantalla de vincular).
+async function alVincularFlujo(m) {
+      const tituloAL = alTitulo(m);
+      if (!tituloAL) return { toast: "Esa serie no tiene título en AniList." };
+      const f = fuenteActiva();
+      // v0.4.24 — ALCANCE: la serie puede llamarse distinto en cada
+      // lado; se buscan TODOS sus nombres de AniList (inglés, romaji,
+      // sinónimos — a veces el español está entre ellos — y el
+      // original, cada uno también en su versión sin puntuación para
+      // los buscadores que se atragantan con ella) hasta que la fuente
+      // dé resultados.
+      const nombres = alNombres(m);
+      let results = [];
+      let qUsada = "";
+      let primerError = null;
+      for (let i = 0; i < nombres.length && i < 12 && !results.length; i++) {
+        try {
+          results = await buscarEnFuente(f, nombres[i]);
+          qUsada = nombres[i];
+        } catch (e) { if (!primerError) primerError = e; }
+      }
+      if (!results.length && primerError) {
+        return { toast: (primerError && primerError.userMessage) || ("No se pudo buscar en " + f.nombre + ".") };
+      }
+      // v0.4.24 — PRECISIÓN: vínculo exacto si la fuente tiene la
+      // serie con el mismo título (normalizado) que CUALQUIER nombre de
+      // AniList — el título oficial o cualquiera de sus sinónimos.
+      // Se guarda el vínculo ya, sin esperar a la mano: el registro
+      // pasa a ser exacto, nunca por parecido.
+      let vinUrl = "", vinTitulo = "";
+      const qSet = {};
+      for (let i = 0; i < nombres.length; i++) {
+        const n = normTituloMD(nombres[i]);
+        if (n) qSet[n] = 1;
+      }
+      if (Object.keys(qSet).length) {
+        for (let i = 0; i < results.length; i++) {
+          const it = results[i];
+          // v0.4.44 — ManhwaWeb trae el nombre original de cada serie
+          // (alt): calza si el título en español O el original coinciden
+          // con cualquiera de los nombres de AniList.
+          const nq = it && it.url ? normTituloMD(it.title) : "";
+          const na = it && it.alt ? normTituloMD(it.alt) : "";
+          if ((nq && qSet[nq]) || (na && qSet[na])) {
+            setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
+            vinUrl = it.url;
+            vinTitulo = it.title || "";
+            break;
+          }
+        }
+      }
+      // v0.4.24 — IDENTIDAD: si la fuente activa no la tuvo clara,
+      // MangaDex puede tenerla — y publica el enlace de AniList de
+      // cada serie: si su id coincide con el de la serie tocada, es
+      // LA serie, sin duda de parecido. Con la fuente activa en
+      // MangaDex el vínculo se da por bueno ahí mismo; leyendo en otra
+      // fuente, la pantalla de vincular la ofrece arriba.
+      let mdSegura = null;
+      if (!vinUrl) {
+        for (let i = 0; i < nombres.length && i < 3 && !mdSegura; i++) {
+          mdSegura = await mdVerificarAl(nombres[i], m.id);
+        }
+        if (mdSegura && f.id === "mangadex") {
+          setJson("alId:" + mdSegura.url, { al: m.id, mal: m.mal || 0 });
+          vinUrl = mdSegura.url;
+          vinTitulo = mdSegura.title;
+          mdSegura = null;
+        }
+      }
+      // v0.4.12 — pantalla de vinculación: el título de AniList casi
+      // nunca es el que la fuente muestra en español; aquí la persona
+      // busca con SU título y toca la serie correcta.
+      const vin = { al: m.id, mal: m.mal || 0, titulo: tituloAL,
+        q: qUsada || tituloAL, fuente: f.id, res: results.slice(0, 30),
+        linked: vinUrl, linkedTitle: vinTitulo, mdSegura: mdSegura };
+      if (!setJsonCache("vin", vin)) {
+        return { toast: "El almacén del plugin está lleno: no pude abrir la vinculación." };
+      }
+      return { state: { vinTk: Date.now() }, route: { push: "vincular" },
+        toast: vinUrl
+          ? "✓ Vinculada automáticamente: si no es la serie que lees, búscala abajo con el título en español."
+          : (vin.mdSegura
+            ? "Sin vínculo claro en " + f.nombre + ", pero MangaDex la tiene verificada por id: tócala arriba para abrirla ya vinculada."
+            : "Elige tu fuente, busca con el título en español y toca la serie correcta.") };
 }
 
 // v0.4.12 — VINCULACIÓN A MANO: los títulos de AniList son los
