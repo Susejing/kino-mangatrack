@@ -15,6 +15,21 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.58 — MI ANILIST. La petición: «todo lo que he leído y tengo en
+// mi cuenta de AniList, bien organizado y sincronizado con mis
+// colecciones — para mí y para quien apenas empieza». Las listas de
+// cada cuenta son PÚBLICAS: con solo el nombre de usuario (escrito a
+// mano o tomado de AniTrack vía la llamadita «whoami» de su v0.13.0)
+// la sección Mi AniList trae TODO por estado (Leyendo, Completados,
+// Por leer, En pausa, Abandonados) SIN iniciar sesión — por eso sirve
+// al que recién instala. Lo vinculado abre directo; lo nuevo se toca
+// y entra al flujo de vincular de siempre. «Colecciones vivas»
+// mantiene 5 colecciones («AniList · …») reemplazándolas completas en
+// cada actualización, SOLO con lo vinculado (las manuales quedan
+// intactas; las sin vincular se quedan en Mi AniList hasta tocarlas).
+// Y «Para ti» aprende de esa lista SOLO cuando el plugin está vacío
+// (leyendo pesa 3, completado 2, tope 12): en cuanto la persona
+// vincula series propias, manda su historial propio.
 // v0.4.57 — EL INICIO VUELVE A DIBUJAR SUS PORTADAS. La 0.4.55/0.4.56
 // dejó el Inicio con TODAS las portadas vacías (capturas: ni el riel
 // «Para ti» ni las de la fuente dibujaban; las MISMAS tarjetas sí
@@ -632,7 +647,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.57";
+const VERSION = "0.4.58";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5812,6 +5827,8 @@ export async function screen(ev) {
     if (route.name === "fuentes") return fuentesTree();
     // v0.4.55 — la pantalla «Descubrir» de Para ti.
     if (route.name === "descubre") return descubreTree(getJson("paraTi", null));
+    // v0.4.58 — Mi AniList: la cuenta de la persona, por estados.
+    if (route.name === "mianilist") return miAniTree(getJson("miAniList", null));
   } catch (e) {
     log("error en pantalla: " + ((e && e.message) || e));
     return errorTree((e && e.userMessage) ||
@@ -6648,6 +6665,113 @@ export async function screenEvent(ev) {
         return { toast: (e && e.userMessage) || "No se pudieron actualizar. Inténtalo de nuevo." };
       }
     }
+    // v0.4.58 — Mi AniList: la cuenta de la persona dentro del plugin.
+    if (name === "miAniSeccion") {
+      const dato = getJson("miAniList", null);
+      const nombre = String(getJson("miAniUser", "") || "").trim();
+      if (dato && dato.listas && dato.nombre === nombre) {
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" } };
+      }
+      if (!nombre) return { route: { push: "mianilist" } };
+      try {
+        await miAniComputar(false);
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" } };
+      } catch (e) {
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" },
+          toast: (e && e.userMessage) ||
+            "No pude leer tu lista de AniList: se abre igual para que revises el nombre." };
+      }
+    }
+    if (name === "miAniUser") {
+      const nombre = String((ev.value && ev.value.alUser) || "").trim().slice(0, 64);
+      if (!nombre) {
+        return { toast: "Escribe tu nombre de usuario de AniList — el de la dirección de tu perfil." };
+      }
+      setJson("miAniUser", nombre);
+      try {
+        await miAniComputar(true);
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" },
+          toast: "✓ Traída la lista de " + nombre + "." };
+      } catch (e) {
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" },
+          toast: (e && e.userMessage) ||
+            "No pude leer esa lista: revisa el nombre e inténtalo de nuevo." };
+      }
+    }
+    if (name === "miAniDeAnitrack") {
+      let r = null;
+      try { r = await kino.plugins.call("anitrack", "whoami", {}); }
+      catch (e) {
+        return { toast: "No pude preguntarle a AniTrack (¿lo tienes activado?). Escribe tu nombre abajo." };
+      }
+      const nombre = String((r && r.anilist) || "").trim().slice(0, 64);
+      if (!nombre) {
+        return { toast: "AniTrack no tiene sesión de AniList todavía: inicia sesión ahí o escribe tu nombre abajo." };
+      }
+      setJson("miAniUser", nombre);
+      try {
+        await miAniComputar(true);
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" },
+          toast: "✓ Tomado de AniTrack: " + nombre + "." };
+      } catch (e) {
+        return { state: { miAniTk: Date.now() }, route: { push: "mianilist" },
+          toast: (e && e.userMessage) ||
+            ("Tengo tu nombre (" + nombre + ") pero no pude leer la lista: reintenta arriba.") };
+      }
+    }
+    if (name === "miAniRefrescar") {
+      try {
+        const dato = await miAniComputar(true);
+        let extra = "";
+        if (getJson("miAniSync", false)) {
+          const s = miAniSyncColecciones(dato);
+          if (s.ok) {
+            try { if (tgActiva()) await tgSubir(); }
+            catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
+            extra = " Colecciones al día.";
+          }
+        }
+        return { state: { miAniTk: Date.now(), colTk: Date.now() },
+          toast: "✓ Tu lista de AniList está al día." + extra };
+      } catch (e) {
+        return { toast: (e && e.userMessage) ||
+          "No pude actualizar tu lista de AniList. Inténtalo de nuevo." };
+      }
+    }
+    if (name === "miAniSync") {
+      const dato = getJson("miAniList", null);
+      if (!dato || !dato.listas) {
+        return { toast: "Primero trae tu lista: entra a Mi AniList desde la sección AniList." };
+      }
+      setJson("miAniSync", true);
+      const s = miAniSyncColecciones(dato);
+      if (!s.ok) return { toast: "El almacén del plugin está lleno: no pude actualizar las colecciones." };
+      try { if (tgActiva()) await tgSubir(); }
+      catch (e) { log("sync subir cols: " + ((e && e.message) || e)); }
+      return { state: { miAniTk: Date.now(), colTk: Date.now() },
+        toast: "✓ Colecciones vivas: " + s.vinculadas + " series vinculadas." +
+          (s.sin ? " " + s.sin + " sin vincular quedan en Mi AniList hasta que las toques."
+                 : " Nada pendiente.") };
+    }
+    if (name === "miAniAbrir") {
+      const dato = getJson("miAniList", null);
+      const id = Number(ev.arg) || 0;
+      let it = null;
+      if (dato && dato.listas) {
+        for (const st in dato.listas) {
+          const arr = dato.listas[st] || [];
+          for (let k = 0; k < arr.length; k++) {
+            if (Number(arr[k].id) === id) { it = arr[k]; break; }
+          }
+          if (it) break;
+        }
+      }
+      if (!it) return { toast: "No encontré esa serie en tu lista: actualiza Mi AniList." };
+      const rev = miAniAlRev();
+      const url = miAniUrl(it, rev);
+      if (url && fuenteDeUrl(url)) return await cargarSerie(url, true);
+      return await alVincularFlujo(it);
+    }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
   } catch (e) {
@@ -7195,6 +7319,17 @@ function anilistTree(a) {
         { type: "Text", text: "Descubre manga en AniList y tócalo para vincularlo: en la pantalla que se abre, busca con el título en español de tu fuente y toca la serie correcta.",
           textEn: "Discover manga on AniList and tap it to link: on the next screen, search with your source's Spanish title and tap the right series.",
           style: "caption", color: "muted", padding: 16 },
+        { type: "Card", key: "miAniListCard", flush: true,
+          onTap: { event: "miAniSeccion" },
+          children: [{ type: "Row", padding: 16, gap: 12, children: [
+            { type: "Icon", name: "star", color: "muted" },
+            { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+              { type: "Text", text: "Mi AniList", textEn: "My AniList", style: "h4" },
+              { type: "Text", text: "Todo lo que lees y tienes en tu cuenta, por estado — y en colecciones vivas que se mantienen solas.",
+                textEn: "Everything you read and have in your account, by status — and in live collections that keep themselves up to date.",
+                style: "caption", color: "muted" },
+            ] },
+          ] }] },
         { type: "Form", key: "alForm", onSubmitted: "alSearch", gap: 8, padding: 16, children: [
           { type: "TextField", key: "alQ", kind: "search", value: a.q || "",
             labelText: "Título en AniList", labelTextEn: "AniList title",
@@ -7335,7 +7470,12 @@ async function paraTiBase() {
 // Arma (o reusa) la lista «Para ti». Sin series vinculadas quedan las
 // tendencias de AniList y el aviso honesto de vincular para afinar.
 async function paraTiComputar(forzar) {
-  const base = await paraTiBase();
+  let base = await paraTiBase();
+  // v0.4.58 — recién llegado sin nada propio: si ya trajo su cuenta en
+  // Mi AniList, esa lista dice sus gustos (leyendo pesa más que lo
+  // completado). Solo cuando el plugin está vacío — en cuanto vincula
+  // series propias, manda lo suyo.
+  if (!base.length) base = miAniBaseParaTi();
   const sig = base.map((x) => x.al).join(",");
   const cache = getJson("paraTi", null);
   const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
@@ -7677,6 +7817,286 @@ async function alVincularFlujo(m) {
           : (vin.mdSegura
             ? "Sin vínculo claro en " + f.nombre + ", pero MangaDex la tiene verificada por id: tócala arriba para abrirla ya vinculada."
             : "Elige tu fuente, busca con el título en español y toca la serie correcta.") };
+}
+
+// ---------- Mi AniList (v0.4.58) ----------
+
+// Lo que la persona lee y tiene en SU cuenta de AniList, traído al
+// plugin sin iniciar sesión: las listas de cada cuenta son públicas y
+// bastan con el nombre de usuario (AniTrack lo sabe si hay sesión).
+// Todo lo que ya está vinculado (claves "alId:") abre directo desde
+// aquí; lo nuevo se toca y sigue el flujo de vincular de siempre. Y
+// con «colecciones vivas», cinco colecciones («AniList · …») se
+// reemplazan solas con lo vinculado de cada estado en cada
+// actualización — las colecciones manuales nunca se tocan.
+const MIANI_ESTADOS = [
+  ["CURRENT", "Leyendo", "Reading", "AniList · Leyendo"],
+  ["COMPLETED", "Completados", "Completed", "AniList · Completados"],
+  ["PLANNING", "Por leer", "Planning", "AniList · Por leer"],
+  ["PAUSED", "En pausa", "Paused", "AniList · En pausa"],
+  ["DROPPED", "Abandonados", "Dropped", "AniList · Abandonados"],
+];
+const MIANI_TTL = 3600000;
+const MIANI_TOPES = { CURRENT: 40, COMPLETED: 40, PLANNING: 24, PAUSED: 24, DROPPED: 24 };
+
+// Del objeto Media de la lista al item de sección: la misma forma que
+// las sugerencias de Para ti, más el progreso de la cuenta.
+function miAniItem(m, progreso) {
+  const it = paraTiItem(m, "");
+  it.progreso = Math.max(0, Number(progreso) || 0);
+  return it;
+}
+
+// Mapa inverso de los vínculos: id de AniList/MAL → url de la fuente.
+// Se arma del inventario del almacén (claves "alId:") en cada uso —
+// los vínculos cambian al vincular series nuevas.
+function miAniAlRev() {
+  const rev = {};
+  try {
+    const ks = (typeof kino.storage === "object" && kino.storage &&
+      typeof kino.storage.keys === "function") ? (kino.storage.keys() || []) : [];
+    for (let i = 0; i < ks.length; i++) {
+      const k = String(ks[i] || "");
+      if (k.indexOf("alId:") !== 0) continue;
+      const v = getJson(k, null);
+      if (!v) continue;
+      const url = k.slice(5);
+      if (v.al) rev["a" + v.al] = url;
+      if (v.mal) rev["m" + v.mal] = url;
+    }
+  } catch (e) { log("mi anilist rev: " + ((e && e.message) || e)); }
+  return rev;
+}
+
+function miAniUrl(it, rev) {
+  return rev["a" + it.id] || (it.mal ? rev["m" + it.mal] : "") || "";
+}
+
+// Trae la MediaListCollection de la cuenta (pública, sin login) y la
+// guarda por estado con tope por sección: el almacén es de 256 KB y
+// las bibliotecas pueden ser enormes — se guardan las más recientes
+// y el total queda dicho en cada sección.
+async function miAniComputar(forzar) {
+  const nombre = String(getJson("miAniUser", "") || "").trim().slice(0, 64);
+  if (!nombre) return { err: "sin-usuario" };
+  const cache = getJson("miAniList", null);
+  const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
+  if (!forzar && cache && cache.pv === 1 && cache.nombre === nombre &&
+    cache.listas && edad < MIANI_TTL) return cache;
+  let j = null;
+  try {
+    j = await paraTiJson("query ($u: String) { MediaListCollection(userName: $u, " +
+      "type: MANGA, sort: [UPDATED_TIME_DESC]) { lists { entries { status progress " +
+      "media { " + PARA_CAMPOS + " } } } } }", { u: nombre });
+  } catch (e) {
+    // Sin el sort la lista es la misma; solo pierde el orden de
+    // recencia. Cubre cuentas/respuestas que rechacen el argumento.
+    log("mi anilist sin sort: " + ((e && e.message) || e));
+    j = await paraTiJson("query ($u: String) { MediaListCollection(userName: $u, " +
+      "type: MANGA) { lists { entries { status progress media { " + PARA_CAMPOS +
+      " } } } } }", { u: nombre });
+  }
+  const lists = (j && j.data && j.data.MediaListCollection &&
+    j.data.MediaListCollection.lists) || [];
+  // Las listas llegan partidas (una por estado, a veces varias si la
+  // cuenta las separa): se juntan por estado y sin repetir serie.
+  const porEstado = {};
+  for (let i = 0; i < lists.length; i++) {
+    const ents = (lists[i] && lists[i].entries) || [];
+    for (let k = 0; k < ents.length; k++) {
+      const en = ents[k];
+      const m = en && en.media;
+      if (!m || !m.id || !en.status) continue;
+      const st = String(en.status);
+      if (!porEstado[st]) porEstado[st] = { arr: [], visto: {} };
+      if (porEstado[st].visto[m.id]) continue;
+      porEstado[st].visto[m.id] = 1;
+      porEstado[st].arr.push(miAniItem(m, en.progress));
+    }
+  }
+  const arma = function (topes) {
+    const listas = {};
+    const totales = {};
+    for (let i = 0; i < MIANI_ESTADOS.length; i++) {
+      const st = MIANI_ESTADOS[i][0];
+      const grp = porEstado[st];
+      totales[st] = grp ? grp.arr.length : 0;
+      listas[st] = grp ? grp.arr.slice(0, topes[st] || 24) : [];
+    }
+    return { pv: 1, ts: Date.now(), nombre: nombre, listas: listas, totales: totales };
+  };
+  let dato = arma(MIANI_TOPES);
+  if (!setJson("miAniList", dato)) {
+    // Almacén lleno: recorte de emergencia (menos series por estado).
+    dato = arma({ CURRENT: 24, COMPLETED: 24, PLANNING: 12, PAUSED: 12, DROPPED: 12 });
+    if (!setJson("miAniList", dato)) log("mi anilist sin guardar: almacén lleno");
+  }
+  return dato;
+}
+
+// Las cinco colecciones vivas: solo lo VINCULADO entra (lo demás se
+// queda en Mi AniList hasta vincularlo); cada sincronización las
+// REEMPLAZA completas y las colecciones manuales quedan intactas.
+function miAniSyncColecciones(dato) {
+  const rev = miAniAlRev();
+  const cs = cols();
+  let vin = 0, sin = 0;
+  for (let i = 0; i < MIANI_ESTADOS.length; i++) {
+    const st = MIANI_ESTADOS[i][0];
+    const nomCol = MIANI_ESTADOS[i][3];
+    const arr = (dato && dato.listas && dato.listas[st]) || [];
+    const items = {};
+    for (let k = 0; k < arr.length; k++) {
+      const it = arr[k];
+      const url = miAniUrl(it, rev);
+      if (!url) { sin++; continue; }
+      items[url] = { url: url,
+        title: String(alTitulo(it) || it.romaji || it.english || "").slice(0, 160),
+        poster: it.cover || "", ts: Date.now() };
+      vin++;
+    }
+    cs[nomCol] = { ts: Date.now(), items: items };
+  }
+  return { ok: setJson("cols", cs), vinculadas: vin, sin: sin };
+}
+
+// La base de gustos de la cuenta para «Para ti»: SOLO se usa cuando
+// el plugin no tiene nada propio — leyendo pesa más que lo completado.
+function miAniBaseParaTi() {
+  const cache = getJson("miAniList", null);
+  if (!cache || !cache.listas) return [];
+  const out = [];
+  const mete = function (arr, peso, tope) {
+    if (!Array.isArray(arr)) return;
+    for (let i = 0; i < arr.length && i < tope && out.length < 12; i++) {
+      const it = arr[i];
+      if (!it || !it.id) continue;
+      out.push({ al: it.id,
+        title: alTitulo(it) || it.romaji || it.english || "", peso: peso });
+    }
+  };
+  mete(cache.listas.CURRENT, 3, 8);
+  mete(cache.listas.COMPLETED, 2, 6);
+  return out;
+}
+
+// La tarjeta de una serie de la cuenta: portada, título y su estado —
+// «✓» si ya está en la fuente del plugin, «Sin vincular» si toca
+// buscarla (el toque abre la vinculación de siempre).
+function miAniCard(it, rev) {
+  const titulo = alTitulo(it) || it.romaji || it.english || "";
+  const url = miAniUrl(it, rev);
+  const caps = it.caps ? (" de " + it.caps) : "";
+  const etiq = it.progreso ? ("Cap. " + it.progreso + caps)
+    : (it.caps ? (it.caps + " caps") : "En tu lista");
+  const etiqEn = it.progreso ? ("Ch. " + it.progreso + caps)
+    : (it.caps ? (it.caps + " ch.") : "On your list");
+  return { type: "Card", key: "ma-" + it.id, flush: true,
+    onTap: { event: "miAniAbrir", arg: String(it.id) },
+    children: [
+      { type: "Image", url: it.cover || "", aspect: "2:3", alt: titulo, altEn: titulo,
+        fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+          children: [{ type: "Icon", name: "list", color: "muted" }] } },
+    ].concat(twoLines(titulo).map(function (ln) {
+      return { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 };
+    })).concat([{ type: "Text",
+      text: (url ? "✓ " : "Sin vincular · ") + etiq,
+      textEn: (url ? "✓ " : "Unlinked · ") + etiqEn,
+      style: "caption", color: "muted", padding: 8 }]),
+  };
+}
+
+// La pantalla Mi AniList: sin nombre de usuario, la configuración
+// honesta (escribirlo o tomarlo de AniTrack); con nombre, las
+// secciones por estado de todo lo leído y tenido en la cuenta.
+function miAniTree(dato) {
+  const nombre = String(getJson("miAniUser", "") || "").trim();
+  if (!nombre) {
+    return { type: "Scaffold",
+      appBar: { type: "AppBar", key: "barMiAni", title: "Mi AniList", titleEn: "My AniList",
+        leading: { type: "IconButton", key: "backMiAni", icon: "arrow_back",
+          labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+        actions: [] },
+      body: { type: "SingleChildScrollView", key: "miAniCfg", children: [{ type: "Column", children: [
+        { type: "Text", text: "Las listas de cada cuenta de AniList son públicas: con solo tu nombre de usuario, aquí aparece todo lo que lees y tienes — sin iniciar sesión. Si ya usas el plugin AniTrack con sesión, también puedo tomar tu nombre de ahí.",
+          textEn: "Every AniList account's lists are public: with just your username, everything you read and have appears here — no login needed. If you already use the AniTrack plugin signed in, I can take your name from there too.",
+          style: "caption", color: "muted", padding: 16 },
+        { type: "Form", key: "miAniForm", onSubmitted: "miAniUser", gap: 8, padding: 16, children: [
+          { type: "TextField", key: "alUser",
+            labelText: "Tu nombre de usuario de AniList", labelTextEn: "Your AniList username",
+            hintText: "El de la dirección de tu perfil", hintEn: "The one in your profile address",
+            required: true },
+          { type: "ElevatedButton", icon: "search", labelText: "Traer mi lista",
+            labelTextEn: "Bring my list", submit: true },
+        ] },
+        { type: "Column", padding: 16, children: [
+          { type: "ElevatedButton", key: "miAniDeAt", icon: "sync",
+            labelText: "Tomar mi nombre de AniTrack", labelTextEn: "Take my name from AniTrack",
+            onPressed: "miAniDeAnitrack" },
+        ] },
+      ] }] } };
+  }
+  if (!dato || !dato.listas) {
+    return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
+      { type: "CircularProgressIndicator" },
+      { type: "Text", text: "Cargando tu lista de AniList…", textEn: "Loading your AniList…", color: "muted" },
+      { type: "ElevatedButton", key: "miAniRe", icon: "refresh",
+        labelText: "Reintentar", labelTextEn: "Retry", onPressed: "miAniRefrescar" },
+    ] };
+  }
+  const sync = !!getJson("miAniSync", false);
+  const rev = miAniAlRev();
+  const secciones = [];
+  for (let i = 0; i < MIANI_ESTADOS.length; i++) {
+    const st = MIANI_ESTADOS[i][0];
+    const arr = dato.listas[st] || [];
+    if (!arr.length) continue;
+    const total = (dato.totales && dato.totales[st]) || arr.length;
+    secciones.push({ type: "Row", padding: 16, gap: 8, children: [
+      { type: "Text", text: MIANI_ESTADOS[i][1], textEn: MIANI_ESTADOS[i][2], style: "h3" },
+      { type: "Badge", text: String(total) },
+    ] });
+    secciones.push({ type: "ListView", key: "miAni-" + st,
+      columns: { compact: 3, medium: 4, expanded: 6 },
+      items: arr.map(function (it) { return miAniCard(it, rev); }) });
+    if (total > arr.length) {
+      secciones.push({ type: "Text",
+        text: "Mostrando las " + arr.length + " más recientes de " + total + ".",
+        textEn: "Showing the " + arr.length + " most recent of " + total + ".",
+        style: "caption", color: "muted", padding: 16 });
+    }
+  }
+  return { type: "Scaffold",
+    appBar: { type: "AppBar", key: "barMiAni",
+      title: "Mi AniList · " + nombre, titleEn: "My AniList · " + nombre,
+      leading: { type: "IconButton", key: "backMiAni", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [{ type: "IconButton", key: "miAniRe", icon: "refresh",
+        labelText: "Actualizar", labelTextEn: "Refresh", onPressed: "miAniRefrescar" }] },
+    body: { type: "SingleChildScrollView", key: "miAniBody", children: [{ type: "Column", children: [
+      { type: "Text", text: "Todo lo que lees y tienes en tu cuenta de AniList, por estado. Lo con ✓ abre directo; lo nuevo se toca y se busca en tu fuente.",
+        textEn: "Everything you read and have in your AniList account, by status. ✓ opens directly; tap what's new to find it in your source.",
+        style: "caption", color: "muted", padding: 16 },
+      { type: "Card", key: "miAniSyncCard", flush: true,
+        onTap: { event: "miAniSync" },
+        children: [{ type: "Row", padding: 16, gap: 12, children: [
+          { type: "Icon", name: sync ? "check" : "sync", color: "muted" },
+          { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+            { type: "Text", text: sync ? "Colecciones vivas: activadas" : "Colecciones vivas",
+              textEn: sync ? "Live collections: on" : "Live collections", style: "h4" },
+            { type: "Text", text: sync
+                ? "Cinco colecciones (Leyendo, Completados, Por leer, En pausa, Abandonados) se mantienen solas con lo vinculado de tu cuenta. Toca para actualizarlas ahora."
+                : "Activa cinco colecciones que se mantienen solas al día con tu cuenta de AniList — solo con las series ya vinculadas.",
+              textEn: sync ? "Five collections (Reading, Completed, Planning, Paused, Dropped) keep themselves up to date with what's linked from your account. Tap to update them now."
+                : "Turn on five collections that keep themselves up to date with your AniList account — linked series only.",
+              style: "caption", color: "muted" },
+          ] },
+        ] }] },
+      secciones.length ? null : { type: "Text",
+        text: "Tu lista está vacía o no pude leerla: toca actualizar arriba.",
+        textEn: "Your list is empty or I could not read it: tap refresh above.",
+        color: "muted", padding: 16 },
+    ].filter(Boolean).concat(secciones) }] } };
 }
 
 // v0.4.12 — VINCULACIÓN A MANO: los títulos de AniList son los
