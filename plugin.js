@@ -15,6 +15,14 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.61 — MÁS ANILIST. (1) El catálogo ya no se corta a las 3
+// páginas: caben 240 series («Cargar más» sigue funcionando y se
+// retira con honestidad si se llena). (2) GÉNEROS: el desplegable de
+// siempre, con los 18 géneros oficiales de AniList — con el buscador
+// vacío, un género convierte el catálogo en explorador. (3) Mi AniList
+// muestra TODA la lista: cada sección tiene su «Cargar más» que trae
+// el siguiente tramo de 60 (el tope pedido se guarda y sobrevive al
+// refresco).
 // v0.4.60 — MÁS «CARGAR MÁS DEL SITIO». Los rieles «Recientes» de
 // LectorXd (el catálogo orderBy=recent, el mismo «Ver todo» de su
 // portada) y «Nuevas obras» de ManhwaWeb (la biblioteca ordenada por
@@ -665,7 +673,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.60";
+const VERSION = "0.4.61";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -6223,7 +6231,7 @@ export async function screenEvent(ev) {
       if (!q) return { toast: "Escribe un título." };
       const a = getJson("al", null) || {};
       try {
-        const r = await alBuscar(q, 1, a.order || "TRENDING_DESC", false, false);
+        const r = await alBuscar(q, 1, a.order || "TRENDING_DESC", false, false, a.genero || "");
         if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar la búsqueda." };
         return { state: r.resp.state, toast: r.n > 0
           ? r.n + (r.n === 1 ? " resultado en AniList" : " resultados en AniList")
@@ -6238,9 +6246,28 @@ export async function screenEvent(ev) {
       const a = getJson("al", null) || {};
 
       try {
-        const r = await alBuscar(a.q || "", 1, v, false, false);
+        const r = await alBuscar(a.q || "", 1, v, false, false, a.genero || "");
         if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar el orden." };
         return { state: r.resp.state, toast: "Orden cambiado." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
+      }
+    }
+    // v0.4.61 — el género del catálogo de AniList: el mismo buscador,
+    // ahora filtrado por el género oficial que elija la persona (con
+    // el buscador vacío, un género convierte el catálogo en
+    // explorador).
+    if (name === "alGenero") {
+      const v = String(ev.value || "");
+      const a = getJson("al", null) || {};
+      let etiq = "todos los géneros";
+      for (let i = 0; i < AL_GENEROS.length; i++) {
+        if (AL_GENEROS[i][0] === v && v) etiq = AL_GENEROS[i][1];
+      }
+      try {
+        const r = await alBuscar(a.q || "", 1, a.order || "TRENDING_DESC", false, false, v);
+        if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude guardar el género." };
+        return { state: r.resp.state, toast: "Género: " + etiq + "." };
       } catch (e) {
         return { toast: (e && e.userMessage) || "No se pudo conectar con AniList. Inténtalo de nuevo." };
       }
@@ -6250,7 +6277,7 @@ export async function screenEvent(ev) {
       if (!a || !Array.isArray(a.items) || !a.items.length) return null;
       if (a.info && a.info.has === false) return { toast: "No hay más resultados en AniList." };
       try {
-        const r = await alBuscar(a.q || "", (a.page || 1) + 1, a.order || "TRENDING_DESC", false, true);
+        const r = await alBuscar(a.q || "", (a.page || 1) + 1, a.order || "TRENDING_DESC", false, true, a.genero || "");
         if (!r.ok) return { toast: "El almacén del plugin está lleno: no pude cargar más." };
         return { state: r.resp.state, toast: r.n > 0
           ? "+" + r.n + " series de AniList"
@@ -6738,6 +6765,34 @@ export async function screenEvent(ev) {
             "No pude leer tu lista de AniList: se abre igual para que revises el nombre." };
       }
     }
+    // v0.4.61 — «Cargar más» de una sección de Mi AniList: el tope de
+    // ESA sección sube 60 y la lista se vuelve a traer (pública, sin
+    // login) para rellenar el tramo pedido.
+    if (name === "miAniMore") {
+      const st = String((ev && ev.arg) || "");
+      let valido = false;
+      for (let i = 0; i < MIANI_ESTADOS.length; i++) if (MIANI_ESTADOS[i][0] === st) valido = true;
+      if (!valido) return null;
+      const dato = getJson("miAniList", null);
+      if (!dato || !dato.listas) {
+        return { toast: "Primero trae tu lista: entra a Mi AniList desde la sección AniList." };
+      }
+      const visibles = (dato.listas[st] || []).length;
+      const total = (dato.totales && dato.totales[st]) || visibles;
+      const nuevos = Math.min(total, visibles + 60);
+      const topes = getJson("miAniTopes", null) || {};
+      topes[st] = nuevos;
+      if (!setJson("miAniTopes", topes)) {
+        return { toast: "El almacén del plugin está lleno: no pude guardar el tope." };
+      }
+      try {
+        await miAniComputar(true);
+        return { state: { miAniTk: Date.now() },
+          toast: "✓ " + nuevos + " de " + total + " en esta sección." };
+      } catch (e) {
+        return { toast: (e && e.userMessage) || "No pude ampliar esta sección. Inténtalo de nuevo." };
+      }
+    }
     if (name === "miAniUser") {
       const nombre = String((ev.value && ev.value.alUser) || "").trim().slice(0, 64);
       if (!nombre) {
@@ -7213,12 +7268,29 @@ function syncTree(state) {
 // nada: nunca se marca una serie equivocada.
 
 const ANI_POR_PAG = 20;
-const ANI_TOPE = 60;
+// v0.4.61 — el catálogo de AniList ya no se corta a las 3 páginas:
+// caben 240 series y, si algún día se llena, el botón «Cargar más» se
+// retira con honestidad (nada de prometer lo que no cabe).
+const ANI_TOPE = 240;
 const AL_ORDEN = [["TRENDING_DESC", "Tendencia"], ["POPULARITY_DESC", "Populares"],
   ["SCORE_DESC", "Mejor valorados"], ["TITLE_ROMAJI_ASC", "A → Z"]];
 
-const AL_QUERY = "query ($p: Int, $s: String, $sort: [MediaSort]) { Page(page: $p, perPage: " + ANI_POR_PAG + ") " +
-  "{ pageInfo { hasNextPage } media(type: MANGA, isAdult: false, search: $s, sort: $sort) " +
+// v0.4.61 — los géneros oficiales de AniList (los mismos de su
+// página): «» es «todos». Con el buscador vacío y un género elegido,
+// el catálogo se vuelve un explorador por género.
+const AL_GENEROS = [["", "Todos los géneros"],
+  ["Action", "Acción"], ["Adventure", "Aventura"], ["Comedy", "Comedia"],
+  ["Drama", "Drama"], ["Ecchi", "Ecchi"], ["Fantasy", "Fantasía"],
+  ["Horror", "Horror"], ["Mahou Shoujo", "Mahou Shoujo"], ["Mecha", "Mecha"],
+  ["Music", "Música"], ["Mystery", "Misterio"], ["Psychological", "Psicológico"],
+  ["Romance", "Romance"], ["Sci-Fi", "Ciencia ficción"],
+  ["Slice of Life", "Recuentos de la vida"], ["Sports", "Deportes"],
+  ["Supernatural", "Sobrenatural"], ["Thriller", "Suspenso"]];
+
+// v0.4.61 — GENRES: la variable genre filtra por el género oficial;
+// null la deja pasar sin filtro (como siempre).
+const AL_QUERY = "query ($p: Int, $s: String, $sort: [MediaSort], $g: String) { Page(page: $p, perPage: " + ANI_POR_PAG + ") " +
+  "{ pageInfo { hasNextPage } media(type: MANGA, isAdult: false, search: $s, genre: $g, sort: $sort) " +
   "{ id idMal title { romaji english native } synonyms coverImage { extraLarge } format chapters averageScore } } }";
 
 // v0.4.24 — la misma búsqueda SOLO entre adultos (los +18 existen: la
@@ -7236,9 +7308,9 @@ async function alJsonAdulto(q) {
   return await r.json();
 }
 
-async function alJson(q, page, sort) {
+async function alJson(q, page, sort, genero) {
   const r = await kino.fetch("https://graphql.anilist.co", { method: "POST",
-    body: { json: { query: AL_QUERY, variables: { p: page, s: q || null, sort: [sort] } } } });
+    body: { json: { query: AL_QUERY, variables: { p: page, s: q || null, sort: [sort], g: genero || null } } } });
   if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
     userMessage: "No se pudo conectar con AniList. Inténtalo de nuevo.",
   });
@@ -7393,6 +7465,7 @@ function anilistTree(a) {
           { type: "ElevatedButton", icon: "search", labelText: "Buscar", labelTextEn: "Search", submit: true },
         ] },
         { type: "Row", gap: 8, padding: 16, children: [
+          catDrop("Género", "alGenero", AL_GENEROS, a.genero, "alGenero"),
           catDrop("Ordenar", "alOrder", AL_ORDEN, a.order, "alOrder"),
         ] },
         a.items.length ? { type: "ListView", key: "alGrid",
@@ -7406,12 +7479,12 @@ function anilistTree(a) {
   };
 }
 
-async function alBuscar(q, page, order, conRuta, anadir) {
+async function alBuscar(q, page, order, conRuta, anadir, genero) {
   const ord = order || "TRENDING_DESC";
   const prev = anadir ? (getJson("al", null) || {}) : {};
   const prevItems = Array.isArray(prev.items) ? prev.items : [];
   const page1 = Math.max(1, parseInt(page, 10) || 1);
-  const j = await alJson(q, page1, ord);
+  const j = await alJson(q, page1, ord, genero);
   let nuevos = alItemsDe(j);
   // v0.4.24 — los +18 existen: si el título pedido no apareció en la
   // búsqueda normal (que aparta los adultos), una segunda pasada SOLO
@@ -7436,10 +7509,15 @@ async function alBuscar(q, page, order, conRuta, anadir) {
     .slice(0, ANI_TOPE);
   let ordTxt = "";
   for (let i = 0; i < AL_ORDEN.length; i++) if (AL_ORDEN[i][0] === ord) ordTxt = AL_ORDEN[i][1];
+  // v0.4.61 — honestidad del tope: si ya se llegó a ANI_TOPE, no se
+  // ofrece otro «Cargar más» que no traiga nada.
+  const hasNextPag = !!(j && j.data && j.data.Page && j.data.Page.pageInfo && j.data.Page.pageInfo.hasNextPage);
+  const lleno = items.length >= ANI_TOPE;
   // v0.4.4 — con el guardián: si no se puede guardar, se avisa al
   // llamador para que NO abra la pantalla (nada de "cargando" eterno).
   const alOk = setJsonCache("al", { items: items, q: q || "", page: page1, order: ord, ordTxt: ordTxt,
-    info: { has: !!(j && j.data && j.data.Page && j.data.Page.pageInfo && j.data.Page.pageInfo.hasNextPage) } });
+    genero: genero || "",
+    info: { has: hasNextPag && !lleno } });
   const resp = { state: { alTk: Date.now() } };
   if (conRuta) resp.route = { push: "anilist" };
   return { resp: resp, n: nuevos.length, ok: alOk };
@@ -7981,7 +8059,21 @@ async function miAniComputar(forzar) {
     }
     return { pv: 1, ts: Date.now(), nombre: nombre, listas: listas, totales: totales };
   };
-  let dato = arma(MIANI_TOPES);
+  // v0.4.61 — TODA la lista: los topes de cada sección crecen con sus
+  // «Cargar más» y se guardan aparte, así sobreviven al refresco.
+  const topesDe = function () {
+    const extra = getJson("miAniTopes", null);
+    const t = { CURRENT: MIANI_TOPES.CURRENT, COMPLETED: MIANI_TOPES.COMPLETED,
+      PLANNING: MIANI_TOPES.PLANNING, PAUSED: MIANI_TOPES.PAUSED, DROPPED: MIANI_TOPES.DROPPED };
+    if (extra && typeof extra === "object") {
+      for (const st in t) {
+        const n = parseInt(extra[st], 10);
+        if (isFinite(n) && n > t[st]) t[st] = n;
+      }
+    }
+    return t;
+  };
+  let dato = arma(topesDe());
   if (!setJson("miAniList", dato)) {
     // Almacén lleno: recorte de emergencia (menos series por estado).
     dato = arma({ CURRENT: 24, COMPLETED: 24, PLANNING: 12, PAUSED: 12, DROPPED: 12 });
@@ -8117,9 +8209,17 @@ function miAniTree(dato) {
       items: arr.map(function (it) { return miAniCard(it, rev); }) });
     if (total > arr.length) {
       secciones.push({ type: "Text",
-        text: "Mostrando las " + arr.length + " más recientes de " + total + ".",
-        textEn: "Showing the " + arr.length + " most recent of " + total + ".",
+        text: "Mostrando " + arr.length + " de " + total + ".",
+        textEn: "Showing " + arr.length + " of " + total + ".",
         style: "caption", color: "muted", padding: 16 });
+      // v0.4.61 — TODA la lista, a pedidos de 60: cada toque trae el
+      // siguiente tramo de ESA sección (la lista completa vive en
+      // AniList; aquí se guarda lo que la persona pidió ver).
+      secciones.push({ type: "ElevatedButton", key: "miAniMore-" + st,
+        icon: "expand_more",
+        labelText: "Cargar más (" + (total - arr.length) + ")",
+        labelTextEn: "Load more (" + (total - arr.length) + ")",
+        onPressed: { event: "miAniMore", arg: st } });
     }
   }
   return { type: "Scaffold",
