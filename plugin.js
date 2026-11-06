@@ -15,6 +15,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.49 — LAS RESEÑAS Y LA NUBE PROPIA. Dos peticiones de la
+// persona: (1) comentar y reseñar cada manga — página «Mi reseña» en
+// cada serie (botón en el detalle, texto visible bajo la sinopsis),
+// guardada en el aparato y viajando a los vinculados; (2) que los
+// favoritos (y ahora también las reseñas) sobrevivan a las
+// reinstalaciones — respaldo en un repositorio del usuario en
+// GitHub: token fine-grained (Contents: RW, solo ese repo), archivo
+// data/mangatrack.json; al abrir se baja y une lo que falte, cada
+// cambio sube la lista completa y «Sincronizar» (desde Mis favoritos)
+// deja probar la conexión, activar/desactivar y sincronizar a mano.
+// HONESTO: Telegram no puede leer sus mensajes viejos (sus bots no
+// tienen getHistory), así que no sirve de nube — GitHub sí. Y la
+// integración con Kino Social esperará a que expongan una puerta
+// para plugins (como hace AniTrack): su feed y su servidor son suyos.
+// ANTES: v0.4.48 presupuesto de portadas; v0.4.47 +18 de MW abren;
+// v0.4.46 capítulos versions de MW.
 // v0.4.48 — EL INICIO VOLVIÓ A ABRIR. Reporte del teléfono: tras abrir
 // un +18 y volver, cada entrada al plugin caía en el mensaje rojo
 // «plugin answer too large». La causa: las portadas convertidas de las
@@ -490,7 +506,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.48";
+const VERSION = "0.4.49";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2160,6 +2176,200 @@ function syncPullHist() {
   if (lk.length > 100) { lk.sort((a, b) => (local[b].ts || 0) - (local[a].ts || 0));
     for (let i = 100; i < lk.length; i++) delete local[lk[i]]; }
   if (changed) { setJson("hist", local); syncPushHist(); }
+}
+
+// ------------------------------------------------- v0.4.49 — mis reseñas
+// Comentarios propios por serie: lo que la persona opina de cada manga,
+// en la página de la serie. Viven en el aparato, viajan a los
+// vinculados (como favoritos e historial) y, con la sincronización de
+// GitHub activada, quedan respaldados en la nube propia.
+function resenas() { return getJson("resenas", {}); }
+function resenaDe(url) { return resenas()[url] || null; }
+function resenaGuardar(url, texto) {
+  const r = resenas();
+  const t = String(texto || "").trim();
+  if (t) r[url] = { text: t.slice(0, 2000), ts: Date.now() };
+  else delete r[url];
+  if (!setJson("resenas", r)) return false;
+  syncPushResenas();
+  return true;
+}
+function syncPushResenas() {
+  try { if (typeof kino.shared === "object" && kino.shared) kino.shared.set("resenas", resenas()); }
+  catch (e) { log("sync reseñas: " + e); }
+}
+function syncPullResenas() {
+  let sr = null;
+  try { if (typeof kino.shared === "object" && kino.shared) sr = kino.shared.get("resenas"); }
+  catch (e) { log("sync reseñas: " + e); }
+  if (!sr || typeof sr !== "object") return;
+  const local = resenas();
+  let changed = false;
+  const claves = Object.keys(sr).slice(0, 200);
+  for (let i = 0; i < claves.length; i++) {
+    const k = claves[i];
+    const v = sr[k];
+    if (!v || typeof v !== "object" || typeof v.text !== "string" || !fuenteDeUrl(k)) continue;
+    const l = local[k];
+    if (l && (l.ts || 0) >= (v.ts || 0)) continue;
+    local[k] = { text: v.text.slice(0, 2000), ts: v.ts || 0 };
+    changed = true;
+  }
+  if (changed) { setJson("resenas", local); syncPushResenas(); }
+}
+
+// ------------------------------------------------- v0.4.49 — la nube propia
+// Respaldo de favoritos y reseñas en un repositorio del usuario en
+// GitHub: sobrevive a las reinstalaciones del plugin (el espacio
+// compartido de Kino viaja entre aparatos VINCULADOS, pero no devuelve
+// lo perdido al reinstalar). Cada aparato lleva su propio token
+// (fine-grained, permiso Contents: lectura y escritura, SOLO ese
+// repo). Al abrir el plugin se baja y se une lo que falte; al cambiar
+// algo se sube la lista completa. HONESTO: el último aparato que sube
+// manda — si dos aparatos cambian cosas a la vez sin abrirse entre
+// medias, el cambio más nuevo en la nube puede taparse; «Sincronizar
+// ahora» (baja y vuelve a subir) lo deja derecho.
+const GH_API = "https://api.github.com";
+const GH_RUTA = "/repos/REPO/contents/data/mangatrack.json";
+
+function ghCfg() {
+  const c = getJson("ghSync", null);
+  return c && typeof c === "object" && c.token && c.repo ? c : null;
+}
+function ghActiva() {
+  const c = ghCfg();
+  return !!(c && c.on);
+}
+function ghHeaders(cfg) {
+  return { Accept: "application/vnd.github+json",
+    Authorization: "Bearer " + cfg.token,
+    "X-GitHub-Api-Version": "2022-11-28" };
+}
+function ghUrl(cfg) {
+  return GH_API + GH_RUTA.replace("REPO",
+    String(cfg.repo).replace(/[^a-zA-Z0-9_.\-/]/g, ""));
+}
+// El texto del respaldo viaja como base64: aquí el ida y vuelta en
+// UTF-8 de verdad (los emojis de una reseña son 4 bytes y un par de
+// sustitutos — se codifican bien o GitHub devolvería basura).
+function b64DeTexto(txt) {
+  const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const bytes = [];
+  for (let i = 0; i < txt.length; i++) {
+    const c = txt.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < txt.length) {
+      const c2 = txt.charCodeAt(i + 1);
+      if (c2 >= 0xDC00 && c2 <= 0xDFFF) {
+        const cp = 0x10000 + ((c - 0xD800) << 10) + (c2 - 0xDC00);
+        bytes.push(0xF0 | (cp >> 18), 0x80 | ((cp >> 12) & 63),
+          0x80 | ((cp >> 6) & 63), 0x80 | (cp & 63));
+        i++;
+        continue;
+      }
+    }
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) bytes.push(0xC0 | (c >> 6), 0x80 | (c & 63));
+    else bytes.push(0xE0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+    out += T.charAt(b0 >> 2) + T.charAt(((b0 & 3) << 4) | (b1 >> 4));
+    out += i + 1 < bytes.length ? T.charAt(((b1 & 15) << 2) | (b2 >> 6)) : "=";
+    out += i + 2 < bytes.length ? T.charAt(b2 & 63) : "=";
+  }
+  return out;
+}
+function textoDeBytes(bytes) {
+  let out = "";
+  let i = 0;
+  while (i < bytes.length) {
+    const b = bytes[i];
+    let cp = 0, n = 1;
+    if (b < 0x80) cp = b;
+    else if ((b & 0xE0) === 0xC0) { cp = b & 31; n = 2; }
+    else if ((b & 0xF0) === 0xE0) { cp = b & 15; n = 3; }
+    else { cp = b & 7; n = 4; }
+    for (let k = 1; k < n && i + k < bytes.length; k++) cp = (cp << 6) | (bytes[i + k] & 63);
+    if (cp > 0xFFFF) {
+      cp -= 0x10000;
+      out += String.fromCharCode(0xD800 + (cp >> 10), 0xDC00 + (cp & 1023));
+    } else out += String.fromCharCode(cp);
+    i += n;
+  }
+  return out;
+}
+async function ghLeer(cfg) {
+  const r = await kino.fetch(ghUrl(cfg), { headers: ghHeaders(cfg) });
+  if (r.status === 404) return { nuevo: true };
+  if (!r.ok) throw new Error("GitHub respondió HTTP " + r.status);
+  const j = JSON.parse(await r.text());
+  if (!j || typeof j !== "object") return { nuevo: true };
+  let datos = null;
+  try {
+    datos = JSON.parse(textoDeBytes(deB64(String(j.content || "").replace(/[^A-Za-z0-9+/=]/g, ""))));
+  } catch (e) { log("sync nube: respaldo ilegible: " + ((e && e.message) || e)); }
+  return { sha: j.sha, datos: datos };
+}
+async function ghEscribir(cfg, datos, sha) {
+  const cuerpo = { message: "MangaTrack: " + (datos.favs ? datos.favs.length : 0) + " favoritos y "
+      + (datos.resenas ? Object.keys(datos.resenas).length : 0) + " reseñas",
+    content: b64DeTexto(JSON.stringify(datos)) };
+  if (sha) cuerpo.sha = sha;
+  const r = await kino.fetch(ghUrl(cfg), { method: "PUT", headers: ghHeaders(cfg),
+    body: { json: cuerpo } });
+  if (!r.ok) throw new Error("GitHub respondió HTTP " + r.status);
+  return true;
+}
+// Baja el respaldo y UNE lo que falte (favoritos sin repetir; reseñas
+// con la más reciente por serie). No borra nada local.
+async function ghBajar() {
+  const cfg = ghCfg();
+  if (!cfg) throw new Error("Configura primero el token y el repositorio (Sincronizar).");
+  const r = await ghLeer(cfg);
+  const remoto = r.datos && typeof r.datos === "object" ? r.datos : {};
+  const local = favs();
+  const have = {};
+  for (let i = 0; i < local.length; i++) have[local[i].url] = 1;
+  const rf = Array.isArray(remoto.favs) ? remoto.favs : [];
+  let nuevosF = 0;
+  for (let i = 0; i < rf.length && i < 200; i++) {
+    const f = rf[i];
+    if (!favValido(f) || have[f.url]) continue;
+    local.push({ url: f.url, title: String(f.title || "").slice(0, 200),
+      poster: typeof f.poster === "string" ? f.poster.slice(0, 500) : "" });
+    have[f.url] = 1;
+    nuevosF++;
+  }
+  if (local.length > 100) local.length = 100;
+  setJson("favs", local);
+  syncPushFavs();
+  const rr = remoto.resenas && typeof remoto.resenas === "object" ? remoto.resenas : {};
+  const lr = resenas();
+  let nuevasR = 0;
+  const rk = Object.keys(rr).slice(0, 200);
+  for (let i = 0; i < rk.length; i++) {
+    const k = rk[i];
+    const v = rr[k];
+    if (!v || typeof v !== "object" || typeof v.text !== "string" || !fuenteDeUrl(k)) continue;
+    const l = lr[k];
+    if (l && (l.ts || 0) >= (v.ts || 0)) continue;
+    lr[k] = { text: v.text.slice(0, 2000), ts: v.ts || 0 };
+    nuevasR++;
+  }
+  if (nuevasR) { setJson("resenas", lr); syncPushResenas(); }
+  return { favs: nuevosF, resenas: nuevasR };
+}
+// Sube la lista completa (borra en la nube lo que ya no esté aquí).
+async function ghSubir() {
+  const cfg = ghCfg();
+  if (!cfg) throw new Error("Configura primero el token y el repositorio (Sincronizar).");
+  const r = await ghLeer(cfg);
+  const datos = { v: 1, ts: Date.now(), favs: favs(), resenas: resenas() };
+  await ghEscribir(cfg, datos, r.sha);
+  return datos;
 }
 
 // Capítulos de una serie: enlaces /leer/<id>/<slug>/<número>/
@@ -4414,6 +4624,9 @@ function detailTree(state) {
   const meta = d.meta || {};
   const chapters = Array.isArray(d.chapters) ? d.chapters : [];
   const hInfo = hist()[d.url];
+  // v0.4.49 — la reseña propia de la serie, si ya la escribió.
+  const res = resenaDe(d.url);
+  const resTxt = res ? res.text : "";
   // El historial guarda el índice ABSOLUTO del capítulo (independiente
   // de la ventana que se esté viendo); "Continuar" lo abre aunque esté
   // en otra ventana de la lista.
@@ -4454,6 +4667,10 @@ function detailTree(state) {
           labelText: "Llevas " + (hIdx + 1) + " de " + capsTotal + " capítulos",
           labelTextEn: (hIdx + 1) + " of " + capsTotal + " chapters" } : null,
         meta.overview ? { type: "Text", text: meta.overview.slice(0, 1500), style: "p", color: "muted" } : null,
+        // v0.4.49 — la reseña propia, a la vista bajo la sinopsis.
+        resTxt ? { type: "Text", text: "Tu reseña: " + resTxt.slice(0, 600),
+          textEn: "Your review: " + resTxt.slice(0, 600),
+          style: "p", color: "muted" } : null,
         {
           type: "Row", gap: 8, wrap: true, children: [
             { type: "ElevatedButton", key: "start", icon: "play",
@@ -4474,6 +4691,12 @@ function detailTree(state) {
             { type: "ElevatedButton", key: "colAddBtn", icon: "add",
               labelText: "Añadir a colección", labelTextEn: "Add to collection",
               onPressed: "colAdd" },
+            // v0.4.49 — la reseña propia: escribir, editar o borrar lo
+            // que la persona opina de la serie.
+            { type: "ElevatedButton", key: "resBtn", icon: resTxt ? "edit" : "rate_review",
+              labelText: resTxt ? "Editar reseña" : "Mi reseña",
+              labelTextEn: resTxt ? "Edit review" : "My review",
+              onPressed: "resenaAbrir" },
           ],
         },
       ].filter(Boolean) },
@@ -5326,6 +5549,9 @@ export async function screen(ev) {
     }
     if (route.name === "vincular") return vincularTree();
     if (route.name === "favs") return favsTree();
+    // v0.4.49 — la reseña de la serie abierta y la sincronización.
+    if (route.name === "resena") return resenaTree(state);
+    if (route.name === "sync") return syncTree(state);
     // v0.4.21 — las colecciones del corazón flotante.
     if (route.name === "colecciones") return coleccionesTree();
     if (route.name === "coleccion") return coleccionTree(String((route.params && route.params.nombre) || ""));
@@ -5374,6 +5600,12 @@ export async function screenEvent(ev) {
       limpiaAlmacen();
       syncPullFavs();
       syncPullHist();
+      syncPullResenas();
+      // v0.4.49 — con la nube propia activada, al abrir se baja el
+      // respaldo y se une lo que falte (sin bloquear la entrada: si
+      // falla, queda en el Registro y la pantalla abre igual).
+      try { if (ghActiva()) await ghBajar(); }
+      catch (e) { log("sync bajar: " + ((e && e.message) || e)); }
       const r = ev.route || {};
       if (r.name === "detail") {
         const url = routeUrl(r);
@@ -5391,6 +5623,61 @@ export async function screenEvent(ev) {
     }
     if (name === "goSearch") return { route: { push: "search" } };
     if (name === "favsOpen") return { route: { push: "favs" } };
+    // v0.4.49 — la nube propia y las reseñas.
+    if (name === "syncAbrir") return { route: { push: "sync" } };
+    if (name === "resenaAbrir") return { route: { push: "resena" } };
+    if (name === "syncGuardar") {
+      const token = String((ev.value && ev.value.ghToken) || "").trim();
+      const repo = String((ev.value && ev.value.ghRepo) || "").trim();
+      if (!token || !repo) return { toast: "Pon el token y el repositorio." };
+      const cfg = { token: token, repo: repo, on: true };
+      try {
+        const r = await kino.fetch("https://api.github.com/repos/" +
+          repo.replace(/[^a-zA-Z0-9_.\-/]/g, ""), { headers: ghHeaders(cfg) });
+        if (!r.ok) return { toast: "GitHub respondió HTTP " + r.status + " (¿token o repo?): revisa los datos." };
+        setJson("ghSync", cfg);
+        setJson("ghSyncTs", Date.now());
+        return { state: { syncTk: Date.now() },
+          toast: "✓ Conexión lista: sincronización activada." };
+      } catch (e) { return { toast: "No pude conectar con GitHub: " + ((e && e.message) || e) }; }
+    }
+    if (name === "syncOnOff") {
+      const c = ghCfg();
+      if (!c) return { toast: "Primero guarda el token y el repositorio." };
+      c.on = !c.on;
+      setJson("ghSync", c);
+      return { state: { syncTk: Date.now() },
+        toast: c.on ? "Sincronización activada." : "Sincronización desactivada." };
+    }
+    if (name === "syncAhora") {
+      if (!ghActiva()) return { toast: "Activa primero la sincronización." };
+      try {
+        const r = await ghBajar();
+        await ghSubir();
+        setJson("ghSyncTs", Date.now());
+        return { state: { favTk: Date.now(), revTk: Date.now(), syncTk: Date.now() },
+          toast: "✓ Sincronizado con GitHub" +
+            (r && r.favs ? " (" + r.favs + " favoritos traídos)" : "") + "." };
+      } catch (e) { return { toast: "No pude sincronizar: " + ((e && e.message) || e) }; }
+    }
+    if (name === "resenaSave") {
+      const d = state.detail;
+      if (!d || !d.url) return { toast: "Abre una serie primero." };
+      const ok = resenaGuardar(d.url, (ev.value && ev.value.resTxt) || "");
+      if (ok) { try { if (ghActiva()) await ghSubir(); }
+        catch (e) { log("sync subir: " + ((e && e.message) || e)); } }
+      return { state: { revTk: Date.now() }, route: { pop: true },
+        toast: ok ? "✓ Reseña guardada." : "El almacén del plugin está lleno: no pude guardarla." };
+    }
+    if (name === "resenaBorrar") {
+      const d = state.detail;
+      if (d && d.url) {
+        resenaGuardar(d.url, "");
+        try { if (ghActiva()) await ghSubir(); }
+        catch (e) { log("sync subir: " + ((e && e.message) || e)); }
+      }
+      return { state: { revTk: Date.now() }, route: { pop: true }, toast: "Reseña borrada." };
+    }
     // v0.4.21 — el corazón: abrir colecciones, crearlas, borrarlas,
     // meter y sacar series, y elegirla desde la página de una serie.
     if (name === "colsOpen") return { route: { push: "colecciones" } };
@@ -6074,6 +6361,10 @@ export async function screenEvent(ev) {
       if (f.length > 100) f.length = 100;
       setJson("favs", f);
       syncPushFavs();
+      // v0.4.49 — con la nube propia activada, todo cambio de
+      // favoritos sube el respaldo (la lista completa).
+      try { if (ghActiva()) await ghSubir(); }
+      catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       return { state: { favTk: Date.now() },
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
     }
@@ -6306,6 +6597,17 @@ function favsTree() {
         labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
       actions: [] },
     body: { type: "SingleChildScrollView", key: "favsBody", children: [{ type: "Column", children: [
+      // v0.4.49 — la nube propia al alcance: respaldo de esta lista.
+      { type: "Card", key: "favsSync", flush: true,
+        onTap: { event: "syncAbrir" },
+        children: [{ type: "Row", padding: 16, gap: 12, children: [
+          { type: "Icon", name: "sync", color: "muted" },
+          { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+            { type: "Text", text: "Sincronizar con GitHub", textEn: "Sync with GitHub", style: "h4" },
+            { type: "Text", text: "Respaldo en tu nube: los favoritos y reseñas sobreviven a las reinstalaciones",
+              textEn: "Backed up to your cloud: favourites and reviews survive reinstalls",
+              style: "caption", color: "muted" },
+          ] }] }] },
       mf.length
         ? { type: "ListView", key: "gridFavsT", columns: { compact: 3, medium: 4, expanded: 6 },
             items: mf.map(function (it) { return favCard(it); }) }
@@ -6316,6 +6618,97 @@ function favsTree() {
               style: "caption", color: "muted", padding: 16 },
           ] },
     ] }] },
+  };
+}
+
+// ------------------------------------------------- v0.4.49 — mis reseñas
+// La página de la reseña de la serie abierta: escribir, guardar y
+// borrar lo que la persona opina de cada manga.
+function resenaTree(state) {
+  const d = (state && state.detail) || {};
+  const url = d.url || "";
+  const r = url ? resenaDe(url) : null;
+  const titulo = (d.meta && d.meta.title) || "Serie";
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barRes", title: "Mi reseña", titleEn: "My review",
+      leading: { type: "IconButton", key: "backFromRes", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "resBody", children: [{ type: "Column", children: [
+      { type: "Text", text: titulo, textEn: titulo, style: "h3", padding: 16 },
+      { type: "Text",
+        text: "Tu opinión de la serie. Se guarda en este aparato, viaja a tus aparatos vinculados y, con la sincronización activada, queda respaldada en tu nube de GitHub.",
+        textEn: "Your take on the series. Saved on this device, shared with your linked devices and, with sync on, backed up to your GitHub cloud.",
+        style: "caption", color: "muted", padding: 16 },
+      { type: "Form", key: "resForm", onSubmitted: "resenaSave", gap: 8, padding: 16, children: [
+        { type: "TextField", key: "resTxt",
+          labelText: "Tu reseña", labelTextEn: "Your review",
+          hintText: "P. ej. Buena historia, dibujo excelente…", hintEn: "e.g. Good story, great art…",
+          value: r ? r.text : "" },
+        { type: "ElevatedButton", icon: "check",
+          labelText: "Guardar", labelTextEn: "Save", submit: true },
+      ] },
+      r ? { type: "TextButton", key: "resBor", icon: "delete",
+        labelText: "Borrar reseña", labelTextEn: "Delete review",
+        onPressed: { event: "resenaBorrar" } } : null,
+    ].filter(Boolean) }] },
+  };
+}
+
+// ------------------------------------------------- v0.4.49 — sincronizar
+// La nube propia de GitHub: el respaldo de favoritos y reseñas en un
+// repositorio del usuario. Se configura una vez por aparato con un
+// token fine-grained (Contents: lectura y escritura, SOLO ese repo).
+function syncTree(state) {
+  const c = getJson("ghSync", null) || {};
+  const ts = getJson("ghSyncTs", 0);
+  const hace = ts ? Math.max(1, Math.round((Date.now() - ts) / 60000)) : 0;
+  return {
+    type: "Scaffold",
+    appBar: { type: "AppBar", key: "barSync", title: "Sincronizar", titleEn: "Sync",
+      leading: { type: "IconButton", key: "backFromSync", icon: "arrow_back",
+        labelText: "Atrás", labelTextEn: "Back", onPressed: { event: "popBack" } },
+      actions: [] },
+    body: { type: "SingleChildScrollView", key: "syncBody", children: [{ type: "Column", children: [
+      { type: "Text", text: "Tu nube de respaldo (GitHub)", textEn: "Your backup cloud (GitHub)",
+        style: "h3", padding: 16 },
+      { type: "Text",
+        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en un repositorio tuyo de GitHub, para que sobrevivan aunque reinstales el plugin. Crea un token fine-grained con permiso de Contents (lectura y escritura) SOLO para ese repositorio, pégalo aquí y toca «Guardar y probar».",
+        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own GitHub repository, so they survive a plugin reinstall. Create a fine-grained token with Contents (read and write) access for THAT repository only, paste it here and tap «Save and test».",
+        style: "caption", color: "muted", padding: 16 },
+      { type: "Form", key: "syncForm", onSubmitted: "syncGuardar", gap: 8, padding: 16, children: [
+        { type: "TextField", key: "ghToken",
+          labelText: "Token de GitHub", labelTextEn: "GitHub token",
+          hintText: "github_pat_…", hintEn: "github_pat_…",
+          value: c.token || "" },
+        { type: "TextField", key: "ghRepo",
+          labelText: "Repositorio (usuario/repo)", labelTextEn: "Repository (user/repo)",
+          hintText: "P. ej. Susejing/kino-mangatrack", hintEn: "e.g. Susejing/kino-mangatrack",
+          value: c.repo || "" },
+        { type: "ElevatedButton", icon: "cloud_done",
+          labelText: "Guardar y probar", labelTextEn: "Save and test", submit: true },
+      ] },
+      c.token && c.repo ? { type: "Card", key: "syncOnOff", flush: true,
+        onTap: { event: "syncOnOff" },
+        children: [{ type: "Row", padding: 16, gap: 12, children: [
+          { type: "Icon", name: c.on ? "sync" : "sync_disabled", color: "muted" },
+          { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+            { type: "Text", text: "Sincronización: " + (c.on ? "ACTIVADA" : "DESACTIVADA"),
+              textEn: "Sync: " + (c.on ? "ON" : "OFF"), style: "h4" },
+            { type: "Text", text: "Tocar la " + (c.on ? "desactiva" : "activa"),
+              textEn: "Tap to turn " + (c.on ? "it off" : "it on"),
+              style: "caption", color: "muted" },
+          ] }] }] } : null,
+      { type: "Column", padding: 16, children: [
+        { type: "ElevatedButton", key: "syncAhora", icon: "sync",
+          labelText: "Sincronizar ahora", labelTextEn: "Sync now",
+          onPressed: "syncAhora", enabled: !!(c.token && c.repo && c.on) } ] },
+      { type: "Text",
+        text: hace ? "Última sincronización: hace " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + ". Al abrir el plugin se baja el respaldo y todo cambio sube solo." : "",
+        textEn: hace ? "Last sync: " + (hace < 60 ? hace + " min" : Math.round(hace / 60) + " h") + " ago. On open the backup is pulled and every change uploads on its own." : "",
+        style: "caption", color: "muted", padding: 16 },
+    ].filter(Boolean) }] },
   };
 }
 
