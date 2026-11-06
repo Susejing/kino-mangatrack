@@ -15,6 +15,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.43 — EL INICIO DE MANHWAWEB, COMO SU PÁGINA. La v0.4.42 puso el
+// CATÁLOGO al día, pero las capturas de la persona comparaban el
+// INICIO: los rieles seguían siendo «Biblioteca» (alfabético) y
+// «Publicándose». La página enseña «Nuevas Obras» y «Nuevos
+// Capítulos», que la API trae en dos endpoints propios: /manhwa/nuevos
+// (las recién creadas) y /latest/new-manhwa (cada subida con su
+// capítulo y el grupo que la subió). El Inicio de ManhwaWeb ahora
+// muestra esas dos secciones con esos nombres, con «Cap. N · grupo»
+// bajo cada tarjeta de nuevos capítulos; las listas son finitas (la
+// API no les da páginas), así que sin «Cargar más» — igual que la
+// página. El catálogo con sus filtros (género, demografía, orden)
+// queda como en la 0.4.42.
 // v0.4.42 — EL CATÁLOGO DE LAS OTRAS CASAS, AL DÍA. Dos pedidos de la
 // persona: (1) LectorXd con la casilla de Género que tiene
 // LeerCapitulo — su web trae la lista en la misma página del catálogo
@@ -413,7 +425,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.42";
+const VERSION = "0.4.43";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -867,6 +879,48 @@ function mwCards(j, max) {
       label: nc ? nc + " caps" : "" });
   }
   log("MW tarjetas: " + out.length);
+  return out;
+}
+
+// v0.4.43 — «Nuevas Obras» de la página de ManhwaWeb: su endpoint
+// propio (/manhwa/nuevos) trae las recién creadas con su nombre en
+// español; las +18 quedan fuera, como en toda la fuente.
+function mwNuevas(j, max) {
+  const arr = (j && (j.utimos_mangas_creados || j.ultimos_mangas_creados)) || [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    if (String(m._erotico || "") === "si") continue;
+    const id = String(m.real_id || m._id || "");
+    const t = clean(String(m.the_real_name || m.name_esp || ""));
+    if (!id || !t || seen[id]) continue;
+    seen[id] = 1;
+    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m._imagen || "") });
+  }
+  log("MW nuevas obras: " + out.length);
+  return out;
+}
+
+// v0.4.43 — «Nuevos Capítulos» de la página: /latest/new-manhwa trae
+// cada subida con su capítulo y el grupo que lo subió; de ahí la
+// etiqueta de la tarjeta. La lista segura es manhwas._manhwas.
+function mwUltimos(j, max) {
+  const arr = (j && j.manhwas && j.manhwas._manhwas) || [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    const id = String(m.id_manhwa || m.id_rel || "");
+    const t = clean(String(m.name_manhwa || ""));
+    if (!id || !t || seen[id]) continue;
+    seen[id] = 1;
+    const cap = parseInt(m.chapter, 10) || 0;
+    const gru = clean(String(m.gru_name || ""));
+    out.push({ url: "/mw/manhwa/" + id + "/", title: t, poster: String(m.img || ""),
+      label: (cap ? "Cap. " + cap : "") + (gru ? (cap ? " · " : "") + gru : "") });
+  }
+  log("MW nuevos capítulos: " + out.length);
   return out;
 }
 
@@ -3930,13 +3984,15 @@ async function homeTree() {
     try { await msPrecarga(populares, 8); await msPrecarga(recientes, 8); }
     catch (e) { log("MS portadas home: " + ((e && e.message) || e)); }
   } else if (f.id === "manhwaweb") {
-    // v0.4.28 — ManhwaWeb por su API: la biblioteca entera (orden de la
-    // API) y las que están publicándose; ambas pagan páginas de verdad.
-    titPop = "Biblioteca de ManhwaWeb"; titPopEn = "ManhwaWeb library";
-    titRec = "Publicándose en ManhwaWeb"; titRecEn = "Ongoing on ManhwaWeb";
-    try { populares = mwCards(await mwGet(mwLib("", "", "", 0)), 20); } catch (e) { log("MW home pop: " + ((e && e.message) || e)); }
-    try { recientes = mwCards(await mwGet(mwLib("publicandose", "", "", 0)), 20); } catch (e) { log("MW home rec: " + ((e && e.message) || e)); }
-    masPop = true; masRec = true;
+    // v0.4.43 — el Inicio de ManhwaWeb como su página: «Nuevas Obras»
+    // (/manhwa/nuevos) y «Nuevos Capítulos» (/latest/new-manhwa, con el
+    // capítulo y el grupo que lo subió). Las dos listas son finitas en
+    // la API (no pagina): sin «Cargar más», como en la página.
+    titPop = "Nuevas obras de ManhwaWeb"; titPopEn = "New works on ManhwaWeb";
+    titRec = "Nuevos capítulos de ManhwaWeb"; titRecEn = "New chapters on ManhwaWeb";
+    try { populares = mwNuevas(await mwGet("/manhwa/nuevos"), 20); } catch (e) { log("MW home nuevas: " + ((e && e.message) || e)); }
+    try { recientes = mwUltimos(await mwGet("/latest/new-manhwa"), 20); } catch (e) { log("MW home caps: " + ((e && e.message) || e)); }
+    masPop = false; masRec = false;
     // v0.4.29 — portadas de verdad: se bajan con presentación y se
     // guardan convertidas para el dibujado (caída suave si el muro las
     // niega: quedan con su URL normal y su salvapantallas).
