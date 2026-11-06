@@ -15,6 +15,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.50 — SOLO EL TOKEN. Petición de la persona: que cada usuario
+// pegue únicamente su token y nada más. GitHub le dice al plugin a
+// cuáles repos alcanza ese token (uno fine-grained de un solo repo
+// trae exactamente ese): si el campo repo va VACÍO, «Guardar y
+// probar» los lista, toma el único alcanzable o el que diga
+// «mangatrack», y si no hay ninguno intenta CREAR uno privado
+// kino-mangatrack (posible solo si el token trae Administración);
+// si tampoco puede, el mensaje honesto dice qué hacer a mano. El
+// campo repo queda OPCIONAL para quien quiera otro nombre.
+// ANTES: v0.4.49 reseñas y nube propia; v0.4.48 presupuesto de
+// portadas.
 // v0.4.49 — LAS RESEÑAS Y LA NUBE PROPIA. Dos peticiones de la
 // persona: (1) comentar y reseñar cada manga — página «Mi reseña» en
 // cada serie (botón en el detalle, texto visible bajo la sinopsis),
@@ -506,7 +517,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.49";
+const VERSION = "0.4.50";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5629,21 +5640,54 @@ export async function screenEvent(ev) {
     if (name === "syncGuardar") {
       const token = String((ev.value && ev.value.ghToken) || "").trim();
       const repo = String((ev.value && ev.value.ghRepo) || "").trim();
-      if (!token || !repo) return { toast: "Pon el token y el repositorio." };
-      const cfg = { token: token, repo: repo, on: true };
+      if (!token) return { toast: "Pega tu token de GitHub." };
+      const cfg = { token: token, repo: repo.replace(/[^a-zA-Z0-9_.\-/]/g, ""), on: true };
       try {
-        const r = await kino.fetch("https://api.github.com/repos/" +
-          repo.replace(/[^a-zA-Z0-9_.\-/]/g, ""), { headers: ghHeaders(cfg) });
+        // v0.4.50 — SOLO EL TOKEN: sin repo escrito, GitHub cuenta a
+        // cuáles repos alcanza el token (uno fine-grained de un solo
+        // repo trae exactamente ese). Un solo alcanzable → ese; de
+        // varios, el primero que diga «mangatrack»; y si no hay
+        // ninguno, se intenta CREAR el repo privado kino-mangatrack
+        // (posible solo si el token trae permiso de Administración).
+        if (!cfg.repo) {
+          const rl = await kino.fetch("https://api.github.com/user/repos?per_page=100&sort=created",
+            { headers: ghHeaders(cfg) });
+          if (!rl.ok) return { toast: "GitHub respondió HTTP " + rl.status + " al buscar tu repositorio: revisa el token o escribe el repo a mano." };
+          let lista = [];
+          try { lista = JSON.parse(await rl.text()) || []; } catch (e2) { lista = []; }
+          if (!Array.isArray(lista)) lista = [];
+          let elegido = "";
+          if (lista.length === 1) elegido = String(lista[0].full_name || "");
+          else for (let i = 0; i < lista.length; i++) {
+            if (/mangatrack/i.test(String(lista[i].name || ""))) {
+              elegido = String(lista[i].full_name || ""); break; }
+          }
+          if (!elegido) {
+            const cr = await kino.fetch("https://api.github.com/user/repos",
+              { method: "POST", headers: ghHeaders(cfg),
+                body: { json: { name: "kino-mangatrack", private: true,
+                  description: "Respaldo de MangaTrack" } } });
+            if (cr.ok) {
+              let nuevo = {};
+              try { nuevo = JSON.parse(await cr.text()) || {}; } catch (e2) { nuevo = {}; }
+              elegido = String(nuevo.full_name || "");
+            }
+          }
+          if (!elegido) return { toast: "El token no alcanza ningún repositorio: crea en GitHub un repo (p. ej. kino-mangatrack) con permiso Contents en el token, o escribe su nombre a mano." };
+          cfg.repo = elegido;
+        }
+        const r = await kino.fetch("https://api.github.com/repos/" + cfg.repo,
+          { headers: ghHeaders(cfg) });
         if (!r.ok) return { toast: "GitHub respondió HTTP " + r.status + " (¿token o repo?): revisa los datos." };
         setJson("ghSync", cfg);
         setJson("ghSyncTs", Date.now());
         return { state: { syncTk: Date.now() },
-          toast: "✓ Conexión lista: sincronización activada." };
+          toast: "✓ Conexión lista: respaldo en " + cfg.repo + "." };
       } catch (e) { return { toast: "No pude conectar con GitHub: " + ((e && e.message) || e) }; }
     }
     if (name === "syncOnOff") {
       const c = ghCfg();
-      if (!c) return { toast: "Primero guarda el token y el repositorio." };
+      if (!c) return { toast: "Primero guarda tu token." };
       c.on = !c.on;
       setJson("ghSync", c);
       return { state: { syncTk: Date.now() },
@@ -6674,8 +6718,8 @@ function syncTree(state) {
       { type: "Text", text: "Tu nube de respaldo (GitHub)", textEn: "Your backup cloud (GitHub)",
         style: "h3", padding: 16 },
       { type: "Text",
-        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en un repositorio tuyo de GitHub, para que sobrevivan aunque reinstales el plugin. Crea un token fine-grained con permiso de Contents (lectura y escritura) SOLO para ese repositorio, pégalo aquí y toca «Guardar y probar».",
-        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own GitHub repository, so they survive a plugin reinstall. Create a fine-grained token with Contents (read and write) access for THAT repository only, paste it here and tap «Save and test».",
+        text: "Los favoritos y las reseñas ya viajan entre tus aparatos vinculados; aquí los respaldas además en un repositorio tuyo de GitHub, para que sobrevivan aunque reinstales el plugin. Solo pega tu token fine-grained (permiso Contents: lectura y escritura) y toca «Guardar y probar»: el repositorio se encuentra solo.",
+        textEn: "Favourites and reviews already travel between your linked devices; here you also back them up to your own GitHub repository, so they survive a plugin reinstall. Just paste your fine-grained token (Contents: read & write) and tap «Save and test»: the repository is found on its own.",
         style: "caption", color: "muted", padding: 16 },
       { type: "Form", key: "syncForm", onSubmitted: "syncGuardar", gap: 8, padding: 16, children: [
         { type: "TextField", key: "ghToken",
@@ -6683,8 +6727,8 @@ function syncTree(state) {
           hintText: "github_pat_…", hintEn: "github_pat_…",
           value: c.token || "" },
         { type: "TextField", key: "ghRepo",
-          labelText: "Repositorio (usuario/repo)", labelTextEn: "Repository (user/repo)",
-          hintText: "P. ej. Susejing/kino-mangatrack", hintEn: "e.g. Susejing/kino-mangatrack",
+          labelText: "Repositorio (opcional)", labelTextEn: "Repository (optional)",
+          hintText: "Se encuentra solo — llénalo solo si quieres otro", hintEn: "Found on its own — fill only to use another",
           value: c.repo || "" },
         { type: "ElevatedButton", icon: "cloud_done",
           labelText: "Guardar y probar", labelTextEn: "Save and test", submit: true },
