@@ -16,6 +16,19 @@
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
 // v0.4.58 — MI ANILIST. La petición: «todo lo que he leído y tengo en
+// v0.4.59 — LA SINCRONIZACIÓN VUELVE A AVISAR. La puerta "manga" de
+// AniTrack murió en silencio en su 0.13.0: el resumen de su manifiesto
+// creció a 168 caracteres y el límite del motor es 120 — un bloque de
+// enhancements que rompe una regla se descarta ENTERO (docs/protocol.md),
+// así que markChapter y progress respondían not_declared y este plugin
+// tragaba el error sin decir nada: ni toasts ni marcas en AniList/MAL.
+// Tres arreglos: (1) AniTrack 0.13.1 acorta su resumen (la puerta
+// revive — esta versión LO NECESITA para volver a sincronizar);
+// (2) «whoami» entra por fin en consumes.anitrack.calls: sin
+// declararla, el botón «Tomar mi nombre de AniTrack» de Mi AniList
+// también daba not_declared; (3) si la puerta rechaza un aviso por
+// cualquier otro motivo, el toast ahora lo dice en vez de callar —
+// nunca más un fallo mudo.
 // mi cuenta de AniList, bien organizado y sincronizado con mis
 // colecciones — para mí y para quien apenas empieza». Las listas de
 // cada cuenta son PÚBLICAS: con solo el nombre de usuario (escrito a
@@ -647,7 +660,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.58";
+const VERSION = "0.4.59";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -8379,7 +8392,11 @@ function avisarAnitrack(d, ch, fSer) {
           setJson("avisoAnitrackFalta", 1);
           return "AniTrack no está instalado o está apagado: el capítulo no quedó registrado en tus listas.";
         }
-        return null;
+        // v0.4.59 — nunca más un fallo mudo: si la puerta rechaza el
+        // aviso (not_declared, bad_input, rate_limited, timeout…), la
+        // persona se entera de que el capítulo no quedó registrado —
+        // el porqué exacto queda en el Registro (log "anitrack <código>").
+        return "AniTrack no registró este capítulo (detalle en su Registro).";
       });
   } catch (e) {
     log("anitrack aviso: " + ((e && e.message) || e));
