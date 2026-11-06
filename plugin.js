@@ -15,6 +15,18 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.56 — PORTADAS LIGERAS EN «PARA TI». En el teléfono de la
+// persona el Inicio se quedó con todas las portadas cargando para
+// siempre tras usar «Para ti»: el riel y la pantalla Descubrir pedían
+// la portada extraLarge de AniList (hasta ~1 MB por manga) y Kino
+// baja las imágenes de 4 en 4, así que la fila de descargas se atascó
+// y TODAS las imágenes de la pantalla quedaron esperando detrás —
+// incluso las de la fuente, que siempre cargaron. Ahora las
+// sugerencias piden la portada medium (~30 KB: el mismo dibujo con
+// 20 veces menos peso), el riel muestra 8 en vez de 12 y la caché de
+// «Para ti» se rearma sola al actualizar (marca pv: 2) para soltar
+// las URLs pesadas que quedaron guardadas. Sin hosts ni
+// capacidades nuevas.
 // v0.4.55 — PARA TI: EL DESCUBRIMIENTO POR GUSTO. La persona pidió que
 // descubrir mangas fuera más cómodo e intuitivo: sugerencias basadas
 // en SUS favoritos y demás. La base son sus series (favoritos peso 3,
@@ -600,7 +612,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.55";
+const VERSION = "0.4.56";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -7243,7 +7255,7 @@ async function alBuscar(q, page, order, conRuta, anadir) {
 // muestra lo de moda mientras tanto.
 const PARA_TI_TTL = 43200000; // 12 h
 const PARA_CAMPOS = "id idMal title { romaji english native } synonyms " +
-  "coverImage { extraLarge } format chapters averageScore";
+  "coverImage { medium extraLarge } format chapters averageScore";
 
 async function paraTiJson(query, variables) {
   const r = await kino.fetch("https://graphql.anilist.co", { method: "POST",
@@ -7307,13 +7319,13 @@ async function paraTiComputar(forzar) {
   const sig = base.map((x) => x.al).join(",");
   const cache = getJson("paraTi", null);
   const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
-  if (!forzar && cache && cache.sig === sig && Array.isArray(cache.items) &&
+  if (!forzar && cache && cache.pv === 2 && cache.sig === sig && Array.isArray(cache.items) &&
       (cache.motivo === "sin-vinculos" ? edad < 3600000 : edad < PARA_TI_TTL)) {
     return { items: cache.items, motivo: cache.motivo || "" };
   }
   if (!base.length) {
     const tendencias = await paraTiTendencias();
-    setJson("paraTi", { ts: Date.now(), sig: sig, base: 0,
+    setJson("paraTi", { pv: 2, ts: Date.now(), sig: sig, base: 0,
       motivo: "sin-vinculos", items: tendencias });
     return { items: tendencias, motivo: "sin-vinculos" };
   }
@@ -7413,7 +7425,7 @@ async function paraTiComputar(forzar) {
     }
   }
   const recorte = items.slice(0, 24);
-  const okGuardar = setJson("paraTi", { ts: Date.now(), sig: sig, base: base.length,
+  const okGuardar = setJson("paraTi", { pv: 2, ts: Date.now(), sig: sig, base: base.length,
     motivo: "", items: recorte });
   if (!okGuardar) log("para ti sin guardar: almacén lleno");
   return { items: recorte, motivo: "" };
@@ -7438,7 +7450,7 @@ function paraTiItem(r, porque) {
     romaji: String(t.romaji || ""), english: String(t.english || ""),
     native: String(t.native || ""),
     sinonimos: (r.synonyms || []).map(String).slice(0, 8),
-    cover: ((r.coverImage && r.coverImage.extraLarge) || ""),
+    cover: ((r.coverImage && (r.coverImage.medium || r.coverImage.extraLarge)) || ""),
     nota: typeof r.averageScore === "number" ? r.averageScore : null,
     formato: String(r.format || ""),
     caps: (typeof r.chapters === "number" && r.chapters) || 0,
@@ -7465,7 +7477,7 @@ function paraCard(it) {
 // sus tarjetas; si todavía no, la puerta de entrada que las arma.
 function paraTiRail() {
   const p = getJson("paraTi", null);
-  const items = (p && Array.isArray(p.items)) ? p.items.slice(0, 12) : [];
+  const items = (p && Array.isArray(p.items)) ? p.items.slice(0, 8) : [];
   if (items.length >= 3) return [
     { type: "Text", text: "Para ti", textEn: "For you", style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: "railPara", direction: "horizontal", padding: 16,
