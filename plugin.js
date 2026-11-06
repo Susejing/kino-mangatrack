@@ -15,6 +15,11 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.60 — MÁS «CARGAR MÁS DEL SITIO». Los rieles «Recientes» de
+// LectorXd (el catálogo orderBy=recent, el mismo «Ver todo» de su
+// portada) y «Nuevas obras» de ManhwaWeb (la biblioteca ordenada por
+// creación, con las +18 de su lista aparte) ahora traen el botón. Las
+// demás portadas siguen siendo listas fijas del sitio: sin botón.
 // v0.4.58 — MI ANILIST. La petición: «todo lo que he leído y tengo en
 // v0.4.59 — LA SINCRONIZACIÓN VUELVE A AVISAR. La puerta "manga" de
 // AniTrack murió en silencio en su 0.13.0: el resumen de su manifiesto
@@ -660,7 +665,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.59";
+const VERSION = "0.4.60";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4658,7 +4663,8 @@ async function homeTree() {
     // misma llamada (/manhwa/nuevos) trae «Nuevas Obras» (Principal y
     // Adulto +18 juntas) y el top («Lo más leído» y el ranking de
     // grupos scan); /latest/new-manhwa trae «Nuevos capítulos» (las
-    // tres listas, Principal y +18). Todas finitas: sin «Cargar más».
+    // tres listas, Principal y +18). v0.4.60 — «Nuevas obras» ya
+    // pagina (la biblioteca por creación); las demás siguen finitas.
     titPop = "Nuevas obras de ManhwaWeb"; titPopEn = "New works on ManhwaWeb";
     titRec = "Nuevos capítulos de ManhwaWeb"; titRecEn = "New chapters on ManhwaWeb";
     titUpd = "Lo más leído de ManhwaWeb"; titUpdEn = "Most read on ManhwaWeb";
@@ -4678,7 +4684,10 @@ async function homeTree() {
       }
     } catch (e) { log("MW home nuevas: " + ((e && e.message) || e)); }
     try { recientes = mwUltimos(await mwGet("/latest/new-manhwa"), 20); } catch (e) { log("MW home caps: " + ((e && e.message) || e)); }
-    masPop = false; masRec = false;
+    // v0.4.60 — «Nuevas obras» sí tiene más páginas: la biblioteca del
+    // sitio ordenada por creación (el mismo orden de esta portada).
+    // «Nuevos capítulos» y «Lo más leído» siguen siendo listas fijas.
+    masPop = populares.length > 0; masRec = false;
     // v0.4.29 — portadas de verdad: se bajan con presentación y se
     // guardan convertidas para el dibujado (caída suave si el muro las
     // niega: quedan con su URL normal y su salvapantallas).
@@ -4704,6 +4713,11 @@ async function homeTree() {
       populares = cardsLX(html.slice(posP, posR), 24);
       recientes = cardsLX(html.slice(posR), 24);
     }
+    // v0.4.60 — «Recientes» de LectorXd sí tiene más: el sitio le pone
+    // «Ver todo» y abre su catálogo ordenado por recientes (el mismo
+    // orden del riel). «Populares de hoy» es un top fijo de 10: se
+    // queda sin botón, como siempre.
+    if (recientes.length) masRec = true;
     if (!populares.length && !recientes.length) mixtas = cardsLX(html, 40);
     if (!populares.length && !recientes.length) {
       const heads = (html.match(/<h[123][^>]*>[^<]{2,50}/gi) || []).slice(0, 6);
@@ -5731,7 +5745,10 @@ function rielTree(key) {
 // páginas de ESA sección (las consultas de MangaDex, el directorio de
 // MangaOni, el catálogo POST de InManga, las listas de Mangas.in y su
 // feed «lasted»), la siguiente página se pide y se añade a lo ya
-// guardado. Las secciones que no pagina (portadas de LeerCapitulo y
+// guardado. v0.4.60 — se suman «Recientes» de LectorXd (el catálogo
+// orderBy=recent, el mismo «Ver todo» de su portada) y «Nuevas obras»
+// de ManhwaWeb (la biblioteca por creación, con las +18 aparte). Las
+// secciones que no pagina (portadas de LeerCapitulo, el top del día de
 // LectorXd, «Series añadidas», el historial) ni traen el botón.
 async function cargarRiel(key) {
   const r = getJson("riel:" + key, null);
@@ -5760,8 +5777,30 @@ async function cargarRiel(key) {
         // v0.4.30 — portadas de la página nueva al almacén.
         try { await msPrecarga(nuevos, 8); } catch (e) { log("MS portadas riel: " + ((e && e.message) || e)); }
       } else if (f.id === "manhwaweb") {
-        // La API de ManhwaWeb cuenta sus páginas desde 0.
-        nuevos = mwCards(await mwGet(mwLib("", "", "", page - 1)), 20);
+        // v0.4.60 — «Nuevas obras»: la biblioteca ordenada por creación
+        // (el mismo orden de la portada). La API cuenta sus páginas
+        // desde 0 y su página 0 repite la portada: el riel va una
+        // atrás y el filtro anti-repetidos de abajo tapa el hueco.
+        // Las +18 viven en su lista aparte (mwCards las salta) y se
+        // mapean aquí a mano, como en la portada.
+        const libPag = Math.max(0, page - 2);
+        const urlLib = (ero) => "/manhwa/library?buscar=&estado=&tipo=&erotico=" + ero +
+          "&demografia=&order_item=creacion&order_dir=desc&page=" + libPag + "&generes=";
+        nuevos = mwCards(await mwGet(urlLib("no")), 30);
+        try {
+          const j18 = await mwGet(urlLib("si"));
+          const arr18 = (j18 && j18.data) || [];
+          for (let i = 0; i < arr18.length; i++) {
+            const m = arr18[i] || {};
+            const id = String(m.real_id || m._id || "");
+            const t = clean(String(m.name_esp || m.the_real_name || ""));
+            if (!id || !t) continue;
+            nuevos.push({ url: "/mw/manhwa/" + id + "/", title: t,
+              poster: String(m._imagen || ""), label: "+18" });
+          }
+        } catch (e) { log("MW riel 18: " + ((e && e.message) || e)); }
+        const du = {};
+        nuevos = nuevos.filter(function (x) { if (du[x.url]) return false; du[x.url] = 1; return true; });
         try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
       }
     } else if (key === "railRec") {
@@ -5773,6 +5812,10 @@ async function cargarRiel(key) {
         nuevos = msRecientesDe(JSON.parse(await getHtmlDe(f, "/lasted?p=" + page)), 20);
         // v0.4.30 — portadas de la página nueva al almacén.
         try { await msPrecarga(nuevos, 8); } catch (e) { log("MS portadas riel: " + ((e && e.message) || e)); }
+      } else if (f.id === "lectorxd") {
+        // v0.4.60 — «Recientes» de LectorXd: el catálogo con
+        // orderBy=recent, el mismo «Ver todo» de la portada del sitio.
+        nuevos = cardsDe(f, await getHtmlDe(f, "/catalogo?filters=true&adult=safe&orderBy=recent&page=" + page), CAT_POR_PAG);
       } else if (f.id === "manhwaweb") {
         nuevos = mwCards(await mwGet(mwLib("publicandose", "", "", page - 1)), 20);
         try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
