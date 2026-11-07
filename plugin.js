@@ -15,6 +15,22 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
+// v0.4.66 — VINCULACIÓN EN LOTE, +18 Y RELACIONADOS. Tres pedidos de
+// la persona para Mi AniList y el detalle: (1) «Vincular las que
+// pueda»: un botón en Mi AniList que recorre las series sin ✓ y
+// busca su identidad cierta — id de AniList en MangaDex o título
+// exacto en las fuentes — en tandas de 8 (o 20 segundos), con aviso
+// de cómo fue y descanso de un día para las que no se hallan; solo
+// vincula lo CIERTO, ante la duda nada (esa se toca a mano, como
+// siempre). (2) La búsqueda de VINCULACIÓN en MangaDex pide ahora
+// TODAS las categorías de contenido (también erotica y
+// pornographic): las series +18 de la lista también se encuentran —
+// el buscador general del plugin sigue limpio como siempre. (3) Riel
+// de RELACIONADOS al pie de los capítulos del detalle, como en las
+// apps de lectura: AniList conoce la familia de cada serie (secuela,
+// precuela, spin-off, historia lateral…), solo mangas y one-shots,
+// con caché de 7 días para no repetir la llamada; tocar un
+// relacionado abre el flujo de vinculación de siempre.
 // v0.4.65 — RASTREADOR MULTI-FUENTE Y PORTADAS NÍTIDAS. Mi AniList
 // dejaba de vincular cuando la fuente activa no respondía (los
 // sitios bloquean la conexión a veces): el vínculo se rendía con el
@@ -720,7 +736,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.65";
+const VERSION = "0.4.66";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5091,6 +5107,24 @@ function detailTree(state) {
   if (capStart > 0 || capStart + chapters.length < capsTotal) {
     items.push(navFila("ab"));
   }
+  // v0.4.66 — RIEL DE RELACIONADOS: al pie de los capítulos, las
+  // portadas de la familia de la serie (secuela, precuela, spin-off…)
+  // según AniList — las trae cargarSerie con su caché de 7 días; sin
+  // vínculo con AniList (o sin relacionados) no se dibuja nada.
+  try {
+    const alVincD = getJson("alId:" + d.url, null);
+    const alIdD = (meta.anilistId) || (alVincD && alVincD.al) || 0;
+    if (alIdD) {
+      const relC = getJson("rel:" + d.url, null);
+      const rel = relC && Array.isArray(relC.items) ? relC.items : [];
+      if (rel.length) {
+        items.push({ type: "Text", text: "Relacionados", textEn: "Related", style: "h3", padding: 16 });
+        items.push({ type: "SingleChildScrollView", key: "relRail", direction: "horizontal", padding: 16,
+          children: [{ type: "Row", gap: 8,
+            children: rel.map((it, i) => relCard(it, i)) }] });
+      }
+    }
+  } catch (e) { /* sin relacionados no pasa nada */ }
   return {
     type: "Scaffold",
     appBar: { type: "AppBar", key: "barDetail", title: String(meta.title || "Serie").slice(0, 30),
@@ -6950,6 +6984,88 @@ export async function screenEvent(ev) {
       if (url && fuenteDeUrl(url)) return await cargarSerie(url, true);
       return await alVincularFlujo(it);
     }
+    // v0.4.66 — «Vincular las que pueda»: el lote de Mi AniList. En
+    // tandas de hasta 8 series (o 20 segundos) recorre las que no
+    // tienen ✓ y busca su identidad cierta con el rastreador: id de
+    // AniList en MangaDex o título exacto en las fuentes. Las que no
+    // se hallan descansan un día (no se reintentan en cada toque) y
+    // el aviso dice cómo fue. Toca de nuevo para seguir con el resto.
+    if (name === "miAniLote") {
+      const datoL = getJson("miAniList", null);
+      if (!datoL || !datoL.listas) {
+        return { toast: "Primero trae tu lista: entra a Mi AniList desde la sección AniList." };
+      }
+      const revL = miAniAlRev();
+      const fall = getJson("miAniFall", null) || {};
+      const ahoraL = Date.now();
+      const pend = [];
+      const vistos = {};
+      for (const st in datoL.listas) {
+        const arr = datoL.listas[st] || [];
+        for (let k = 0; k < arr.length; k++) {
+          const it = arr[k];
+          if (!it || !it.id || vistos[it.id]) continue;
+          vistos[it.id] = 1;
+          if (miAniUrl(it, revL)) continue;
+          if (fall["" + it.id] && ahoraL - fall["" + it.id] < 86400000) continue;
+          pend.push(it);
+          if (pend.length >= 8) break;
+        }
+        if (pend.length >= 8) break;
+      }
+      if (!pend.length) {
+        const nF = Object.keys(fall).length;
+        return { toast: "No hay series pendientes de vincular" +
+          (nF ? " (" + nF + " que no se hallaron descansan un día)." : ".") };
+      }
+      let ok = 0, fallaron = 0, hechas = 0;
+      const t0 = Date.now();
+      for (let i = 0; i < pend.length && Date.now() - t0 < 20000; i++) {
+        hechas++;
+        try {
+          const uL = await alVincularAuto(pend[i]);
+          if (uL) { ok++; delete fall["" + pend[i].id]; }
+          else { fallaron++; fall["" + pend[i].id] = Date.now(); }
+        } catch (e) {
+          fallaron++; fall["" + pend[i].id] = Date.now();
+          log("lote vincular: " + ((e && e.message) || e));
+        }
+      }
+      if (!setJson("miAniFall", fall)) log("lote: fallos sin guardar (almacén lleno)");
+      const corte = hechas < pend.length;
+      return { state: { miAniTk: Date.now() },
+        toast: "✓ Vinculadas " + ok + " de " + hechas + " probadas." +
+          (fallaron ? " " + fallaron + " sin hallar: descansan un día." : "") +
+          (corte ? " Se quedó a medias por tiempo: toca otra vez."
+                 : (pend.length >= 8 ? " Hay más pendientes: toca otra vez." : " Quedó al día.")) };
+    }
+    // v0.4.66 — un relacionado del riel del detalle abre el mismo
+    // flujo de vinculación de siempre: se busca en las fuentes y la
+    // persona toca la correcta (el id de AniList sirve también para
+    // la verificación por id de MangaDex).
+    if (name === "relAbrir") {
+      const idR = Number(ev.arg) || 0;
+      if (!idR) return { toast: "Ese relacionado ya no está: abre la serie de nuevo." };
+      let m = null;
+      const urlsR = [String((state.detail && state.detail.url) || "")];
+      try {
+        const ksR = kino.storage.keys() || [];
+        for (let i = 0; i < ksR.length && !m; i++) {
+          const kR = String(ksR[i] || "");
+          if (kR.indexOf("rel:") === 0 && urlsR.indexOf(kR.slice(4)) < 0) urlsR.push(kR.slice(4));
+        }
+      } catch (e) { /* sin llaves: solo la serie actual */ }
+      for (let i = 0; i < urlsR.length && !m; i++) {
+        if (!urlsR[i]) continue;
+        const c = getJson("rel:" + urlsR[i], null);
+        const its = (c && c.items) || [];
+        for (let k = 0; k < its.length; k++) {
+          if (Number(its[k].id) === idR) { m = its[k]; break; }
+        }
+      }
+      if (!m) return { toast: "Ese relacionado ya no está: abre la serie de nuevo." };
+      return await alVincularFlujo(m);
+    }
     if (name === "retry") return { state: { _r: Date.now() } };
     return null;
   } catch (e) {
@@ -7446,6 +7562,25 @@ async function buscarEnFuente(f, q) {
   return cardsDe(f, html, 30);
 }
 
+// v0.4.66 — búsqueda de VINCULACIÓN: igual que la de siempre, pero
+// en MangaDex se piden TODAS las categorías de contenido (también
+// erotica y pornographic): las series +18 de Mi AniList también
+// tienen derecho a encontrarse cuando se vinculan. El buscador
+// general del plugin sigue con la búsqueda limpia de siempre.
+async function mdSearchLax(q) {
+  const j = await mdJson("/manga?includes[]=cover_art&contentRating[]=safe"
+    + "&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic"
+    + "&availableTranslatedLanguage[]=es&limit=30&order[relevance]=desc&title="
+    + encodeURIComponent(q));
+  return mdCards(j, 30);
+}
+
+async function buscarVincular(f, q) {
+  await null;
+  if (f.id === "mangadex") return await mdSearchLax(q);
+  return await buscarEnFuente(f, q);
+}
+
 // v0.4.24 — verificación por id exacto: MangaDex publica el enlace de
 // AniList de cada serie en sus «links»; si la búsqueda por título trae
 // una cuyo id de AniList es el de la serie tocada, es LA serie —
@@ -7935,6 +8070,26 @@ function descubreTree(p) {
 // antes era el cuerpo del evento «alAbrir»; «Para ti» lo reusa tal
 // cual (buscarla con todos sus nombres, proponer el vínculo
 // exacto y abrir la pantalla de vincular).
+// v0.4.66 — las dos varas del calce exacto, compartidas por el flujo
+// de vinculación (pantalla) y el lote de Mi AniList: el conjunto de
+// títulos normalizados de AniList, y la prueba de si una serie de
+// una fuente calza con alguno (título en español o nombre original).
+function qSetDe(nombres) {
+  const qSet = {};
+  for (let i = 0; i < nombres.length; i++) {
+    const n = normTituloMD(nombres[i]);
+    if (n) qSet[n] = 1;
+  }
+  return qSet;
+}
+
+function calzaExacto(it, qSet) {
+  if (!it || !it.url) return false;
+  const nq = normTituloMD(it.title);
+  const na = it.alt ? normTituloMD(it.alt) : "";
+  return !!(nq && qSet[nq]) || !!(na && qSet[na]);
+}
+
 async function alVincularFlujo(m) {
       const tituloAL = alTitulo(m);
       if (!tituloAL) return { toast: "Esa serie no tiene título en AniList." };
@@ -7951,7 +8106,9 @@ async function alVincularFlujo(m) {
       let primerError = null;
       for (let i = 0; i < nombres.length && i < 12 && !results.length; i++) {
         try {
-          results = await buscarEnFuente(f, nombres[i]);
+          // v0.4.66 — buscarVincular: la búsqueda de vinculación en
+          // MangaDex trae también las +18 (buscarEnFuente es la limpia).
+          results = await buscarVincular(f, nombres[i]);
           qUsada = nombres[i];
         } catch (e) { if (!primerError) primerError = e; }
       }
@@ -7980,7 +8137,7 @@ async function alVincularFlujo(m) {
           const suyos = [];
           for (let i = 0; i < nombres.length && i < 2 && !suyos.length; i++) {
             try {
-              const r = await buscarEnFuente(fx, nombres[i]);
+              const r = await buscarVincular(fx, nombres[i]);
               if (r && r.length) {
                 for (let k = 0; k < r.length && k < 10; k++) {
                   r[k].fuente = fid;
@@ -8000,29 +8157,23 @@ async function alVincularFlujo(m) {
       // Se guarda el vínculo ya, sin esperar a la mano: el registro
       // pasa a ser exacto, nunca por parecido.
       let vinUrl = "", vinTitulo = "", vinFuenteId = "";
-      const qSet = {};
-      for (let i = 0; i < nombres.length; i++) {
-        const n = normTituloMD(nombres[i]);
-        if (n) qSet[n] = 1;
-      }
+      const qSet = qSetDe(nombres);
       // v0.4.65 — cada tarjeta de resultados dice su fuente: las de
       // la activa se etiquetan aquí y las demás ya vienen etiquetadas
       // por el rastreador multi-fuente.
       for (let i = 0; i < results.length; i++) results[i].fuente = f.id;
       const todos = results.concat(otras);
+      // v0.4.44 — ManhwaWeb trae el nombre original de cada serie
+      // (alt): calza si el título en español O el original coinciden
+      // con cualquiera de los nombres de AniList — la misma vara
+      // exacta que usa el lote de Mi AniList (v0.4.66).
       if (Object.keys(qSet).length) {
         for (let i = 0; i < todos.length; i++) {
-          const it = todos[i];
-          // v0.4.44 — ManhwaWeb trae el nombre original de cada serie
-          // (alt): calza si el título en español O el original coinciden
-          // con cualquiera de los nombres de AniList.
-          const nq = it && it.url ? normTituloMD(it.title) : "";
-          const na = it && it.alt ? normTituloMD(it.alt) : "";
-          if ((nq && qSet[nq]) || (na && qSet[na])) {
-            setJson("alId:" + it.url, { al: m.id, mal: m.mal || 0 });
-            vinUrl = it.url;
-            vinTitulo = it.title || "";
-            vinFuenteId = it.fuente || f.id;
+          if (calzaExacto(todos[i], qSet)) {
+            setJson("alId:" + todos[i].url, { al: m.id, mal: m.mal || 0 });
+            vinUrl = todos[i].url;
+            vinTitulo = todos[i].title || "";
+            vinFuenteId = todos[i].fuente || f.id;
             break;
           }
         }
@@ -8065,6 +8216,120 @@ async function alVincularFlujo(m) {
               ? f.nombre + " no respondió: te traje coincidencias de " + fuentesOk.join(" y ") + " — toca la serie que lees y queda vinculada."
               : (((primerError && primerError.userMessage) || ("No se pudo buscar en " + f.nombre + ".")) +
                 " Probé también en las demás fuentes y ninguna respondió."))) };
+}
+
+// v0.4.66 — VINCULACIÓN EN LOTE: la mano silenciosa del rastreador
+// multi-fuente para el botón de Mi AniList. Por cada serie sin
+// vincular busca, en orden de rapidez: (1) la verificación por id
+// exacto de AniList en MangaDex (la identidad más cierta que hay,
+// incluye los +18), (2) el calce exacto de título en la fuente activa
+// y (3) en MangaDex, LectorXd y ManhwaWeb. SOLO vincula cuando la
+// identidad es cierta (id o título exacto): ante la duda, nada — esa
+// serie se toca a mano, como siempre.
+async function alVincularAuto(m) {
+  await null;
+  const nombres = alNombres(m);
+  if (!nombres.length) return "";
+  const qSet = qSetDe(nombres);
+  for (let i = 0; i < nombres.length && i < 2; i++) {
+    const mdSeg = await mdVerificarAl(nombres[i], m.id);
+    if (mdSeg && mdSeg.url) {
+      setJson("alId:" + mdSeg.url, { al: m.id, mal: m.mal || 0 });
+      return mdSeg.url;
+    }
+  }
+  const f = fuenteActiva();
+  const plan = [[f.id, 2], ["mangadex", 1], ["lectorxd", 1], ["manhwaweb", 1]];
+  const probados = {};
+  for (let s = 0; s < plan.length; s++) {
+    const fid = plan[s][0];
+    if (probados[fid]) continue;
+    probados[fid] = 1;
+    const fx = fuentePorId(fid);
+    for (let i = 0; i < nombres.length && i < plan[s][1]; i++) {
+      try {
+        const r = await buscarVincular(fx, nombres[i]);
+        for (let k = 0; k < (r || []).length; k++) {
+          if (calzaExacto(r[k], qSet)) {
+            setJson("alId:" + r[k].url, { al: m.id, mal: m.mal || 0 });
+            return r[k].url;
+          }
+        }
+      } catch (e) { /* esta fuente no respondió: sigue la siguiente */ }
+    }
+  }
+  return "";
+}
+
+// v0.4.66 — RELACIONADOS: AniList conoce la FAMILIA de cada serie
+// (secuela, precuela, spin-off, historia lateral…): se trae la de
+// esta serie para el riel al pie de los capítulos del detalle, como
+// en las apps de lectura. Solo mangas y one-shots; con caché de 7
+// días para no repetir la llamada en cada apertura.
+const RELACION_TRAD = { SEQUEL: "Secuela", PREQUEL: "Precuela", PARENT: "Obra madre",
+  SIDE_STORY: "Historia lateral", SPIN_OFF: "Spin-off", ALTERNATIVE: "Versión alternativa",
+  ADAPTATION: "Adaptación", SUMMARY: "Resumen", SOURCE: "Obra original",
+  CONTAINS: "Contiene", CHARACTER: "De personajes", OTHER: "Relacionada" };
+
+function relacionTxt(t) {
+  const s = String(t || "");
+  return RELACION_TRAD[s] ||
+    (s ? s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g, " ") : "Relacionada");
+}
+
+const REL_TTL = 604800000;
+
+async function relDe(url, alId) {
+  await null;
+  if (!alId) return [];
+  const clave = "rel:" + url;
+  const ahora = Date.now();
+  let c = null;
+  try { c = getJson(clave, null); } catch (e) { c = null; }
+  if (c && Array.isArray(c.items) && ahora - (c.ts || 0) < REL_TTL) return c.items;
+  let items = [];
+  try {
+    const j = await paraTiJson("query ($id: Int) { Media(id: $id) { relations { edges "
+      + "{ relationType node { " + PARA_CAMPOS + " type } } } } }", { id: alId });
+    const edges = (j && j.data && j.data.Media && j.data.Media.relations
+      && j.data.Media.relations.edges) || [];
+    for (let i = 0; i < edges.length && items.length < 12; i++) {
+      const e = edges[i] || {};
+      const n = e.node;
+      if (!n || !n.id) continue;
+      const tp = String(n.type || "");
+      if (tp !== "MANGA" && tp !== "ONE_SHOT") continue;
+      const it = paraTiItem(n, "");
+      it.rel = String(e.relationType || "");
+      items.push(it);
+    }
+  } catch (e) {
+    // Sin red hoy: nada que mostrar ni guardar — la próxima apertura
+    // lo vuelve a intentar.
+    log("relacionados: " + ((e && e.message) || e));
+    return [];
+  }
+  try { setJsonCache(clave, { ts: ahora, items: items }); } catch (e) { /* almacén lleno */ }
+  return items;
+}
+
+// v0.4.66 — la tarjeta del riel de relacionados: portada nítida de
+// AniList, dos líneas de título y su parentesco (secuela, spin-off…).
+// Tocarla abre el flujo de vinculación de siempre. El width 120 de
+// la imagen es la regla de las tarjetas de riel horizontales.
+function relCard(it, i) {
+  const titulo = alTitulo(it) || it.romaji || it.english || "";
+  const img = { type: "Image", url: it.cover || "", aspect: "2:3",
+    alt: titulo, altEn: titulo, width: 120,
+    fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
+      children: [{ type: "Icon", name: "list", color: "muted" }] } };
+  return { type: "Card", key: "rel-" + i, flush: true,
+    onTap: { event: "relAbrir", arg: String(it.id) },
+    children: [img].concat(twoLines(titulo).map((ln) => (
+      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+      .concat(it.rel ? [{ type: "Text", text: relacionTxt(it.rel), textEn: it.rel,
+        style: "caption", color: "muted", padding: 8 }] : []),
+  };
 }
 
 // ---------- Mi AniList (v0.4.58) ----------
@@ -8362,6 +8627,17 @@ function miAniTree(dato) {
               style: "caption", color: "muted" },
           ] },
         ] }] },
+      // v0.4.66 — el lote: vincular en tandas las series sin ✓ con
+      // el rastreador multi-fuente en modo silencioso (solo lo cierto).
+      { type: "Column", padding: 16, gap: 8, children: [
+        { type: "Text",
+          text: "«Vincular las que pueda» recorre tus series sin ✓ y busca su identidad cierta (id de AniList en MangaDex o título exacto) en las fuentes, en tandas de 8.",
+          textEn: "“Link what it can” goes through your unlinked series and finds their certain identity (AniList id on MangaDex or exact title) across sources, in batches of 8.",
+          style: "caption", color: "muted" },
+        { type: "ElevatedButton", key: "miAniLoteBtn", icon: "link",
+          labelText: "Vincular las que pueda", labelTextEn: "Link what it can",
+          onPressed: { event: "miAniLote" } },
+      ] },
       secciones.length ? null : { type: "Text",
         text: "Tu lista está vacía o no pude leerla: toca actualizar arriba.",
         textEn: "Your list is empty or I could not read it: tap refresh above.",
@@ -8950,6 +9226,15 @@ async function cargarSerie(url, conRuta) {
   } catch (ePro) {
     log("anitrack progress (importar): " + ((ePro && ePro.message) || ePro));
   }
+  // v0.4.66 — los RELACIONADOS de la serie (si AniList la conoce):
+  // se traen con su caché de 7 días para el riel del detalle. Con la
+  // caché fresca no toca la red; si AniList no responde, el detalle
+  // abre igual y sin riel.
+  try {
+    const alVincR = getJson("alId:" + url, null);
+    const alIdR = (meta && meta.anilistId) || (alVincR && alVincR.al) || 0;
+    if (alIdR) await relDe(url, alIdR);
+  } catch (eR) { log("relacionados (serie): " + ((eR && eR.message) || eR)); }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " de " + capsTotal + " capítulos");
   // Con 0 capítulos también se abre el detalle: ahí explica por qué
   // (serie +18, licenciada o enlaces externos) en vez de un toast seco.
