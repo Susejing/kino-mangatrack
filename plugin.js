@@ -14,6 +14,18 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.67 — DEL MISMO AUTOR Y EL MAPA QUE APRENDE. Dos
+// pedidos aprobados de la persona: (1) al pie del detalle, junto al riel
+// de relacionados, las demás obras de quien escribió o dibujó la serie
+// (staff de AniList, mismo caché de 7 días, solo mangas, sin la propia);
+// (2) cada vez que un vínculo queda con identidad CIERTA (elección de la
+// persona o calce exacto), el par «título de la fuente → ids» viaja por
+// la puerta a AniTrack («aprender», nueva en su 0.13.4): las próximas
+// marcas de esa serie resuelven a la primera, aunque esta app pierda el
+// vínculo o se lea desde otra fuente. Y Mi AniList estrena panel de
+// números: cuántas series hay en las listas y cuántos capítulos tiene
+// registrados la cuenta. Todo lo demás queda igual.
+
 // MangaTrack v0.4.13 — lector de mangas para Kino con pantalla propia.
 // v0.4.66 — VINCULACIÓN EN LOTE, +18 Y RELACIONADOS. Tres pedidos de
 // la persona para Mi AniList y el detalle: (1) «Vincular las que
@@ -736,7 +748,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.66";
+const VERSION = "0.4.67";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5123,6 +5135,16 @@ function detailTree(state) {
           children: [{ type: "Row", gap: 8,
             children: rel.map((it, i) => relCard(it, i)) }] });
       }
+      // v0.4.67 — EL RIEL DEL AUTOR: sus otras obras, si AniList las
+      // trajo (mismo caché de 7 días que los relacionados).
+      const autC = getJson("autor:" + d.url, null);
+      const aut = autC && Array.isArray(autC.items) ? autC.items : [];
+      if (aut.length) {
+        items.push({ type: "Text", text: "Del mismo autor", textEn: "By the same author", style: "h3", padding: 16 });
+        items.push({ type: "SingleChildScrollView", key: "autorRail", direction: "horizontal", padding: 16,
+          children: [{ type: "Row", gap: 8,
+            children: aut.map((it, i) => { const c = relCard(it, i); c.key = "aut-" + i; return c; }) }] });
+      }
     }
   } catch (e) { /* sin relacionados no pasa nada */ }
   return {
@@ -6443,6 +6465,7 @@ export async function screenEvent(ev) {
       const it = isNaN(vinIdx) ? null : res[vinIdx];
       if (!it || !it.url) return { toast: "Esa serie ya no está en la lista: busca de nuevo." };
       setJson("alId:" + it.url, { al: v.al, mal: v.mal || 0 });
+      alAprender(it.title, v.al, v.mal || 0);
       v.linked = it.url;
       v.linkedTitle = it.title || "";
       setJsonCache("vin", v);
@@ -6459,6 +6482,7 @@ export async function screenEvent(ev) {
         return { toast: "La vinculación expiró: vuelve a tocar la serie en AniList." };
       }
       setJson("alId:" + v.mdSegura.url, { al: v.al, mal: v.mal || 0 });
+      alAprender(v.mdSegura.title, v.al, v.mal || 0);
       v.linked = v.mdSegura.url;
       v.linkedTitle = v.mdSegura.title || "";
       setJsonCache("vin", v);
@@ -7053,12 +7077,14 @@ export async function screenEvent(ev) {
         for (let i = 0; i < ksR.length && !m; i++) {
           const kR = String(ksR[i] || "");
           if (kR.indexOf("rel:") === 0 && urlsR.indexOf(kR.slice(4)) < 0) urlsR.push(kR.slice(4));
+          if (kR.indexOf("autor:") === 0 && urlsR.indexOf(kR.slice(6)) < 0) urlsR.push(kR.slice(6));
         }
       } catch (e) { /* sin llaves: solo la serie actual */ }
       for (let i = 0; i < urlsR.length && !m; i++) {
         if (!urlsR[i]) continue;
-        const c = getJson("rel:" + urlsR[i], null);
-        const its = (c && c.items) || [];
+        const cR = getJson("rel:" + urlsR[i], null);
+        const cA = getJson("autor:" + urlsR[i], null);
+        const its = ((cR && cR.items) || []).concat((cA && cA.items) || []);
         for (let k = 0; k < its.length; k++) {
           if (Number(its[k].id) === idR) { m = its[k]; break; }
         }
@@ -8171,6 +8197,7 @@ async function alVincularFlujo(m) {
         for (let i = 0; i < todos.length; i++) {
           if (calzaExacto(todos[i], qSet)) {
             setJson("alId:" + todos[i].url, { al: m.id, mal: m.mal || 0 });
+            alAprender(todos[i].title, m.id, m.mal || 0);
             vinUrl = todos[i].url;
             vinTitulo = todos[i].title || "";
             vinFuenteId = todos[i].fuente || f.id;
@@ -8191,6 +8218,7 @@ async function alVincularFlujo(m) {
         }
         if (mdSegura && f.id === "mangadex") {
           setJson("alId:" + mdSegura.url, { al: m.id, mal: m.mal || 0 });
+          alAprender(mdSegura.title, m.id, m.mal || 0);
           vinUrl = mdSegura.url;
           vinTitulo = mdSegura.title;
           mdSegura = null;
@@ -8235,6 +8263,7 @@ async function alVincularAuto(m) {
     const mdSeg = await mdVerificarAl(nombres[i], m.id);
     if (mdSeg && mdSeg.url) {
       setJson("alId:" + mdSeg.url, { al: m.id, mal: m.mal || 0 });
+      alAprender(mdSeg.title, m.id, m.mal || 0);
       return mdSeg.url;
     }
   }
@@ -8252,6 +8281,7 @@ async function alVincularAuto(m) {
         for (let k = 0; k < (r || []).length; k++) {
           if (calzaExacto(r[k], qSet)) {
             setJson("alId:" + r[k].url, { al: m.id, mal: m.mal || 0 });
+            alAprender(r[k].title, m.id, m.mal || 0);
             return r[k].url;
           }
         }
@@ -8307,6 +8337,69 @@ async function relDe(url, alId) {
     // Sin red hoy: nada que mostrar ni guardar — la próxima apertura
     // lo vuelve a intentar.
     log("relacionados: " + ((e && e.message) || e));
+    return [];
+  }
+  try { setJsonCache(clave, { ts: ahora, items: items }); } catch (e) { /* almacén lleno */ }
+  return items;
+}
+
+// v0.4.67 — EL MAPA QUE APRENDE (EMISOR). Cada vez que una serie queda
+// vinculada con identidad cierta (elección de la persona o calce exacto),
+// el par «título de la fuente → ids de AniList/MAL» viaja por la puerta
+// a AniTrack: la próxima marca con ese título resuelve a la primera,
+// aunque esta app pierda el vínculo o la serie se lea desde otra fuente.
+// Es un regalo sin esperar respuesta: si la puerta no existe o falla,
+// no pasa nada — vincular y marcar ya funcionan igual que siempre.
+function alAprender(titulo, al, mal) {
+  const t = String(titulo || "").trim();
+  if (!t || !Number(al)) return;
+  try {
+    const p = kino.plugins.call("anitrack", "aprender",
+      { title: t.slice(0, 120), anilistId: Number(al), malId: Number(mal) || 0 });
+    if (p && typeof p.catch === "function") p.catch(function () { /* regalo sin respuesta */ });
+  } catch (e) { /* aprender es un regalo: si falla, nada */ }
+}
+
+// v0.4.67 — EL RIEL DEL AUTOR: las otras obras de quien escribió o
+// dibujó la serie, según el staff de AniList (el primer papel de
+// historia o arte es el autor). Igual que los relacionados: caché de
+// 7 días, solo mangas y one-shots, sin la propia serie, y si AniList
+// no conoce al autor no se dibuja nada — el detalle abre igual.
+async function autorDe(url, alId) {
+  await null;
+  if (!alId) return [];
+  const clave = "autor:" + url;
+  const ahora = Date.now();
+  let c = null;
+  try { c = getJson(clave, null); } catch (e) { c = null; }
+  if (c && Array.isArray(c.items) && ahora - (c.ts || 0) < 604800000) return c.items;
+  let items = [];
+  try {
+    const j1 = await paraTiJson("query ($id: Int) { Media(id: $id) { staff(perPage: 6) "
+      + "{ edges { role node { id name } } } } }", { id: alId });
+    const edges = (j1 && j1.data && j1.data.Media && j1.data.Media.staff
+      && j1.data.Media.staff.edges) || [];
+    let autorId = 0;
+    for (let i = 0; i < edges.length && !autorId; i++) {
+      const e = edges[i] || {};
+      const papel = String(e.role || "").toUpperCase();
+      if ((e.node && e.node.id) && (papel.indexOf("STORY") >= 0 || papel.indexOf("ART") >= 0)) autorId = e.node.id;
+    }
+    if (!autorId) return [];
+    const j2 = await paraTiJson("query ($id: Int) { Staff(id: $id) { staffMedia(perPage: 14, "
+      + "sort: POPULARITY_DESC) { edges { node { " + PARA_CAMPOS + " type } } } } }", { id: autorId });
+    const medias = (j2 && j2.data && j2.data.Staff && j2.data.Staff.staffMedia
+      && j2.data.Staff.staffMedia.edges) || [];
+    for (let i = 0; i < medias.length && items.length < 12; i++) {
+      const n = medias[i] && medias[i].node;
+      if (!n || !n.id) continue;
+      if (Number(n.id) === Number(alId)) continue;
+      const tp = String(n.type || "");
+      if (tp !== "MANGA" && tp !== "ONE_SHOT") continue;
+      items.push(paraTiItem(n, ""));
+    }
+  } catch (e) {
+    log("autor: " + ((e && e.message) || e));
     return [];
   }
   try { setJsonCache(clave, { ts: ahora, items: items }); } catch (e) { /* almacén lleno */ }
@@ -8414,6 +8507,9 @@ async function miAniComputar(forzar) {
   // Las listas llegan partidas (una por estado, a veces varias si la
   // cuenta las separa): se juntan por estado y sin repetir serie.
   const porEstado = {};
+  // v0.4.67 — EL PANEL DE NÚMEROS: los capítulos registrados de toda
+  // la cuenta, contados aquí mismo con los datos que ya bajamos.
+  let capsLeidos = 0;
   for (let i = 0; i < lists.length; i++) {
     const ents = (lists[i] && lists[i].entries) || [];
     for (let k = 0; k < ents.length; k++) {
@@ -8424,6 +8520,7 @@ async function miAniComputar(forzar) {
       if (!porEstado[st]) porEstado[st] = { arr: [], visto: {} };
       if (porEstado[st].visto[m.id]) continue;
       porEstado[st].visto[m.id] = 1;
+      capsLeidos += Math.max(0, parseInt(en.progress, 10) || 0);
       porEstado[st].arr.push(miAniItem(m, en.progress));
     }
   }
@@ -8436,7 +8533,7 @@ async function miAniComputar(forzar) {
       totales[st] = grp ? grp.arr.length : 0;
       listas[st] = grp ? grp.arr.slice(0, topes[st] || 24) : [];
     }
-    return { pv: 1, ts: Date.now(), nombre: nombre, listas: listas, totales: totales };
+    return { pv: 1, ts: Date.now(), nombre: nombre, listas: listas, totales: totales, caps: capsLeidos };
   };
   // v0.4.61 — TODA la lista: los topes de cada sección crecen con sus
   // «Cargar más» y se guardan aparte, así sobreviven al refresco.
@@ -8573,6 +8670,9 @@ function miAniTree(dato) {
   }
   const sync = !!getJson("miAniSync", false);
   const rev = miAniAlRev();
+  // v0.4.67 — EL PANEL DE NÚMEROS: lo que la cuenta dice en total.
+  const stTotal = MIANI_ESTADOS.reduce(function (a, e) { return a + ((dato.totales && dato.totales[e[0]]) || 0); }, 0);
+  const stCaps = Math.max(0, parseInt(dato.caps, 10) || 0);
   const secciones = [];
   for (let i = 0; i < MIANI_ESTADOS.length; i++) {
     const st = MIANI_ESTADOS[i][0];
@@ -8612,6 +8712,15 @@ function miAniTree(dato) {
       { type: "Text", text: "Todo lo que lees y tienes en tu cuenta de AniList, por estado. Lo con ✓ abre directo; lo nuevo se toca y se busca en tu fuente.",
         textEn: "Everything you read and have in your AniList account, by status. ✓ opens directly; tap what's new to find it in your source.",
         style: "caption", color: "muted", padding: 16 },
+      { type: "Card", key: "miAniStats", flush: true, children: [{ type: "Row", padding: 16, gap: 12, children: [
+        { type: "Icon", name: "bar_chart", color: "muted" },
+        { type: "Column", flex: 1, gap: 4, crossAxisAlignment: "start", children: [
+          { type: "Text", text: "Tu cuenta en números", textEn: "Your account in numbers", style: "h4" },
+          { type: "Text", text: "En tus listas: " + stTotal + " mangas · " + stCaps + " capítulos leídos (según tu cuenta de AniList).",
+            textEn: "In your lists: " + stTotal + " mangas · " + stCaps + " chapters read (per your AniList account).",
+            style: "caption", color: "muted" },
+        ] },
+      ] }] },
       { type: "Card", key: "miAniSyncCard", flush: true,
         onTap: { event: "miAniSync" },
         children: [{ type: "Row", padding: 16, gap: 12, children: [
@@ -9233,7 +9342,10 @@ async function cargarSerie(url, conRuta) {
   try {
     const alVincR = getJson("alId:" + url, null);
     const alIdR = (meta && meta.anilistId) || (alVincR && alVincR.al) || 0;
-    if (alIdR) await relDe(url, alIdR);
+    if (alIdR) {
+      await relDe(url, alIdR);
+      await autorDe(url, alIdR);
+    }
   } catch (eR) { log("relacionados (serie): " + ((eR && eR.message) || eR)); }
   log("serie lista (" + f.nombre + "): " + meta.title + " / " + chapters.length + " de " + capsTotal + " capítulos");
   // Con 0 capítulos también se abre el detalle: ahí explica por qué
