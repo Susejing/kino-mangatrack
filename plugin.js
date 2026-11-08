@@ -14,6 +14,20 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.68 — DESCUBRIR SIN REPETIR Y LISTAS QUE CRECEN. Dos
+// pedidos de la persona tras probar en el teléfono: (1) «Buscar de
+// nuevo» en Descubrir repetía las mismas sugerencias (el orden era
+// fijo: mismos votos, misma tanda); ahora cada toque aparta a un lado
+// lo que YA mostró y estrena la tanda siguiente, con un pozo más hondo
+// (10 recomendaciones de la comunidad por serie, 50 parecidas a tu
+// gusto, 20 de moda de relleno). (2) Las secciones cortas del Inicio
+// crecen: «Actualizados de MangaOni» estrena «Cargar más del sitio»
+// (su feed /recientes pagina con ?p=, verificado en vivo — el
+// comentario de la 0.4.27 decía que no y estaba desactualizado), y
+// «Recién actualizados» y «Series añadidas» de LeerCapitulo, junto con
+// «Últimas actualizaciones» de InManga, suben su tope de 24 a 40
+// series de la misma portada. Todo lo demás queda igual.
+
 // MangaTrack v0.4.67 — DEL MISMO AUTOR Y EL MAPA QUE APRENDE. Dos
 // pedidos aprobados de la persona: (1) al pie del detalle, junto al riel
 // de relacionados, las demás obras de quien escribió o dibujó la serie
@@ -748,7 +762,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.67";
+const VERSION = "0.4.68";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4634,7 +4648,7 @@ async function homeTree() {
     // pagina: sin botón.
     if (populares.length && pag) masPop = true;
     if (populares.length) {
-      try { recientes = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
+      try { recientes = imCards(await getHtmlDe(f, "/"), 40); } catch (e) { log("IM home GET: " + e); }
     } else {
       titPop = "Últimas actualizaciones"; titPopEn = "Latest updates";
       try { populares = imCards(await getHtmlDe(f, "/"), 24); } catch (e) { log("IM home GET: " + e); }
@@ -4648,9 +4662,11 @@ async function homeTree() {
     titUpd = "Actualizados de MangaOni"; titUpdEn = "Updated on MangaOni";
     try { populares = moCards(await getHtmlDe(f, "/directorio?filtro=visitas&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home pop: " + e); }
     try { recientes = moCards(await getHtmlDe(f, "/directorio?filtro=id&orden=desc&adulto=false&p=1"), 20); } catch (e) { log("MO home rec: " + e); }
-    try { actualizados = moCards(await getHtmlDe(f, "/recientes"), 20); } catch (e) { log("MO home upd: " + e); }
+    try { actualizados = moCards(await getHtmlDe(f, "/recientes"), 40); } catch (e) { log("MO home upd: " + e); }
     // v0.4.27 — el directorio pagina con p=: Populares y Novedades
-    // pueden seguir; el feed /recientes es una sola página.
+    // pueden seguir. v0.4.68 — el feed /recientes TAMBIÉN pagina
+    // (?p=, verificado en vivo: la p=2 trae capítulos más viejos):
+    // «Actualizados de MangaOni» estrena «Cargar más del sitio».
     masPop = true; masRec = true;
   } else if (f.id === "mangasin") {
     // Portada de Mangas.in: populares (su catálogo por visitas) y
@@ -4824,12 +4840,12 @@ async function homeTree() {
     if (posT >= 0 && posP > posT && posU > posP) {
       populares = homeCards(html.slice(posP, posU), 10)
         .concat(homeCards(html.slice(posT, posP), 24));
-      actualizados = homeCards(html.slice(posU), 24);
+      actualizados = homeCards(html.slice(posU), 40);
       titUpd = "Series añadidas"; titUpdEn = "Recently added";
     } else {
       mixtas = homeCards(html, 40);
     }
-    try { recientes = capsRecientesLC(html, 24); } catch (e) { log("LC caps recientes: " + ((e && e.message) || e)); }
+    try { recientes = capsRecientesLC(html, 40); } catch (e) { log("LC caps recientes: " + ((e && e.message) || e)); }
     if (recientes.length) {
       titRec = "Recién actualizados"; titRecEn = "Just updated";
     }
@@ -4921,7 +4937,7 @@ async function homeTree() {
   if (recientes.length) guardarRiel("railRec", { f: f.id, tit: titRec, titEn: titRecEn,
     via: "", items: recientes, page: 1, mas: masRec, start: 0 });
   if (actualizados.length) guardarRiel("railUpd", { f: f.id, tit: titUpd, titEn: titUpdEn,
-    via: "", items: actualizados, page: 1, mas: false, start: 0 });
+    via: "", items: actualizados, page: 1, mas: f.id === "mangaoni", start: 0 });
   if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
     titEn: "Keep reading", items: hTodos, page: 1, mas: false, start: 0 });
   // v0.4.29 — ya están los rieles guardados con sus URLs cortas; para
@@ -5866,6 +5882,8 @@ function rielTree(key) {
 // de ManhwaWeb (la biblioteca por creación, con las +18 aparte). Las
 // secciones que no pagina (portadas de LeerCapitulo, el top del día de
 // LectorXd, «Series añadidas», el historial) ni traen el botón.
+// v0.4.68 — se suma «Actualizados de MangaOni»: su feed /recientes
+// SÍ pagina con ?p= (verificado en vivo), así que el botón es suyo.
 async function cargarRiel(key) {
   const r = getJson("riel:" + key, null);
   if (!r || typeof r !== "object" || !Array.isArray(r.items)) {
@@ -5935,6 +5953,13 @@ async function cargarRiel(key) {
       } else if (f.id === "manhwaweb") {
         nuevos = mwCards(await mwGet(mwLib("publicandose", "", "", page - 1)), 20);
         try { await mwPrecarga(nuevos, 8); } catch (e) { log("MW portadas riel: " + ((e && e.message) || e)); }
+      }
+    } else if (key === "railUpd") {
+      // v0.4.68 — «Actualizados de MangaOni»: el feed /recientes SÍ
+      // pagina con ?p= (verificado en vivo) — el botón puede seguir
+      // pidiendo tandas de capítulos más viejos.
+      if (f.id === "mangaoni") {
+        nuevos = moCards(await getHtmlDe(f, "/recientes?p=" + page), 40);
       }
     }
   } catch (e) {
@@ -7841,21 +7866,30 @@ async function paraTiComputar(forzar) {
   const sig = base.map((x) => x.al).join(",");
   const cache = getJson("paraTi", null);
   const edad = cache ? Date.now() - (cache.ts || 0) : Infinity;
-  if (!forzar && cache && cache.pv === 3 && cache.sig === sig && Array.isArray(cache.items) &&
+  if (!forzar && cache && cache.pv === 4 && cache.sig === sig && Array.isArray(cache.items) &&
       (cache.motivo === "sin-vinculos" ? edad < 3600000 : edad < PARA_TI_TTL)) {
     return { items: cache.items, motivo: cache.motivo || "" };
   }
   if (!base.length) {
-    const tendencias = await paraTiTendencias();
-    setJson("paraTi", { pv: 3, ts: Date.now(), sig: sig, base: 0,
-      motivo: "sin-vinculos", items: tendencias });
-    return { items: tendencias, motivo: "sin-vinculos" };
+    // v0.4.68 — sin vínculos también rota: se piden 20 de moda y las
+    // de la tanda anterior quedan al final, así «Buscar de nuevo»
+    // estrena en cada toque (antes repetía la misma lista del día).
+    const tendencias = await paraTiTendencias(20);
+    const vistosT = {};
+    if (cache && Array.isArray(cache.items))
+      for (let i = 0; i < cache.items.length; i++) vistosT[cache.items[i].id] = 1;
+    const tanda = tendencias.filter((m) => !vistosT[m.id])
+      .concat(tendencias.filter((m) => vistosT[m.id]))
+      .slice(0, 12);
+    setJson("paraTi", { pv: 4, ts: Date.now(), sig: sig, base: 0,
+      motivo: "sin-vinculos", items: tanda });
+    return { items: tanda, motivo: "sin-vinculos" };
   }
   // (1) Perfil y recomendaciones de la comunidad: una sola consulta
   // con un alias por serie de la base.
   const alias = base.map((x, i) => "m" + i + ": Media(id: " + x.al + ") { genres " +
     "tags { name rank isGeneralSpoiler } " +
-    "recommendations(sort: RATING_DESC, perPage: 6) { nodes { rating " +
+    "recommendations(sort: RATING_DESC, perPage: 10) { nodes { rating " +
     "mediaRecommendation { " + PARA_CAMPOS + " } } } }").join(" ");
   const j1 = await paraTiJson("query { " + alias + " }", null);
   const d1 = (j1 && j1.data) || {};
@@ -7901,7 +7935,7 @@ async function paraTiComputar(forzar) {
     try {
       const qg = "query ($g: [String]" + (topTag.length ? ", $t: [String]" : "") +
         ", $a: Boolean) { " +
-        "Page(perPage: 30) { media(type: MANGA, isAdult: $a, genre_in: $g" +
+        "Page(perPage: 50) { media(type: MANGA, isAdult: $a, genre_in: $g" +
         (topTag.length ? ", tag_in: $t" : "") + ", " +
         "sort: [POPULARITY_DESC]) { " + PARA_CAMPOS + " genres tags { name } } } }";
       const vars = { g: topGen.slice(0, 3), a: false };
@@ -7935,29 +7969,47 @@ async function paraTiComputar(forzar) {
     const por = (matchG.slice(0, 2).join(" · ")) || (matchT.slice(0, 2).join(" · "));
     gustos[m.id] = { item: paraTiItem(m, por), puntos: pts };
   }
-  // (3) La mezcla: primero las recos de la comunidad (cuantas más
-  // series tuyas la recomiendan, mejor), luego las de gustos
-  // parecidos; si AniList quedó parco, tendencias honestas.
+  // (3) La mezcla, v0.4.68 — EL POZO QUE ROTA: primero las recos de
+  // la comunidad (cuantas más series tuyas la recomiendan, mejor),
+  // luego las de gustos parecidos — y detrás, dos tramos más de
+  // profundidad. Lo que YA se mostró (los ids de la última tanda,
+  // viva en la caché) queda MARCADO: al armar la lista, las
+  // sugerencias nuevas pasan al frente y las vistas van de relleno
+  // al final. Así «Buscar de nuevo» estrena en cada toque en vez de
+  // repetir la misma tanda; cuando el pozo se vacía, vuelve a lo
+  // mejor de siempre, con honestidad.
   const items = [];
   const seen = {};
+  const vistos = {};
+  if (cache && Array.isArray(cache.items))
+    for (let i = 0; i < cache.items.length; i++) vistos[cache.items[i].id] = 1;
+  const mete = (lista, hasta) => {
+    for (let i = 0; i < lista.length && items.length < hasta; i++) {
+      const it = lista[i].item;
+      if (seen[it.id]) continue;
+      seen[it.id] = 1;
+      items.push({ item: it, ya: !!vistos[it.id] });
+    }
+  };
   const listaRec = Object.keys(recs).map((k) => recs[k])
     .sort((a, b) => (b.votos - a.votos) || (b.puntos - a.puntos));
-  for (let i = 0; i < listaRec.length && items.length < 12; i++) {
-    if (!seen[listaRec[i].item.id]) { seen[listaRec[i].item.id] = 1; items.push(listaRec[i].item); }
-  }
   const listaGus = Object.keys(gustos).map((k) => gustos[k])
     .sort((a, b) => b.puntos - a.puntos);
-  for (let i = 0; i < listaGus.length && items.length < 24; i++) {
-    if (!seen[listaGus[i].item.id]) { seen[listaGus[i].item.id] = 1; items.push(listaGus[i].item); }
-  }
-  if (items.length < 6) {
-    const ten = await paraTiTendencias();
-    for (let i = 0; i < ten.length && items.length < 6; i++) {
-      if (!seen[ten[i].id]) { seen[ten[i].id] = 1; items.push(ten[i]); }
+  mete(listaRec, 12);
+  mete(listaGus, 24);
+  mete(listaRec, 40);
+  mete(listaGus, 56);
+  if (items.length < 12) {
+    const ten = await paraTiTendencias(20);
+    for (let i = 0; i < ten.length && items.length < 12; i++) {
+      const m = ten[i];
+      if (!seen[m.id]) { seen[m.id] = 1; items.push({ item: m, ya: !!vistos[m.id] }); }
     }
   }
-  const recorte = items.slice(0, 24);
-  const okGuardar = setJson("paraTi", { pv: 3, ts: Date.now(), sig: sig, base: base.length,
+  const recorte = items.filter((x) => !x.ya).map((x) => x.item)
+    .concat(items.filter((x) => x.ya).map((x) => x.item))
+    .slice(0, 24);
+  const okGuardar = setJson("paraTi", { pv: 4, ts: Date.now(), sig: sig, base: base.length,
     motivo: "", items: recorte });
   if (!okGuardar) log("para ti sin guardar: almacén lleno");
   return { items: recorte, motivo: "" };
@@ -7965,8 +8017,9 @@ async function paraTiComputar(forzar) {
 
 // Lo de moda hoy en AniList (manga), para cuando no hay base o la
 // mezcla quedó corta — siempre con su porqué honesto.
-async function paraTiTendencias() {
-  const j = await paraTiJson("query { Page(perPage: 12) { " +
+async function paraTiTendencias(cuantos) {
+  const n = Math.max(1, parseInt(cuantos, 10) || 12);
+  const j = await paraTiJson("query { Page(perPage: " + n + ") { " +
     "media(type: MANGA, isAdult: false, sort: [TRENDING_DESC]) { " + PARA_CAMPOS + " } } }", null);
   const med = (j && j.data && j.data.Page && j.data.Page.media) || [];
   return med.map((m) => paraTiItem(m, "de moda en AniList"));
