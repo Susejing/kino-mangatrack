@@ -69,8 +69,7 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 - **0.4.29** — «Ver más» desde 3 series; portadas de ManhwaWeb visibles (bajar con presentación + convertir a datos incrustados); almacén grande `storageLarge`.
 - **0.4.30** — el lector integrado dibuja capítulos de ManhwaWeb y Mangas.in bajando las páginas con presentación y por tandas; portadas de Mangas.in con la misma receta.
 - **0.4.31** — páginas «demasiado grandes» marcadas con aviso honesto y sin reintentos inútiles; «Bajar más páginas» reintenta a mano.
-- **0.4.32** — icono propio, color de acento e icono de menú; este README.
-- **0.4.69** — **pantalla completa real en Modo páginas**: el lector se dibuja sin barra ninguna — solo el manga, nada encima (se sale con el Atrás del teléfono). El modo tira queda igual.
+- **0.4.70** — **pantalla completa real en Modo páginas**: el lector se dibuja sin barra ninguna — solo el manga, nada encima (se sale con el Atrás del teléfono). El modo tira queda igual.
 
 ## Créditos
 
