@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: e279fe35fe09ebcace32d17a3190bafe43bfddee)resource# MangaTrack
+# MangaTrack
 
 **MangaTrack** es un plugin de [Kino](https://github.com/kinotvapp/kino-plugins) para leer mangas en español en tu teléfono o tu TV, con pantalla propia: Inicio con rieles, catálogo, buscador, favoritos, historial y un lector con tira vertical o página por página.
 
