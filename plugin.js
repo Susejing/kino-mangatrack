@@ -762,7 +762,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.68";
+const VERSION = "0.4.69";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5483,7 +5483,16 @@ function readerTree(state) {
   // queda [flechita][nada][campana de Kino si hay avisos]. Sin ojo en
   // ningún lado: de la fila se sale con la flechita y los controles
   // siguen al final del capítulo.
-  const raiz = {
+  // v0.4.69 — PANTALLA COMPLETA REAL en modo páginas (lo que Kino llamó
+  // «el fullscreen ya está en la api»): la receta oficial del lector
+  // pone el nodo pages como raíz SIN AppBar — Kino no dibuja su barra
+  // y el Atrás del sistema sigue saliendo (docs: «Atrás y el cierre de
+  // Kino salen»). En modo tira se queda la barra limpia de siempre.
+  const raiz = modo === "paginas" ? {
+    type: "Scaffold",
+    every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
+    body: { type: "Column", children: body },
+  } : {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
     appBar: { type: "AppBar", mergeWithKinoBar: true, dense: true, key: "barReader",
@@ -9407,6 +9416,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
