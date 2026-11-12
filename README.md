@@ -70,7 +70,6 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 - **0.4.30** — el lector integrado dibuja capítulos de ManhwaWeb y Mangas.in bajando las páginas con presentación y por tandas; portadas de Mangas.in con la misma receta.
 - **0.4.31** — páginas «demasiado grandes» marcadas con aviso honesto y sin reintentos inútiles; «Bajar más páginas» reintenta a mano.
 - **0.4.32** — icono propio, color de acento e icono de menú; este README.
-- **0.4.69** — **pantalla completa real en el lector**: en «Modo páginas» la barra de arriba desaparece del todo — el lector se dibuja como raíz sin AppBar (la receta oficial del lector de Kino); se sale con el Atrás del teléfono.
 
 ## Créditos
 
@@ -84,3 +83,4 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 ## Licencia
 
 Código bajo la **GPL-3.0**: puedes usarlo y modificarlo, pero tu versión debe seguir abierta y con crédito. © 2026 **Susejing** (Bogotá, Colombia). El texto completo está en el archivo [LICENSE](LICENSE).
+
