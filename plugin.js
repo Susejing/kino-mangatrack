@@ -14,10 +14,28 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.73 — EL PUENTE Y EL LECTOR AMPLIO. El Registro del
+// teléfono (20 nov) dirimió las dos heridas con nombres: (1) LeerCapitulo
+// y MangaDex amanecieron NEGADOS POR KINO («host not allowed» con el host
+// BIEN puesto en el manifiesto — el mismo mal del almacén de hosts que ya
+// embistió a AniJing: tercera y cuarta víctimas); la cura es la que ya
+// sirvió allá — el PUENTE del traductor de Google (*.translate.goog entra
+// al manifiesto, Kino la aprueba con la lista nueva): LC viaja por
+// www-leercapitulo-co.translate.goog cuando el directo lo niegan, y la
+// API de MangaDex por api-mangadex-org.translate.goog solo si el directo
+// rebota. Si el sitio de verdad está caído, el puente cae en el mismo
+// mensaje honesto — pero entonces la causa será la web, no el candado.
+// (2) La PORTADA de LectorXd ya no pescaba tarjetas (html de 700 KB con
+// secciones intactas, 1 tarjeta y 0): su plantilla cambió las imágenes —
+// ahora hay un LECTOR AMPLIO (srcset/picture/background-image y tarjetas
+// sin cara que entran con su icono) y la cadena completa de respaldo:
+// lector estrecho → lector amplio → cuadrícula del catálogo (la que sí
+// pescó 24). Todo lo demás queda igual.
+
 // MangaTrack v0.4.72 — LA ARMADURA DEL INICIO. La captura del teléfono
 // (19 nov 2026, 20:37) mostró la pantalla muerta: «MangaTrack no pudo
-// mostrar esta pantalla». La causa exacta estaba en el código: el Inicio
-// (homeTree) se llamaba FUERA del try de seguridad de screen(), y la
+// mostrar esta pantalla». La causa estaba en el código: el Inicio —
+// homeTree se llamaba FUERA del try de seguridad de screen(), y la
 // portada de la fuente activa (LeerCapitulo por defecto, también
 // LectorXd) se pedía sin red de seguridad — un solo fallo del sitio y la
 // pantalla entera moría, sin siquiera dejar cambiar de fuente. Ahora:
@@ -776,7 +794,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.72";
+const VERSION = "0.4.73";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -923,6 +941,10 @@ async function getHtmlDe(f, path) {
       // y no se desbloquea insistiendo.
       log(f.id + " conexión fallida en " + path + " (intento " + intento + "): " + ((e && e.message) || e));
       if (!esNube || !e || e.code !== "network") {
+        // v0.4.73 — LeerCapitulo no muere aquí: el negativo de Kino
+        // («host not allowed») entra por esta vía y el puente del
+        // traductor lo espera tras el bucle.
+        if (f.id === "leercapitulo") { ultimo = 0; break; }
         throw kino.error("network", "conexión: " + ((e && e.message) || e), {
           userMessage: "No se pudo conectar con " + f.nombre + ". Si tu internet va bien, el sitio bloqueó la conexión.",
         });
@@ -949,6 +971,9 @@ async function getHtmlDe(f, path) {
       // viene y el «demasiadas peticiones»); el 451 es el bloqueo +18 o
       // legal, y ningún otro estado se desbloquea insistiendo.
       if (!esNube || (r.status !== 403 && r.status !== 429)) {
+        // v0.4.73 — un HTTP feo de LeerCapitulo tampoco cierra el turno:
+        // el puente del traductor prueba antes del mensaje honesto.
+        if (f.id === "leercapitulo") { break; }
         throw kino.error("network", "HTTP " + r.status, {
           userMessage: f.id === "lectorxd" && (r.status === 403 || r.status === 451)
             ? "LectorXd bloqueó la página (HTTP " + r.status + "). Si es una serie +18, la cierra sin cuenta; si no, es su filtro anti-bots. Prueba otra serie."
@@ -963,6 +988,36 @@ async function getHtmlDe(f, path) {
   // Se agotaron los intentos: queda el mensaje honesto con el último
   // estado que el sitio dio.
   const est = ultimo ? "HTTP " + ultimo : "sin respuesta";
+  // v0.4.73 — EL PUENTE DE LEERCAPITULO ante el negativo de Kino. El
+  // Registro del teléfono (20 nov) lo cantó:「host not allowed:
+  // www.leercapitulo.co」 con el host BIEN puesto en el manifiesto — el
+  // mismo mal del almacén de hosts de Kino que ya embistió a ivanime.buzz
+  // y donghualife.com (AniJing) y ahora a esta y a api.mangadex.org. El
+  // puente que rescató a AniJing sirve igual: la página viaja por el
+  // traductor de Google (host permitido — *.translate.goog entra al
+  // manifiesto en esta versión y Kino lo aprueba con la lista nueva).
+  // Si el sitio de verdad está caído, el puente también irá a parar al
+  // mensaje honesto — pero entonces la causa será la web, no el candado.
+  if (f.id === "leercapitulo") {
+    const puente = "https://www-leercapitulo-co.translate.goog" + path +
+      (path.indexOf("?") >= 0 ? "&" : "?") + "_x_tr_sl=auto&_x_tr_tl=es&_x_tr_hl=es";
+    log("leercapitulo — Kino negó el directo (" + (ultimo ? "HTTP " + ultimo : "conexión cortada") + "): probando el puente del traductor");
+    try {
+      const rP = await kino.fetch(puente, { headers: { Accept: "text/html,application/xhtml+xml" }, timeoutMs: 14000 });
+      if (rP && rP.ok) {
+        const txtP = await rP.text();
+        if (txtP && txtP.length > 300) {
+          log("leercapitulo — el puente sirvió la página (" + txtP.length + " letras): " + path);
+          return txtP;
+        }
+        log("leercapitulo — el puente no trajo cuerpo aprovechable (" + (txtP || "").length + " letras)");
+      } else {
+        log("leercapitulo — el puente no sirvió (HTTP " + ((rP && rP.status) || "sin") + ")");
+      }
+    } catch (ePuente) {
+      log("leercapitulo — el puente rebotó: " + ((ePuente && ePuente.message) || ePuente));
+    }
+  }
   throw kino.error("network", ultimo ? "HTTP " + ultimo : "conexión cortada", {
     userMessage: f.id === "lectorxd"
       ? "LectorXd bloqueó la página (" + est + ") aunque se reintentó con otro disfraz de navegador. Si es una serie +18, la cierra sin cuenta; si no, su filtro anti-bots está activo ahora mismo: prueba otra serie o vuelve en un rato."
@@ -1937,7 +1992,11 @@ function cardsLX(html, max) {
       const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bdata-lazy-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
       if (p) poster = absLX(p[1]);
     }
-    if (!poster || poster.indexOf("data:") === 0) continue;
+    // v0.4.73 — una tarjeta sin cara ya NO se descarta: entra con su
+    // icono de siempre (el fallback del pintor) y su título. La portada
+    // no puede volver a quedarse casi vacía porque el sitio cambie la
+    // manera en que carga sus imágenes.
+    if (poster && poster.indexOf("data:") === 0) poster = "";
     let title = "";
     const h = inner.match(/<h[2-6][^>]*>([\s\S]{2,200}?)<\/h[2-6]>/i);
     if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
@@ -2006,6 +2065,71 @@ function cardsLXCat(html, max) {
     if (out.length >= max) break;
   }
   log("LX catálogo: " + out.length + " tarjetas de la cuadrícula");
+  return out;
+}
+
+// v0.4.73 — EL LECTOR AMPLIO de LectorXd: la plantilla nueva de su
+// portada (Registro del teléfono 20 nov: html completo con las secciones,
+// pero el lector estrecho pescó 1 tarjeta) anda con imágenes perezosas
+// nuevas (srcset / picture / fuentes <source>) que el lector de siempre
+// no ve. Este segundo lector: ancla a ancla (bloque hasta la siguiente
+// serie), CUALQUIER URL de imagen del bloque por cualquier atributo (con
+// srcset y background-image incluidos) y, si la tarjeta no trae cara,
+// entra IGUAL con su icono de siempre — mejor 10 tarjetas honestas que
+// una portada vacía. El título va del h2-h6, del alt o del texto.
+function cardsLXAmplia(html, max) {
+  const out = [];
+  const seen = {};
+  const re = /<a\b[^>]*\bhref="([^"]*\/(?:manga|manhwa|manhua|one[-_]shot)\/[a-z0-9-]+\/?)"[^>]*>/gi;
+  const anclas = [];
+  let m;
+  while ((m = re.exec(html)) !== null && anclas.length < 200) {
+    anclas.push({ url: m[1], ini: m.index, fin: m.index + m[0].length });
+  }
+  for (let i = 0; i < anclas.length && out.length < max; i++) {
+    const a = anclas[i];
+    let url = a.url.replace(/^https?:\/\/(?:www\.)?lectorxd\.com/i, "");
+    if (!/^\//.test(url) || seen[url]) continue;
+    // El bloque de la serie llega hasta el anclaje de la siguiente.
+    let fin = html.length;
+    for (let j = i + 1; j < anclas.length; j++) {
+      if (anclas[j].url !== a.url) { fin = anclas[j].ini; break; }
+    }
+    const bloque = html.slice(a.fin, Math.min(html.length, fin));
+    let poster = "";
+    const etiquetas = bloque.match(/<(?:img|source)\b[^>]*>/gi) || [];
+    for (let k = 0; k < etiquetas.length && !poster; k++) {
+      const tag = etiquetas[k];
+      const p = tag.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
+        || tag.match(/\b(?:data-srcset|srcset)=["']([^"'\s,]+\.(?:jpe?g|png|webp)[^"']*)["']/i);
+      // v0.4.73 — el srcset puede traer descriptores tras la URL
+      // («…webp 2x» o «…webp 2x, otra 3x»): se queda solo la primera.
+      if (p && p[1]) poster = absLX(p[1].split(/\s+/)[0]);
+      if (!poster) {
+        const bg = tag.match(/url\((['"]?)([^'")]+\.(?:jpe?g|png|webp)[^'")]*)/i);
+        if (bg) poster = absLX(bg[2]);
+      }
+    }
+    if (!poster) {
+      const libre = bloque.match(/https?:\/\/[^"'\s)]+\.(?:jpe?g|png|webp)(?:\?[^"'\s)]*)?/i);
+      if (libre) poster = absLX(libre[0]);
+    }
+    let title = "";
+    const h = bloque.match(/<h[2-6][^>]*>([\s\S]{2,200}?)<\/h[2-6]>/i);
+    if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
+    if (!title) {
+      const a2 = (bloque.match(/<img\b[^>]*>/i) || [""])[0].match(/\balt=["']([^"']{2,})["']/i);
+      if (a2) title = clean(a2[1]);
+    }
+    if (!title) {
+      const texto = clean(bloque.replace(/<[^>]*>/g, " "));
+      if (texto && texto.length && texto.length <= 90) title = texto;
+    }
+    if (!title) title = url.split("/").filter(Boolean).pop() || url;
+    seen[url] = 1;
+    out.push({ url: url, title: title, poster: (poster && poster.indexOf("data:") !== 0) ? poster : "" });
+  }
+  log("LX tarjetas amplias: " + out.length);
   return out;
 }
 
@@ -2923,7 +3047,20 @@ const MD_CDN = "https://uploads.mangadex.org";
 const MAX_CAPS_MD = 300;
 
 async function mdJson(path) {
-  const r = await kino.fetch(MD_API + path, { headers: { Accept: "application/json" } });
+  // v0.4.73 — MangaDex también amaneció negado por el almacén de hosts
+  // de Kino (Registro 20 nov: «host not allowed: api.mangadex.org» con
+  // el host BIEN en el manifiesto — el mismo bug que LeerCapitulo).
+  // Su API es JSON puro y el traductor de Google la deja pasar sin
+  // tocar: si el directo no sale, el mismo pedido viaja por el puente.
+  let r = null;
+  try {
+    r = await kino.fetch(MD_API + path, { headers: { Accept: "application/json" } });
+  } catch (eMd) {
+    const puenteMd = "https://api-mangadex-org.translate.goog" + path +
+      (path.indexOf("?") >= 0 ? "&" : "?") + "_x_tr_sl=es&_x_tr_tl=es&_x_tr_hl=es";
+    log("mangadex — Kino negó el directo (" + ((eMd && eMd.message) || eMd) + "): probando el puente del traductor");
+    r = await kino.fetch(puenteMd, { headers: { Accept: "application/json" }, timeoutMs: 14000 });
+  }
   if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
     userMessage: "No se pudo conectar con MangaDex. Inténtalo de nuevo.",
   });
@@ -4846,13 +4983,32 @@ async function homeTree() {
     if (posP >= 0 && posR > posP) {
       populares = cardsLX(html.slice(posP, posR), 24);
       recientes = cardsLX(html.slice(posR), 24);
+      // v0.4.73 — si la plantilla nueva deja al lector estrecho casi vacío
+      // (el Registro del 20 nov: 1 tarjeta y 0), el lector amplio entra
+      // y repecha lo que aquel no puede ver.
+      if (populares.length < 3) {
+        const ampP = cardsLXAmplia(html.slice(posP, posR), 24);
+        if (ampP.length > populares.length) populares = ampP;
+      }
+      if (recientes.length < 3) {
+        const ampR = cardsLXAmplia(html.slice(posR), 24);
+        if (ampR.length > recientes.length) recientes = ampR;
+      }
     }
     // v0.4.60 — «Recientes» de LectorXd sí tiene más: el sitio le pone
     // «Ver todo» y abre su catálogo ordenado por recientes (el mismo
     // orden del riel). «Populares de hoy» es un top fijo de 10: se
     // queda sin botón, como siempre.
     if (recientes.length) masRec = true;
-    if (!populares.length && !recientes.length) mixtas = cardsLX(html, 40);
+    // v0.4.73 — la cadena de respaldo completa para la portada: lector
+    // estrecho → lector amplio → cuadrícula del catálogo (la que SÍ
+    // funciona: 24 tarjetas en el Registro del 20 nov). Si la plantilla
+    // cambió de raíz, alguna de las tres la pinta.
+    if (!populares.length && !recientes.length) {
+      mixtas = cardsLX(html, 40);
+      if (!mixtas.length) mixtas = cardsLXAmplia(html, 40);
+      if (!mixtas.length) mixtas = cardsLXCat(html, 40);
+    }
     if (!populares.length && !recientes.length) {
       const heads = (html.match(/<h[123][^>]*>[^<]{2,50}/gi) || []).slice(0, 6);
       log("LX portada sin secciones; h: " + heads.join(" ~ ").replace(/\s+/g, " ").slice(0, 300));
