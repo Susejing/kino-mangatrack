@@ -14,6 +14,20 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.72 — LA ARMADURA DEL INICIO. La captura del teléfono
+// (19 nov 2026, 20:37) mostró la pantalla muerta: «MangaTrack no pudo
+// mostrar esta pantalla». La causa exacta estaba en el código: el Inicio
+// (homeTree) se llamaba FUERA del try de seguridad de screen(), y la
+// portada de la fuente activa (LeerCapitulo por defecto, también
+// LectorXd) se pedía sin red de seguridad — un solo fallo del sitio y la
+// pantalla entera moría, sin siquiera dejar cambiar de fuente. Ahora:
+// (1) el Inicio entero viaja dentro de un try que cae en su aviso
+// honesto con botón Reintentar, y (2) el pedido de la portada de la
+// fuente lleva su propio try: si LeerCapitulo (o LectorXd) no responde,
+// el Inicio abre igual con el aviso de la fuente caída y las DEMÁS
+// fuentes se siguen cambiando desde el selector de la barra. Una fuente
+// enferma ya no puede tumbar el plugin entero. Todo lo demás queda igual.
+
 // MangaTrack v0.4.68 — DESCUBRIR SIN REPETIR Y LISTAS QUE CRECEN. Dos
 // pedidos de la persona tras probar en el teléfono: (1) «Buscar de
 // nuevo» en Descubrir repetía las mismas sugerencias (el orden era
@@ -762,7 +776,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.71";
+const VERSION = "0.4.72";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4615,6 +4629,11 @@ async function homeTree() {
   let masPop = false;
   let masRec = false;
   let msVia = "";
+  // v0.4.72 — la confesión de la fuente caída: si la portada de la
+  // fuente activa no llega, este aviso (no el silencio ni la muerte)
+  // ocupa su lugar en el Inicio, y el selector de la barra queda a
+  // un toque para cambiar de fuente y seguir leyendo.
+  let fuenteCaida = "";
   let titPop = "Populares en español";
   let titPopEn = "Popular in Spanish";
   let titRec = "Actualizados recientes";
@@ -4798,7 +4817,18 @@ async function homeTree() {
     try { await mwPrecarga(populares, 8); await mwPrecarga(recientes, 8); }
     catch (e) { log("MW portadas home: " + ((e && e.message) || e)); }
   } else {
-    html = await getHtmlDe(f, "/");
+    // v0.4.72 — armadura de la portada: LeerCapitulo y LectorXd pedían
+    // su página SIN red de seguridad (esta línea es la que tumbar la
+    // pantalla entera en el teléfono: la fuente se cayó y el Inicio con
+    // ella). Ahora el fallo queda confesado en el aviso y el Inicio
+    // abre igual — con las demás fuentes vivas en el selector de la
+    // barra y el log con la causa exacta.
+    try {
+      html = await getHtmlDe(f, "/");
+    } catch (eHomHtml) {
+      fuenteCaida = (eHomHtml && eHomHtml.userMessage) || "No respondió (" + ((eHomHtml && (eHomHtml.code || eHomHtml.message)) || "error") + ")";
+      log("portada falló: " + ((eHomHtml && eHomHtml.message) || eHomHtml));
+    }
     if (f.id === "lectorxd") {
     // La portada de LectorXd trae "Populares de hoy" y "Recientes". Los
     // encabezados se buscan tolerando etiquetas en medio (el HTML real
@@ -4922,7 +4952,20 @@ async function homeTree() {
   // v0.4.55 — el riel «Para ti» se dibuja también cuando la fuente
   // no trajo nada: la puerta del descubrimiento siempre visible.
   const paraRail = paraTiRail();
-  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length && !paraRail.length) return VACIO_SERIES;
+  // v0.4.72 — el aviso de la fuente caída: su sección con tarjeta
+  // honesta arriba de las populares (que ahora estarían vacías).
+  const avisoFuente = fuenteCaida ? [
+    { type: "Card", key: "fuenteCaidaCard", flush: true, onTap: { event: "fuentesOpen" },
+      children: [
+        { type: "Text", text: f.nombre + " no respondió", textEn: f.nombre + " did not respond",
+          style: "h3", padding: 16 },
+        { type: "Text",
+          text: fuenteCaida + " — toca aquí para leer esta serie en otra fuente (o Reintentar más abajo cuando el sitio vuelva).",
+          textEn: fuenteCaida + " — tap here to switch to another source, or Retry below when the site is back.",
+          style: "caption", color: "muted", padding: 16 },
+      ] },
+  ] : [];
+  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length && !paraRail.length && !avisoFuente.length) return VACIO_SERIES;
   // v0.4.27 — cada riel deja su sección en el almacén para su «Ver
   // más»: la cuadrícula la lee de ahí (el patrón del catálogo), y el
   // botón «Cargar más del sitio» solo aparece donde mas dice que la
@@ -4990,6 +5033,7 @@ async function homeTree() {
     .concat(hero)
     .concat(railHist)
     .concat(paraRail)
+    .concat(avisoFuente)
     .concat(msAviso)
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
     .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
@@ -6032,7 +6076,18 @@ export async function screen(ev) {
     return errorTree((e && e.userMessage) ||
       ("No se pudo cargar (" + ((e && e.code) || "error") + ")."));
   }
-  const body = await homeTree();
+  // v0.4.72 — el Inicio también viaja con red de seguridad: si algo de
+  // su árbol falla (una fuente caída, un dato sucio), la pantalla
+  // muestra su aviso con botón Reintentar en vez de la pantalla muerta
+  // del teléfono («no pudo mostrar esta pantalla», captura del 19 nov).
+  let body = null;
+  try {
+    body = await homeTree();
+  } catch (eHom) {
+    log("error en el Inicio: " + ((eHom && eHom.message) || eHom));
+    body = errorTree((eHom && eHom.userMessage) ||
+      "No se pudo cargar el Inicio de " + fuenteActiva().nombre + ".");
+  }
   return {
     type: "Scaffold",
     // v0.4.34 — el selector de fuentes de las apps de lectura: el
@@ -9408,6 +9463,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 

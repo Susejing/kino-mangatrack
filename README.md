@@ -70,6 +70,7 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 - **0.4.30** — el lector integrado dibuja capítulos de ManhwaWeb y Mangas.in bajando las páginas con presentación y por tandas; portadas de Mangas.in con la misma receta.
 - **0.4.31** — páginas «demasiado grandes» marcadas con aviso honesto y sin reintentos inútiles; «Bajar más páginas» reintenta a mano.
 - **0.4.71** — **pantalla completa en los dos modos del lector** (tira y páginas): sin barra ninguna — solo el manga, nada encima; se sale con el Atrás del teléfono.
+- **0.4.72** — **la armadura del Inicio**: una fuente caída (LeerCapitulo) ya no tumba el plugin entero con «no pudo mostrar esta pantalla» — el Inicio abre igual con el aviso de la fuente, el botón Reintentar y las demás fuentes a un toque en el selector de la barra.
 
 ## Créditos
 
@@ -83,4 +84,5 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 ## Licencia
 
 Código bajo la **GPL-3.0**: puedes usarlo y modificarlo, pero tu versión debe seguir abierta y con crédito. © 2026 **Susejing** (Bogotá, Colombia). El texto completo está en el archivo [LICENSE](LICENSE).
+
 
