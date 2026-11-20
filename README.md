@@ -72,6 +72,7 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 - **0.4.71** — **pantalla completa en los dos modos del lector** (tira y páginas): sin barra ninguna — solo el manga, nada encima; se sale con el Atrás del teléfono.
 - **0.4.72** — **la armadura del Inicio**: una fuente caída (LeerCapitulo) ya no tumba el plugin entero con «no pudo mostrar esta pantalla» — el Inicio abre igual con el aviso de la fuente, el botón Reintentar y las demás fuentes a un toque en el selector de la barra.
 - **0.4.73** — **el puente y el lector amplio**: cuando Kino niega el directo a www.leercapitulo.co y a la API de MangaDex, ambas viajan por el puente del traductor de Google (*.translate.goog entra a la lista de hosts — al actualizar, el teléfono pedirá re-aprobarla); y la plantilla nueva de LectorXd ya no deja la portada casi vacía: un lector amplio de imágenes (srcset/picture/background) repecha las tarjetas, con la cadena estrecho → amplio → cuadrícula del catálogo.
+- **0.4.74** — **el donante de caras**: el Inicio de LectorXd ya llenaba sus rieles con la plantilla nueva, pero las tarjetas salían sin portada (la condición del amplio ya no disparaba); ahora el lector amplio siempre se corre y le dona la portada a las huérfanas, y el lector estrecho aprendió a leer `<picture>/<source srcset>`, el srcset de la propia imagen y el fondo pintado — sin pedidos extra.
 
 ## Créditos
 
@@ -85,5 +86,4 @@ No pide cuentas de ningún sitio: lee lo que los sitios sirven sin sesión, como
 ## Licencia
 
 Código bajo la **GPL-3.0**: puedes usarlo y modificarlo, pero tu versión debe seguir abierta y con crédito. © 2026 **Susejing** (Bogotá, Colombia). El texto completo está en el archivo [LICENSE](LICENSE).
-
 

@@ -14,6 +14,20 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.74 — EL DONANTE DE CARAS. La captura del teléfono (20
+// nov, 15:04) celebró el lector amplio: «Populares de hoy» y «Recientes»
+// volvieron a traer RIELES LLENOS de títulos — pero solo La Emperatriz
+// Divorciada trajo su portada; las demás tarjetas quedaron con su icono.
+// Causa exacta: con la plantilla nueva el lector ESTRECHO ya encuentra
+// todas las tarjetas (antes apenas 1), así que la condición de la 0.4.73
+// («si hay menos de 3, entra el amplio») dejaba de disparar y el lector
+// que SÍ lee las imágenes nuevas nunca entraba. Ahora el amplio SIEMPRE
+// se corre sobre cada zona y les dona la cara a las huérfanas (misma
+// serie, su dirección del amplio); y el estrecho aprendió a leer las
+// imágenes de la plantilla nueva: <source srcset> del <picture>, el
+// srcset de la propia img (primera dirección del srcset) y el fondo
+// pintado (background-image). Sin pedidos extra: todo en casa.
+
 // MangaTrack v0.4.73 — EL PUENTE Y EL LECTOR AMPLIO. El Registro del
 // teléfono (20 nov) dirimió las dos heridas con nombres: (1) LeerCapitulo
 // y MangaDex amanecieron NEGADOS POR KINO («host not allowed» con el host
@@ -794,7 +808,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.73";
+const VERSION = "0.4.74";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1963,6 +1977,64 @@ function capsRecientesLC(html, max) {
 // los títulos larguísimos y las etiquetas anidadas rompían el patrón
 // corto, así que tras cada <a> se busca la primera imagen y el primer
 // título hasta el siguiente enlace.
+// v0.4.74 — LA CARA POR CERCANÍA. La plantilla nueva del sitio mueve las
+// imágenes de la tarjeta: <picture>/<source srcset> ANTES del ancla,
+// srcset en la propia img, perezosas detrás del enlace. La cara segura
+// es la etiqueta de imagen MÁS CERCA del ancla de la serie, sin cruzar
+// contenedores (</div>) ni anclas de OTRAS series en el camino.
+function caraAtributoDe(tag) {
+  if (!tag) return "";
+  const m = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i)
+    || tag.match(/\bsrc="([^"]+)"/i)
+    || tag.match(/\b(?:data-srcset|srcset)="([^"\s,]+\.(?:jpe?g|png|webp)[^"]*)"/i);
+  if (m && m[1]) return m[1].split(/\s+/)[0];
+  const bg = tag.match(/background-image:\s*url\((['\"]?)([^'\")]+)/i);
+  if (bg && bg[2]) return bg[2];
+  return "";
+}
+function caraCerca(html, ini, fin) {
+  // (a) ATRÁS: la última etiqueta de imagen antes del ancla; solo vale si
+  // después de ella no cierra un contenedor ni abre otro enlace (esa
+  // cara sería de la tarjeta anterior).
+  const atras = html.slice(Math.max(0, ini - 1200), ini);
+  const reT = /<(?:img|source)\b[^>]*>/gi;
+  const candidatas = [];
+  let mm;
+  while ((mm = reT.exec(atras)) !== null) candidatas.push({ tag: mm[0], idx: mm.index });
+  if (candidatas.length) {
+    let ultA = -1;
+    const reA = /<a[\s>]/gi; let ma;
+    while ((ma = reA.exec(atras)) !== null) ultA = ma.index;
+    // v0.4.74 — el cierre de la tarjeta es una frontera: si entre la cara
+    // candidata y el ancla se cierra un </a> (o un </div>, o abre otra
+    // ancla), esa cara es de la tarjeta anterior y se respeta. Y si la
+    // etiqueta más cercana no trae cara, se sigue caminando hacia atrás.
+    const cierre = Math.max(atras.lastIndexOf("</div>"), atras.lastIndexOf("</a>"), ultA);
+    for (let i = candidatas.length - 1; i >= 0; i--) {
+      if (candidatas[i].idx <= cierre) break;
+      const u = caraAtributoDe(candidatas[i].tag);
+      if (u) return u;
+    }
+  }
+  // (b) ADELANTE: hasta el cierre del contenedor o la próxima ancla.
+  const zona = html.slice(fin, Math.min(html.length, fin + 700));
+  const c1 = zona.search(/<\/div>/i);
+  const c2 = zona.search(/<a[\s>]/i);
+  // v0.4.74 — la propia sección también muro: sin esto la ventana se mete
+  // en la tarjeta siguiente y le roba su cara (hallado en el banco).
+  const c3 = zona.search(/<\/section>/i);
+  let corte = zona.length;
+  if (c1 >= 0 && c1 < corte) corte = c1;
+  if (c2 >= 0 && c2 < corte) corte = c2;
+  if (c3 >= 0 && c3 < corte) corte = c3;
+  const primer = zona.slice(0, corte).match(/<(?:img|source)\b[^>]*>/i);
+  if (primer) {
+    const u = caraAtributoDe(primer[0]);
+    if (u) return u;
+  }
+  return "";
+}
+
 function cardsLX(html, max) {
   const out = [];
   const seen = {};
@@ -1979,18 +2051,12 @@ function cardsLX(html, max) {
     let inner = html.slice(start, start + 2000);
     const corte = inner.search(/<a\b/i);
     if (corte > 0) inner = inner.slice(0, corte);
-    let im = inner.match(/<img\b[^>]*>/i);
     let poster = "";
-    if (!im && m.index > consumido) {
-      // Portada que vive ANTES del enlace: solo si no pertenece a la
-      // tarjeta anterior.
-      const antes = html.slice(consumido, m.index);
-      const im2 = antes.match(/<img\b[^>]*>/i);
-      if (im2) im = im2;
-    }
-    if (im) {
-      const p = im[0].match(/\bdata-src="([^"]+)"/i) || im[0].match(/\bdata-lazy-src="([^"]+)"/i) || im[0].match(/\bsrc="([^"]+)"/i);
-      if (p) poster = absLX(p[1]);
+    // v0.4.74 — la cara por cercanía (atrás sin cruzar contenedores ni
+    // anclas ajenas, dentro del ancla, o justo detrás hasta su cierre).
+    {
+      const cara = caraCerca(html, m.index, start);
+      if (cara) poster = absLX(cara);
     }
     // v0.4.73 — una tarjeta sin cara ya NO se descarta: entra con su
     // icono de siempre (el fallback del pintor) y su título. La portada
@@ -2000,9 +2066,12 @@ function cardsLX(html, max) {
     let title = "";
     const h = inner.match(/<h[2-6][^>]*>([\s\S]{2,200}?)<\/h[2-6]>/i);
     if (h) title = clean(h[1].replace(/<[^>]*>/g, " "));
-    if (!title && im) {
-      const a = im[0].match(/\balt="([^"]*)"/i);
-      if (a && a[1]) title = clean(a[1]);
+    if (!title) {
+      const im = inner.match(/<img\b[^>]*>/i);
+      if (im) {
+        const a = im[0].match(/\balt="([^"]*)"/i);
+        if (a && a[1]) title = clean(a[1]);
+      }
     }
     if (!title) title = url.split("/").filter(Boolean).pop() || url;
     seen[url] = 1;
@@ -2097,17 +2166,21 @@ function cardsLXAmplia(html, max) {
     }
     const bloque = html.slice(a.fin, Math.min(html.length, fin));
     let poster = "";
-    const etiquetas = bloque.match(/<(?:img|source)\b[^>]*>/gi) || [];
-    for (let k = 0; k < etiquetas.length && !poster; k++) {
-      const tag = etiquetas[k];
-      const p = tag.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
-        || tag.match(/\b(?:data-srcset|srcset)=["']([^"'\s,]+\.(?:jpe?g|png|webp)[^"']*)["']/i);
-      // v0.4.73 — el srcset puede traer descriptores tras la URL
-      // («…webp 2x» o «…webp 2x, otra 3x»): se queda solo la primera.
-      if (p && p[1]) poster = absLX(p[1].split(/\s+/)[0]);
-      if (!poster) {
-        const bg = tag.match(/url\((['"]?)([^'")]+\.(?:jpe?g|png|webp)[^'")]*)/i);
-        if (bg) poster = absLX(bg[2]);
+    // v0.4.74 — la misma cara por cercanía que el lector estrecho:
+    // una sola escuela para las dos plantillas.
+    const caraBruta = caraCerca(html, a.ini, a.fin);
+    poster = caraBruta ? absLX(caraBruta) : "";
+    if (!poster) {
+      const etiquetas = bloque.match(/<(?:img|source)\b[^>]*>/gi) || [];
+      for (let k = 0; k < etiquetas.length && !poster; k++) {
+        const tag = etiquetas[k];
+        const p = tag.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
+          || tag.match(/\b(?:data-srcset|srcset)=["']([^"'\s,]+\.(?:jpe?g|png|webp)[^"']*)["']/i);
+        if (p && p[1]) poster = absLX(p[1].split(/\s+/)[0]);
+        if (!poster) {
+          const bg = tag.match(/url\((['\"]?)([^'\")]+\.(?:jpe?g|png|webp)[^'\")]*)/i);
+          if (bg) poster = absLX(bg[2]);
+        }
       }
     }
     if (!poster) {
@@ -4983,17 +5056,30 @@ async function homeTree() {
     if (posP >= 0 && posR > posP) {
       populares = cardsLX(html.slice(posP, posR), 24);
       recientes = cardsLX(html.slice(posR), 24);
-      // v0.4.73 — si la plantilla nueva deja al lector estrecho casi vacío
-      // (el Registro del 20 nov: 1 tarjeta y 0), el lector amplio entra
-      // y repecha lo que aquel no puede ver.
-      if (populares.length < 3) {
-        const ampP = cardsLXAmplia(html.slice(posP, posR), 24);
-        if (ampP.length > populares.length) populares = ampP;
-      }
-      if (recientes.length < 3) {
-        const ampR = cardsLXAmplia(html.slice(posR), 24);
-        if (ampR.length > recientes.length) recientes = ampR;
-      }
+      // v0.4.74 — EL DONANTE DE CARAS. Con la plantilla nueva del sitio el
+      // lector estrecho ya encuentra tarjetas PERO SIN PÓSTER (captura del
+      // teléfono 20 nov 15:04: los títulos salieron, las caras no) — la
+      // condición de la 0.4.73 (< 3 tarjetas) ya no dispara y el amplio,
+      // que sí lee las imágenes nuevas, ni entraba. Ahora el amplio SIEMPRE
+      // se corre sobre cada zona: les dona la cara a las huérfanas (misma
+      // serie, dirección del amplio) y si juntó más pósters que el
+      // estrecho, lo reemplaza entero. Todo local, sin pedidos extra.
+      const ampP = cardsLXAmplia(html.slice(posP, posR), 24);
+      const ampR = cardsLXAmplia(html.slice(posR), 24);
+      const donar = (amp) => {
+        const mapa = {};
+        for (let k = 0; k < amp.length; k++) if (amp[k].poster) mapa[amp[k].url] = amp[k].poster;
+        return mapa;
+      };
+      const mapaP = donar(ampP);
+      const mapaR = donar(ampR);
+      let donadas = 0;
+      populares = populares.map((x) => (!x.poster && mapaP[x.url]) ? (donadas++, Object.assign({}, x, { poster: mapaP[x.url] })) : x);
+      recientes = recientes.map((x) => (!x.poster && mapaR[x.url]) ? (donadas++, Object.assign({}, x, { poster: mapaR[x.url] })) : x);
+      // Respaldo: si el estrecho no pescó nada y el amplio sí, gana el amplio.
+      if (!populares.length && ampP.length) populares = ampP;
+      if (!recientes.length && ampR.length) recientes = ampR;
+      if (donadas) log("LX caras donadas por el amplio: " + donadas);
     }
     // v0.4.60 — «Recientes» de LectorXd sí tiene más: el sitio le pone
     // «Ver todo» y abre su catálogo ordenado por recientes (el mismo
@@ -9619,7 +9705,6 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
-
 
 
 
