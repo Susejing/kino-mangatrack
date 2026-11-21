@@ -14,6 +14,11 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
+// nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
+// propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
+// data: de mentira. Los tres lectores de caras aprenden el atributo nuevo
+// y la casa se vista sola.
 // MangaTrack v0.4.76 — LA LUPA. La huella de la 0.4.75 (Registro del
 // teléfono 20 nov, 20:50) enseñó el patio del vecino: la zona Recientes
 // trae 263 <img> y aun así el donante solo vistió a Populares — el sitio
@@ -831,7 +836,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.76";
+const VERSION = "0.4.77";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2008,6 +2013,7 @@ function capsRecientesLC(html, max) {
 function caraAtributoDe(tag) {
   if (!tag) return "";
   const m = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i)
+    || tag.match(/\bdata-home-cover-src="([^"]+)"/i)
     || tag.match(/\b(?:data-lazy|data-original)="([^"]+)"/i)
     || tag.match(/\bsrc="([^"]+)"/i)
     || tag.match(/\b(?:data-srcset|srcset)="([^"\s,]+\.(?:jpe?g|png|webp)[^"]*)"/i);
@@ -2147,7 +2153,7 @@ function cardsLXCat(html, max) {
     let poster = "";
     const imgs = inner.match(/<img\b[^>]*>/gi) || [];
     for (let i = 0; i < imgs.length; i++) {
-      const p = imgs[i].match(/\bdata-src="([^"]+)"/i) || imgs[i].match(/\bdata-lazy-src="([^"]+)"/i) || imgs[i].match(/\bsrc="([^"]+)"/i);
+      const p = imgs[i].match(/\bdata-src="([^"]+)"/i) || imgs[i].match(/\bdata-lazy-src="([^"]+)"/i) || imgs[i].match(/\bdata-home-cover-src="([^"]+)"/i) || imgs[i].match(/\bsrc="([^"]+)"/i);
       if (p && p[1] && p[1].indexOf("data:") !== 0) { poster = absLX(p[1]); break; }
     }
     let title = "";
@@ -2203,7 +2209,7 @@ function cardsLXAmplia(html, max) {
       const etiquetas = bloque.match(/<(?:img|source)\b[^>]*>/gi) || [];
       for (let k = 0; k < etiquetas.length && !poster; k++) {
         const tag = etiquetas[k];
-        const p = tag.match(/\b(?:data-src|data-lazy-src|data-lazy|data-original|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
+        const p = tag.match(/\b(?:data-src|data-lazy-src|data-lazy|data-home-cover-src|data-original|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
           || tag.match(/\b(?:data-srcset|srcset)=["']([^"'\s,]+\.(?:jpe?g|png|webp)[^"']*)["']/i);
         if (p && p[1]) poster = absLX(p[1].split(/\s+/)[0]);
         if (!poster) {
@@ -3031,7 +3037,8 @@ function imgsDe(zona) {
   let m;
   while ((m = re.exec(zona)) !== null) {
     const tag = m[0];
-    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
+    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i)
+    || tag.match(/\bdata-home-cover-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
     if (!p) continue;
     const src = absoluta(p[1]);
     if (!src || src.indexOf("data:") === 0) continue;
@@ -3117,7 +3124,8 @@ function imgsLX(html) {
   while ((m = re.exec(html)) !== null) {
     const tag = m[0];
     if (!/class="[^"]*page-image/i.test(tag)) continue;
-    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
+    const p = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i)
+    || tag.match(/\bdata-home-cover-src="([^"]+)"/i) || tag.match(/\bsrc="([^"]+)"/i);
     if (!p) continue;
     const u = absLX(p[1]);
     if (!u || u.indexOf("data:") === 0) continue;
