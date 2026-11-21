@@ -14,6 +14,19 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.75 — EL PULGAR PROPIO. La primera prueba del donante
+// (captura del teléfono 20 nov, 20:35) vistió a «Populares de hoy» entera
+// (el Registro: «caras donadas por el amplio: 10»), pero los pulgares de
+// «Recientes» seguían desnudos: el sitio guarda cada pulgar en una ancla
+// propia cerrada ANTES del título y la frontera de la 0.4.74 lo rechazaba
+// por honesta. Ahora la frontera pesa su caso: si la ancla cerrada solo
+// contiene la imagen (sin encabezado y sin otra ancla hasta la nuestra),
+// es el pulgar de ESTA tarjeta. Y si el sitio inventa otra forma aún, el
+// Registro nuevo deja la huella: cuántas imágenes de cada clase hay en
+// cada zona y el HTML crudo de las primeras huérfanas de Recientes — con
+// datos, no con adivinanzas. Atributos perezosos nuevos: data-lazy y
+// data-original. Sin pedidos extra.
+
 // MangaTrack v0.4.74 — EL DONANTE DE CARAS. La captura del teléfono (20
 // nov, 15:04) celebró el lector amplio: «Populares de hoy» y «Recientes»
 // volvieron a traer RIELES LLENOS de títulos — pero solo La Emperatriz
@@ -808,7 +821,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.74";
+const VERSION = "0.4.75";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1985,6 +1998,7 @@ function capsRecientesLC(html, max) {
 function caraAtributoDe(tag) {
   if (!tag) return "";
   const m = tag.match(/\bdata-src="([^"]+)"/i) || tag.match(/\bdata-lazy-src="([^"]+)"/i)
+    || tag.match(/\b(?:data-lazy|data-original)="([^"]+)"/i)
     || tag.match(/\bsrc="([^"]+)"/i)
     || tag.match(/\b(?:data-srcset|srcset)="([^"\s,]+\.(?:jpe?g|png|webp)[^"]*)"/i);
   if (m && m[1]) return m[1].split(/\s+/)[0];
@@ -2002,17 +2016,22 @@ function caraCerca(html, ini, fin) {
   let mm;
   while ((mm = reT.exec(atras)) !== null) candidatas.push({ tag: mm[0], idx: mm.index });
   if (candidatas.length) {
-    let ultA = -1;
-    const reA = /<a[\s>]/gi; let ma;
-    while ((ma = reA.exec(atras)) !== null) ultA = ma.index;
-    // v0.4.74 — el cierre de la tarjeta es una frontera: si entre la cara
-    // candidata y el ancla se cierra un </a> (o un </div>, o abre otra
-    // ancla), esa cara es de la tarjeta anterior y se respeta. Y si la
-    // etiqueta más cercana no trae cara, se sigue caminando hacia atrás.
-    const cierre = Math.max(atras.lastIndexOf("</div>"), atras.lastIndexOf("</a>"), ultA);
+    // v0.4.74 — la frontera de cierre: una cara más allá de un </div> o
+    // de un </a> ajeno se respeta (no se roba la cara de la tarjeta
+    // anterior). v0.4.75 — LA EXCEPCIÓN DEL PULGAR: la zona «Recientes»
+    // del sitio guarda el pulgar en una ancla propia cerrada antes del
+    // título; si esa ancla cerrada solo contiene la imagen (sin título
+    // y sin otra ancla hasta la nuestra), ese pulgar es de ESTA tarjeta.
+    const divC = atras.lastIndexOf("</div>");
+    const aC = atras.lastIndexOf("</a>");
     for (let i = candidatas.length - 1; i >= 0; i--) {
-      if (candidatas[i].idx <= cierre) break;
-      const u = caraAtributoDe(candidatas[i].tag);
+      const c = candidatas[i];
+      if (c.idx <= divC) break;
+      if (c.idx <= aC) {
+        if (/<h[1-6]/i.test(atras.slice(c.idx, aC))) break;
+        if (/<a[\s>]/i.test(atras.slice(aC))) break;
+      }
+      const u = caraAtributoDe(c.tag);
       if (u) return u;
     }
   }
@@ -2174,7 +2193,7 @@ function cardsLXAmplia(html, max) {
       const etiquetas = bloque.match(/<(?:img|source)\b[^>]*>/gi) || [];
       for (let k = 0; k < etiquetas.length && !poster; k++) {
         const tag = etiquetas[k];
-        const p = tag.match(/\b(?:data-src|data-lazy-src|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
+        const p = tag.match(/\b(?:data-src|data-lazy-src|data-lazy|data-original|src)=["']([^"']+\.(?:jpe?g|png|webp)[^"']*)["']/i)
           || tag.match(/\b(?:data-srcset|srcset)=["']([^"'\s,]+\.(?:jpe?g|png|webp)[^"']*)["']/i);
         if (p && p[1]) poster = absLX(p[1].split(/\s+/)[0]);
         if (!poster) {
@@ -5080,6 +5099,28 @@ async function homeTree() {
       if (!populares.length && ampP.length) populares = ampP;
       if (!recientes.length && ampR.length) recientes = ampR;
       if (donadas) log("LX caras donadas por el amplio: " + donadas);
+      // v0.4.75 — LA HUELLA: el Registro del teléfono dirime con datos qué
+      // hay en cada zona cuando las caras no llegan (con datos, no con
+      // adivinanzas): cuántas imágenes de cada clase y el HTML crudo de
+      // las primeras huérfanas de Recientes.
+      const zP = html.slice(posP, posR), zR = html.slice(posR);
+      const cenisos = (z) => "img=" + (z.match(/<img\b/gi) || []).length
+        + " source=" + (z.match(/<source\b/gi) || []).length
+        + " srcset=" + (z.match(/\bsrcset=/gi) || []).length
+        + " bg=" + (z.match(/background-image/gi) || []).length
+        + " lazys=" + (z.match(/\bdata-(?:lazy|original)/gi) || []).length;
+      log("LX zona populares: " + cenisos(zP));
+      log("LX zona recientes: " + cenisos(zR));
+      let huellas = 0;
+      for (let k = 0; k < recientes.length && huellas < 2; k++) {
+        if (!recientes[k].poster) {
+          const posX = zR.indexOf(recientes[k].url);
+          if (posX >= 0) {
+            huellas++;
+            log("LX huérfana sin cara: " + zR.slice(posX, posX + 160).replace(/\s+/g, " "));
+          }
+        }
+      }
     }
     // v0.4.60 — «Recientes» de LectorXd sí tiene más: el sitio le pone
     // «Ver todo» y abre su catálogo ordenado por recientes (el mismo
