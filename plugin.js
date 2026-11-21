@@ -14,6 +14,16 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.76 — LA LUPA. La huella de la 0.4.75 (Registro del
+// teléfono 20 nov, 20:50) enseñó el patio del vecino: la zona Recientes
+// trae 263 <img> y aun así el donante solo vistió a Populares — el sitio
+// es Astro (data-astro-cid) y el pulgar queda más adentro del bloque de
+// lo que mostrarón los 160 caracteres de la huella. Antes de curar a
+// ciegas, la lupa hace el diagnóstico completo: por zona ahora cuenta
+// data-src, perezosos y caras .avif/.webp/.jpg, enseña la PRIMERA
+// etiqueta img entera de Recientes y la huérfana se ve a 720 letras.
+// Sin cambios de comportamiento: solo el Registro habla.
+
 // MangaTrack v0.4.75 — EL PULGAR PROPIO. La primera prueba del donante
 // (captura del teléfono 20 nov, 20:35) vistió a «Populares de hoy» entera
 // (el Registro: «caras donadas por el amplio: 10»), pero los pulgares de
@@ -821,7 +831,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.75";
+const VERSION = "0.4.76";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5104,20 +5114,27 @@ async function homeTree() {
       // adivinanzas): cuántas imágenes de cada clase y el HTML crudo de
       // las primeras huérfanas de Recientes.
       const zP = html.slice(posP, posR), zR = html.slice(posR);
+      // v0.4.76 — la lupa: por zona ya no cuentan solo etiquetas sino
+      // VOCABULARIO (data-src, perezosos, y cuántas caras .avif/.webp/.jpg)
+      // y se enseña la PRIMERA etiqueta img completa de Recientes, con la
+      // huérfana ampliada a 720 letras para ver el img entero.
       const cenisos = (z) => "img=" + (z.match(/<img\b/gi) || []).length
-        + " source=" + (z.match(/<source\b/gi) || []).length
-        + " srcset=" + (z.match(/\bsrcset=/gi) || []).length
-        + " bg=" + (z.match(/background-image/gi) || []).length
-        + " lazys=" + (z.match(/\bdata-(?:lazy|original)/gi) || []).length;
+        + " dsrc=" + (z.match(/\bdata-src=/gi) || []).length
+        + " lazys=" + (z.match(/\bdata-(?:lazy|lazy-src|original|cfsrc)/gi) || []).length
+        + " avif=" + (z.match(/\.avif/gi) || []).length
+        + " webp=" + (z.match(/\.webp/gi) || []).length
+        + " jpg=" + (z.match(/\.jpe?g/gi) || []).length;
       log("LX zona populares: " + cenisos(zP));
       log("LX zona recientes: " + cenisos(zR));
+      const pir = zR.match(/<img\b[^>]*>/i);
+      if (pir) log("LX recientes primera img: " + pir[0].replace(/\s+/g, " ").slice(0, 380));
       let huellas = 0;
       for (let k = 0; k < recientes.length && huellas < 2; k++) {
         if (!recientes[k].poster) {
           const posX = zR.indexOf(recientes[k].url);
           if (posX >= 0) {
             huellas++;
-            log("LX huérfana sin cara: " + zR.slice(posX, posX + 160).replace(/\s+/g, " "));
+            log("LX huérfana sin cara: " + zR.slice(posX, posX + 720).replace(/\s+/g, " "));
           }
         }
       }
