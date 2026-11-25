@@ -14,6 +14,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// MangaTrack v0.4.78 — PANTALLA COMPLETA DE VERDAD. La 0.4.71 ya dibuja
+// el lector sin AppBar, pero la barra de título de Kino («MangaTrack» y su
+// campanita) y las barras del teléfono seguían mirando arriba del capítulo.
+// Kino 0.9.84 trajo la cura oficial (changelog): la operación `ui`
+// `{ fullscreen: true }` esconde ESAS barras para leer a borde a borde, y
+// `{ fullscreen: false }` las devuelve. Ahora: la respuesta que abre (o
+// cambia) el capítulo viaja con `{ fullscreen: true }` (el `set` del modo
+// páginas viaja en la misma lista), y como en pantalla completa la única
+// salida es la que dibuja el plugin, el Scaffold del lector declara
+// `onBack`: el Atrás llega al evento salirLector, que devuelve las barras
+// y sale; el panel de «Fin del capítulo» estrena «Salir del lector», y el
+// popBack de toda la vida también devuelve las barras. Salida honesta,
+// sin trampa: si la llamada de onBack falla, Kino cierra la pantalla solo).
+// Un Kino anterior a 0.9.84 ignora la operación y queda como hoy. Sin
+// hosts nuevos, sin settings, sin cambios en los parsers; manifest en
+// 0.4.78 para obligar la actualización.
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -836,7 +853,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.77";
+const VERSION = "0.4.78";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5820,7 +5837,8 @@ function readerTree(state) {
     ].concat(esMuro ? [btnVentanaLeer] : []).concat(pagesDisponible() ? [
       { type: "TextButton", key: "btnModo", labelText: modo === "paginas" ? "Modo tira" : "Modo páginas",
         labelTextEn: modo === "paginas" ? "Strip mode" : "Page mode", onPressed: "modoLector" },
-    ] : []) },
+    ] : []).concat([{ type: "TextButton", key: "btnSalirLector", icon: "close",
+      labelText: "Salir del lector", labelTextEn: "Leave the reader", onPressed: "popBack" }]) },
     { type: "Text", key: "finInfo", text: barraTexto, style: "caption", color: "muted" },
   ] };
   if (modo === "paginas") cuerpo.children.push(panelFin);
@@ -5842,9 +5860,15 @@ function readerTree(state) {
   // flechita, sin nada; se sale con el Atrás del teléfono (docs:
   // «Atrás y el cierre de Kino salen») y los controles siguen al final
   // del capítulo. La barra barReader se retira de los dos modos.
+  // v0.4.78 — con la pantalla completa de Kino 0.9.84 activa, la salida
+  // se dibuja: el Scaffold declara onBack (el Atrás llega como
+  // salirLector, que devuelve las barras y sale; docs: nunca trampa, un
+  // fallo de onBack cierra la pantalla solo) y el panel de fin de
+  // capítulo estrena «Salir del lector».
   const raiz = {
     type: "Scaffold",
     every: (r.pend || 0) > 0 && (r.fallos || 0) < 3 ? { ms: 3000, event: "dimsTick" } : undefined,
+    onBack: { event: "salirLector" },
     body: { type: "Column", children: body },
   };  return raiz;
 }
@@ -6971,7 +6995,14 @@ export async function screenEvent(ev) {
       setJsonCache("riel:" + rkey, Object.assign({}, r, { start: ns }));
       return { state: { rielTk: Date.now() } };
     }
-    if (name === "popBack") return { route: { pop: true } };
+    if (name === "popBack") return { route: { pop: true }, ui: [{ fullscreen: false }] };
+    if (name === "salirLector") {
+      // v0.4.78 — el Atrás del lector (el Scaffold del capítulo declara
+      // onBack): se devuelven las barras de Kino y del teléfono, y se
+      // sale del capítulo. Si la llamada falla o tarda, Kino cierra la
+      // pantalla él mismo: nunca una trampa.
+      return { ui: [{ fullscreen: false }], route: { pop: true } };
+    }
     if (name === "openSeries") {
       const url = String(ev.arg || "");
       if (!fuenteDeUrl(url)) return null;
@@ -7074,7 +7105,7 @@ export async function screenEvent(ev) {
         let at = ch ? pgLeer(ch.url) : 0;
         at = parseInt(at, 10);
         if (!(at >= 0) || at >= r.images.length) at = 0;
-        resp.ui = [{ set: { key: "pgs", value: at } }];
+        resp.ui = [{ fullscreen: true }, { set: { key: "pgs", value: at } }];
       } else {
         // v0.4.23 — al volver a la tira, se retoma por la página que
         // guardó el modo páginas (la misma vara del «Continuar»).
@@ -9590,6 +9621,12 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
   }
   const resp = { state: { reader: reader } };
   if (conRuta) resp.route = { push: "read" };
+  // v0.4.78 — PANTALLA COMPLETA: la respuesta que abre (o cambia) el
+  // capítulo viaja con `{ fullscreen: true }` (Kino 0.9.84, sin
+  // apiVersion nueva); esconde la barra de título de Kino y las barras
+  // del teléfono mientras se lee. El `set` del modo páginas va en la
+  // misma lista (tope: 8 operaciones locales).
+  resp.ui = [{ fullscreen: true }];
   // Modo páginas (Kino 0.9.81): retomar donde se quedó (la receta del
   // lector de la docs: un `set` de ui sobre la key del pages en la
   // respuesta que abre el capítulo).
@@ -9597,7 +9634,7 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     let at = pgLeer(ch.url);
     at = parseInt(at, 10);
     if (!(at >= 0) || at >= images.length) at = 0;
-    resp.ui = [{ set: { key: "pgs", value: at } }];
+    resp.ui.push({ set: { key: "pgs", value: at } });
     log("modo páginas: retomando en la pág " + (at + 1));
   }
   // Recoge el aviso de AniTrack (venía corriendo en paralelo): si hay
@@ -9771,6 +9808,7 @@ async function cargarSerie(url, conRuta) {
   if (conRuta) resp.route = { push: "detail", params: { url: url } };
   return resp;
 }
+
 
 
 
