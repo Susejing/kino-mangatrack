@@ -120,6 +120,26 @@
 // falta y no estira nunca más. En las CUADRÍGULAS no se toca nada:
 // la celda ya las acota. Sin hosts nuevos, sin settings, sin parsers.
 
+// MangaTrack v0.4.84 «EL VIGÍA» — la petición de la persona tras la 0.4.83:
+// avisos de capítulos nuevos. Un trabajo de fondo (capability "schedule",
+// Kino 0.9.81+) recorre por turnos las series de la estantería (favs, tope
+// 100) y guarda el último capítulo visto en cada una; cuando una sube, deja
+// un aviso en la campana de Inicio (capability "notifications", Kino
+// 0.9.87+) que abre la serie con un toque. Cotas del contrato del trabajo
+// (kino.d.ts): 20 s, 10 peticiones, 2 MB de respuestas y 256 KB escritos
+// por corrida — por eso son CUATRO series por turno con rotación (las
+// fuentes de doble página caben en las 10 peticiones; la 0.4.79 ya
+// prohibió llamadas en rafaga) y el estado del
+// vigía es un mapa pequeño. El interruptor es el toggle "vigiaOn" de
+// Ajustes (enabledBy del manifiesto, encendido por defecto) y cada cuánto
+// se cambia en la fila del propio trabajo (30 min a 6 h). La sonda es la
+// MÁS BARATA de cada fuente: MangaDex solo el feed de capítulos en español,
+// las de HTML solo la página de la serie con chapterList (nada de portadas
+// al almacén ni de preparar el lector). Sin sesión ni puertas raras: lo que
+// el vigía usa ya está en las listas de hosts del manifiesto. El primer
+// vistazo de cada serie SIEMBRA (no avisa): nadie quiere 20 avisos el
+// primer día.
+
 // MangaTrack v0.4.83 «LA TARJETA JUSTA» — la captura del teléfono (26 nov,
 // 02:08) juzgó a la 0.4.82: los chips, los contadores y el NUEVO llegaron,
 // pero la franja azul al lado de las portadas seguía (y el maxWidth no se
@@ -957,7 +977,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.83";
+const VERSION = "0.4.84";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2854,6 +2874,127 @@ function syncPullHist() {
   if (lk.length > 100) { lk.sort((a, b) => (local[b].ts || 0) - (local[a].ts || 0));
     for (let i = 100; i < lk.length; i++) delete local[lk[i]]; }
   if (changed) { setJson("hist", local); syncPushHist(); }
+}
+
+// ------------------------------------------------- v0.4.84 — EL VIGÍA
+// El trabajo de fondo: favs → último capítulo de cada una → aviso en la
+// campana de Inicio cuando sube. La sonda por fuente y las cotas del
+// contrato están contadas en la cabecera de la versión.
+
+// El id de aviso por serie: estable (el mismo id REEMPLAZA al aviso anterior
+// de esa serie, que es lo correcto cuando salen dos capítulos seguidos) y
+// corto (1 a 64 de A-Z a-z 0-9 . _ -): djb2 en base36.
+function vigiaId(url) {
+  let h = 5381;
+  const s = String(url || "");
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) & 0x7fffffff;
+  return "cap-" + h.toString(36);
+}
+
+// El ÚLTIMO capítulo de una serie, con la sonda más barata de cada fuente.
+// Devuelve el número como texto ("84", "84.5") o "" si no se pudo.
+async function vigiaUnUrl(url) {
+  await null;
+  const f = fuenteDeUrl(url);
+  if (!f) return "";
+  let caps = null;
+  if (f.id === "mangadex") {
+    const id = url.replace(/^[/]title[/]/, "").replace(/[/]$/, "");
+    caps = await mdCaps(id);
+  } else if (f.id === "inmanga") {
+    caps = (await imSerie(url)).chapters;
+  } else if (f.id === "mangaoni") {
+    caps = (await moSerie(url)).chapters;
+  } else if (f.id === "mangasin") {
+    const s = await msSerie(url);
+    if (s.aviso) return "";
+    caps = s.chapters;
+  } else if (f.id === "manhwaweb") {
+    const s = await mwSerie(url);
+    if (s.aviso) return "";
+    caps = s.chapters;
+  } else {
+    caps = chapterList(await getHtmlDe(f, url));
+  }
+  if (!Array.isArray(caps) || !caps.length) return "";
+  let mejor = NaN;
+  for (let i = 0; i < caps.length; i++) {
+    const v = parseFloat((caps[i] && caps[i].num) || "");
+    if (isFinite(v) && (isNaN(mejor) || v > mejor)) mejor = v;
+  }
+  return isFinite(mejor) ? String(mejor) : "";
+}
+
+// El propio trabajo. Headless y ciego: solo favs, red barata, el mapa
+// "vigia" del almacén y la campana. Nada de módulos ni pantallas: si el
+// turno lo corta Kino (20 s), el siguiente turno retoma la rotación.
+export async function job(ctx) {
+  await null;
+  const manual = !!(ctx && ctx.reason === "manual");
+  // La campana no existe en Kinos viejos: sin ella el turno solo siembra.
+  if (typeof kino.notifications !== "object" || !kino.notifications) {
+    log("vigía: este Kino no tiene campana, no aviso");
+  }
+  // El interruptor (enabledBy del manifiesto): apagado no hace NADA.
+  // El toggle llega como boolean (o "false" por si acaso).
+  if (kino.config.get("vigiaOn") === false || kino.config.get("vigiaOn") === "false") {
+    log("vigía: apagado en Ajustes");
+    return { omitido: true };
+  }
+  const fs = favs();
+  if (!fs.length) return { revisadas: 0 };
+  // El mapa del vigía: url → { num, ts, nom }. Podas: series que ya no
+  // están en la estantería y tope 100 (el de favs).
+  let v = getJson("vigia", {});
+  if (!v || typeof v !== "object") v = {};
+  const vivas = {};
+  for (let i = 0; i < fs.length; i++) vivas[fs[i].url] = 1;
+  for (const k in v) { if (!vivas[k]) delete v[k]; }
+  // Rotación: CUATRO series por turno (la 0.4.79 prohibió el bombardeo y
+  // el contrato da 10 peticiones: las fuentes de doble página caben; quien
+  // quiera más rápido baja el cada-cuánto, no el lote).
+  const i0 = parseInt(getJson("vigia:i", "0"), 10) || 0;
+  const LOTE = 4;
+  let revisadas = 0, avisos = 0, fallos = 0;
+  for (let n = 0; n < Math.min(LOTE, fs.length); n++) {
+    const f = fs[(i0 + n) % fs.length];
+    const url = f && f.url;
+    if (!url) continue;
+    let ultimo = "";
+    try {
+      ultimo = await vigiaUnUrl(url);
+    } catch (e) {
+      fallos++;
+      log("vigía: «" + String(f.title || url).slice(0, 40) + "» falló: " + ((e && (e.code || e.message)) || e));
+      continue;
+    }
+    if (!ultimo) continue;
+    revisadas++;
+    const prev = v[url];
+    const subio = !!(prev && prev.num && parseFloat(ultimo) > parseFloat(prev.num) + 1e-9);
+    v[url] = { num: ultimo, ts: Date.now(), nom: String(f.title || (prev && prev.nom) || "").slice(0, 80) };
+    if (subio && typeof kino.notifications === "object" && kino.notifications) {
+      const fnt = fuenteDeUrl(url);
+      try {
+        await kino.notifications.post({
+          id: vigiaId(url),
+          title: ("Capítulo " + ultimo + " de «" + (v[url].nom || "tu serie") + "»").slice(0, 80),
+          text: ("Nuevo en " + (fnt && fnt.nombre ? fnt.nombre : "MangaTrack") + ": toca para leerlo.").slice(0, 160),
+          go: { screen: { route: "detail", args: { url: url } } }
+        });
+        avisos++;
+        log("vigía: aviso, «" + v[url].nom + "» ahora va por el " + ultimo);
+      } catch (e2) {
+        log("vigía: la campana rechazó el aviso: " + ((e2 && e2.code) || e2));
+      }
+    } else if (!prev) {
+      log("vigía: siembro «" + v[url].nom + "» (" + ultimo + ")");
+    }
+  }
+  setJson("vigia:i", String((i0 + Math.min(LOTE, fs.length)) % Math.max(fs.length, 1)));
+  setJson("vigia", v);
+  log("vigía: turno " + (manual ? "manual" : "programado") + ": " + revisadas + " revisadas, " + avisos + " avisos" + (fallos ? ", " + fallos + " fallos" : ""));
+  return { revisadas: revisadas, avisos: avisos, fallos: fallos };
 }
 
 // ------------------------------------------------- v0.4.49 — mis reseñas

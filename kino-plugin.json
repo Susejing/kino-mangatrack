@@ -1,7 +1,7 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.83",
+  "version": "0.4.84",
   "creator": "Susejing",
   "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni, Mangas.in y ManhwaWeb) con el panel de capítulos al final de la lectura, la vinculación con AniList que busca en todas las fuentes a la vez (y en lote desde Mi AniList) y el riel de mangas relacionados en cada serie.",
   "apiVersion": 19,
@@ -48,7 +48,9 @@
   "capabilities": [
     "screen",
     "shared",
-    "storageLarge"
+    "storageLarge",
+    "schedule",
+    "notifications"
   ],
   "recommends": [
     "Susejing/kino-anitrack"
@@ -84,5 +86,32 @@
   "author": "Susejing",
   "homepage": "https://github.com/Susejing/kino-mangatrack",
   "icon": "icon.png",
-  "color": "#E8722A"
+  "color": "#E8722A",
+  "jobs": [
+    {
+      "id": "vigia",
+      "label": {
+        "es": "Avisos de nuevos capítulos",
+        "en": "New chapter notices"
+      },
+      "everyMin": 60,
+      "everyOptions": [
+        30,
+        60,
+        120,
+        360
+      ],
+      "enabledBy": "vigiaOn"
+    }
+  ],
+  "settings": [
+    {
+      "key": "vigiaOn",
+      "label": "Avisos de nuevos capítulos",
+      "labelEn": "New chapter notices",
+      "type": "toggle",
+      "default": true,
+      "hint": "Revisa tus favoritas de vez en cuando y avisa en la campana de Inicio cuando una tenga capítulo nuevo. Cada cuánto se cambia en Ajustes ▸ Trabajo en segundo plano."
+    }
+  ]
 }
