@@ -120,6 +120,21 @@
 // falta y no estira nunca más. En las CUADRÍGULAS no se toca nada:
 // la celda ya las acota. Sin hosts nuevos, sin settings, sin parsers.
 
+// MangaTrack v0.4.83 «LA TARJETA JUSTA» — la captura del teléfono (26 nov,
+// 02:08) juzgó a la 0.4.82: los chips, los contadores y el NUEVO llegaron,
+// pero la franja azul al lado de las portadas seguía (y el maxWidth no se
+// notó). La confesión la dio AniJing: la misma app que dibuja bien en el
+// mismo teléfono y el mismo Kino, hoy abierta en el espejo. Su receta NO
+// parte el título en dos Text y NO lleva maxWidth: un solo Text con
+// maxLines 2, y el ancho lo manda la imagen de 120. El arreglo de acá,
+// títulos troceados en Text sueltos SIN maxLines, dejaba que cada trozo
+// pidiera su ancho y la tarjeta creciera para acomodarlos. Cura: en TODAS
+// las tarjetas de portada (poster, para ti, relacionadas, favoritos,
+// AniList, Mi AniList y vincular) el título toma la receta de AniJing, y
+// las notas que la acompañan («por qué», fuente, estado) quedan a una
+// línea. El maxWidth de la 0.4.82 sale: sin efecto en el teléfono, no se
+// queda. Sin hosts nuevos, sin settings, sin parsers.
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -930,6 +945,7 @@
 // del navegador que la ganó (Cloudflare las amarra juntas).
 // v0.4.8 — el +18 de LectorXd es un aviso tapado: sin sesión el sitio ya
 // entrega la lista de capítulos y las páginas debajo del aviso (verificado
+
 // en una serie +18 real), y ahora el plugin las lee como hacen otras apps.
 // v0.4.7 — el filtro anti-bots de LectorXd y MangaOni entra y sale: las
 // peticiones ahora se reintentan (otro disfraz de navegador, la dirección
@@ -942,7 +958,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.82";
+const VERSION = "0.4.83";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2252,6 +2268,7 @@ function cardsLXCat(html, max) {
   const iGrid = html.search(/manga-grid/i);
   if (iGrid < 0) {
     log("LX catálogo: sin cuadrícula en la página (html=" + html.length + ")");
+
     return out;
   }
   const zona = html.slice(iGrid);
@@ -3703,6 +3720,7 @@ const MAX_CAPS_MO = 300;
 const MO_BASE = "https://manga-oni.com";
 // Decodificador base64 (Kino no trae atob en el sandbox del plugin).
 function b64dec(s) {
+
   const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const src = String(s || "").replace(/[^A-Za-z0-9+/]/g, "");
   let out = "";
@@ -4927,6 +4945,13 @@ function twoLines(t) {
 // v0.4.79 — el contador honesto de riel: «título · n» (sin número no
 // muestra nada: un título sin series no existe; un título también con
 // «· 0» mentiría).
+// v0.4.83 — el título de tarjeta, a la manera de AniJing: UN Text con
+// maxLines 2. La versión de dos Text sueltos (sin maxLines) hacía que
+// cada trozo pidiera su ancho y la tarjeta creciera: la franja azul.
+function textoTitulo(t) {
+  return { type: "Text", text: String(t || ""), textEn: String(t || ""),
+    style: "caption", maxLines: 2, padding: 8 };
+}
 function contado(titulo, n) {
   const t = String(titulo || "");
   if (!t || !n) return t;
@@ -4982,21 +5007,18 @@ function posterCard(it, prefix, rail) {
   // fila fresca marcó al dibujar (copia ligera: el almacén queda limpio).
   const hijos = it.nuevo ? [{ type: "Badge", text: "NUEVO", textEn: "NEW" }] : [];
   hijos.push(img);
+  // v0.4.83 — LA TARJETA JUSTA: el título es UN Text con maxLines 2 (la
+  // receta literal de AniJing, que en este mismo teléfono no deja franja);
+  // el maxWidth de la 0.4.82 sale: en el teléfono no se notó.
   const card = {
     type: "Card", key: serieKey(prefix, it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
-    children: hijos.concat(twoLines(it.title).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+    children: hijos.concat([textoTitulo(it.title)])
       // v0.4.26 — etiqueta opcional bajo el título (capítulo y edad de
       // los «Recién actualizados»); las demás tarjetas no la traen.
       .concat(it.label ? [{ type: "Text", text: it.label, textEn: it.label,
-        style: "caption", color: "muted", padding: 8 }] : []),
+        style: "caption", maxLines: 1, color: "muted", padding: 8 }] : []),
   };
-  // v0.4.82 — A SU MEDIDA: en los rieles la tarjeta NO crece más allá
-  // de la portada (124: la caja de 120 y un pelo de redondeo); el
-  // título largo se parte y muere la franja azul de la captura. En la
-  // cuadrícula la celda ya manda: sin maxWidth ahí.
-  if (rail) card.maxWidth = 124;
   return card;
 }
 
@@ -5191,6 +5213,7 @@ async function homeTree() {
       } catch (e3) {
         log("MS home pop portada también falló: " + ((e3 && e3.message) || e3));
       }
+
       if (!populares.length && cachePop && Array.isArray(cachePop.items) && cachePop.items.length) {
         populares = cachePop.items.slice(0, 20);
         log("MS home pop desde caché vieja: " + populares.length);
@@ -6317,6 +6340,7 @@ function catalogTree(c) {
         drops.length ? { type: "Row", gap: 8, padding: 16, wrap: true, children: drops } : null,
         c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
           textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
+
         items.length ? gridOf(items, VACIO_SERIES) :
           { type: "Text", text: "Sin resultados con estos filtros.",
             textEn: "No results with these filters.", color: "muted", padding: 16 },
@@ -7518,6 +7542,7 @@ export async function screenEvent(ev) {
       try { if (tgActiva()) await tgSubir(); }
       catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       return { state: { favTk: Date.now() },
+
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
     }
     // v0.4.55 — «Para ti»: arma (o reusa) las sugerencias y abre la
@@ -7977,11 +8002,9 @@ function favCard(it) {
     children: [{ type: "Image", url: it.poster || "", aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } }]
-      .concat(twoLines(titulo).map(function (ln) {
-        return { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 };
-      }))
+      .concat([textoTitulo(titulo)])
       .concat([{ type: "Text", text: (fSer && fSer.nombre) || "",
-        textEn: (fSer && fSer.nombre) || "", style: "caption", color: "muted", padding: 8 }]),
+        textEn: (fSer && fSer.nombre) || "", style: "caption", maxLines: 1, color: "muted", padding: 8 }]),
   };
 }
 
@@ -8315,12 +8338,11 @@ function alCard(m) {
       { type: "Image", url: m.cover, aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } },
-    ].concat(twoLines(titulo).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+    ].concat([textoTitulo(titulo)])
       .concat([{ type: "Text",
         text: "★ " + notaTxt + " · " + fmt + (m.caps ? " · " + m.caps + " caps" : ""),
         textEn: "★ " + notaTxt + " · " + fmt + (m.caps ? " · " + m.caps + " ch." : ""),
-        style: "caption", color: "muted", padding: 8 }]),
+        style: "caption", maxLines: 1, color: "muted", padding: 8 }]),
   };
 }
 
@@ -8711,17 +8733,14 @@ function paraCard(it, rail) {
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
   if (rail) img.width = 120;
-  // v0.4.82 — A SU MEDIDA: el riel de «Para ti» también se remata a la
-  // medida de la portada (la captura mostró el mismo prado que en los
-  // demás rieles: el título largo estirando la tarjeta).
+  // v0.4.83 — LA TARJETA JUSTA aquí también: título UN Text maxLines 2 y
+  // el «por qué» a una línea; el maxWidth de la 0.4.82 sale.
   const card = { type: "Card", key: "pt-" + it.id, flush: true,
     onTap: { event: "paraAbrir", arg: String(it.id) },
-    children: [img].concat(twoLines(titulo).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+    children: [img].concat([textoTitulo(titulo)])
       .concat(it.porque ? [{ type: "Text", text: it.porque, textEn: it.porque,
-        style: "caption", color: "muted", padding: 8 }] : []),
+        style: "caption", maxLines: 1, color: "muted", padding: 8 }] : []),
   };
-  if (rail) card.maxWidth = 124;
   return card;
 }
 
@@ -8761,6 +8780,7 @@ function paraTiRail() {
 function descubreTree(p) {
   const items = (p && Array.isArray(p.items)) ? p.items : [];
   const base = (p && p.base) || 0;
+
   if (!p || typeof p !== "object" || !p.ts) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "CircularProgressIndicator" },
@@ -9126,12 +9146,13 @@ function relCard(it, i) {
     alt: titulo, altEn: titulo, width: 120,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
-  return { type: "Card", key: "rel-" + i, flush: true, maxWidth: 124,
+  // v0.4.83 — LA TARJETA JUSTA: fuera el maxWidth de la 0.4.82, dentro la
+  // receta de AniJing (título UN Text maxLines 2, nota a una línea).
+  return { type: "Card", key: "rel-" + i, flush: true,
     onTap: { event: "relAbrir", arg: String(it.id) },
-    children: [img].concat(twoLines(titulo).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+    children: [img].concat([textoTitulo(titulo)])
       .concat(it.rel ? [{ type: "Text", text: relacionTxt(it.rel), textEn: it.rel,
-        style: "caption", color: "muted", padding: 8 }] : []),
+        style: "caption", maxLines: 1, color: "muted", padding: 8 }] : []),
   };
 }
 
@@ -9331,12 +9352,10 @@ function miAniCard(it, rev) {
       { type: "Image", url: it.cover || "", aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } },
-    ].concat(twoLines(titulo).map(function (ln) {
-      return { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 };
-    })).concat([{ type: "Text",
+    ].concat([textoTitulo(titulo)]).concat([{ type: "Text",
       text: (url ? "✓ " : "Sin vincular · ") + etiq,
       textEn: (url ? "✓ " : "Unlinked · ") + etiqEn,
-      style: "caption", color: "muted", padding: 8 }]),
+      style: "caption", maxLines: 1, color: "muted", padding: 8 }]),
   };
 }
 
@@ -9483,15 +9502,14 @@ function vinCard(it, i) {
   return {
     type: "Card", key: "vin-" + i, flush: true,
     onTap: { event: "vinPick", arg: String(i) },
-    children: [img].concat(twoLines(it.title).map((ln) => (
-      { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
+    children: [img].concat([textoTitulo(it.title)])
       // v0.4.65 — cada tarjeta dice de qué fuente es la serie: con el
       // rastreador multi-fuente conviven resultados de varios sitios en
       // la misma pantalla y la persona debe saber cuál toca.
       .concat(it.fuente ? [{ type: "Text",
         text: "En " + fuentePorId(String(it.fuente)).nombre,
         textEn: "On " + fuentePorId(String(it.fuente)).nombre,
-        style: "caption", color: "muted", padding: 8 }] : []),
+        style: "caption", maxLines: 1, color: "muted", padding: 8 }] : []),
   };
 
 }
@@ -10023,6 +10041,7 @@ async function cargarSerie(url, conRuta) {
           log("anitrack progress: " + ((eP && (eP.message || eP.code)) || eP));
         }
         visto = { ts: ahora, n: (r && r.found && typeof r.progress === "number")
+
           ? Math.max(0, Math.floor(r.progress)) : 0,
           where: (r && r.where) || "" };
         try { setJson(clave, visto); } catch (eS) { /* almacén lleno */ }
