@@ -945,7 +945,6 @@
 // del navegador que la ganó (Cloudflare las amarra juntas).
 // v0.4.8 — el +18 de LectorXd es un aviso tapado: sin sesión el sitio ya
 // entrega la lista de capítulos y las páginas debajo del aviso (verificado
-
 // en una serie +18 real), y ahora el plugin las lee como hacen otras apps.
 // v0.4.7 — el filtro anti-bots de LectorXd y MangaOni entra y sale: las
 // peticiones ahora se reintentan (otro disfraz de navegador, la dirección
@@ -2268,7 +2267,6 @@ function cardsLXCat(html, max) {
   const iGrid = html.search(/manga-grid/i);
   if (iGrid < 0) {
     log("LX catálogo: sin cuadrícula en la página (html=" + html.length + ")");
-
     return out;
   }
   const zona = html.slice(iGrid);
@@ -3720,7 +3718,6 @@ const MAX_CAPS_MO = 300;
 const MO_BASE = "https://manga-oni.com";
 // Decodificador base64 (Kino no trae atob en el sandbox del plugin).
 function b64dec(s) {
-
   const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const src = String(s || "").replace(/[^A-Za-z0-9+/]/g, "");
   let out = "";
@@ -5213,7 +5210,6 @@ async function homeTree() {
       } catch (e3) {
         log("MS home pop portada también falló: " + ((e3 && e3.message) || e3));
       }
-
       if (!populares.length && cachePop && Array.isArray(cachePop.items) && cachePop.items.length) {
         populares = cachePop.items.slice(0, 20);
         log("MS home pop desde caché vieja: " + populares.length);
@@ -6340,7 +6336,6 @@ function catalogTree(c) {
         drops.length ? { type: "Row", gap: 8, padding: 16, wrap: true, children: drops } : null,
         c.totalTxt ? { type: "Text", text: c.totalTxt + " en el catálogo",
           textEn: c.totalTxt + " in catalog", style: "caption", color: "muted", padding: 16 } : null,
-
         items.length ? gridOf(items, VACIO_SERIES) :
           { type: "Text", text: "Sin resultados con estos filtros.",
             textEn: "No results with these filters.", color: "muted", padding: 16 },
@@ -7542,7 +7537,6 @@ export async function screenEvent(ev) {
       try { if (tgActiva()) await tgSubir(); }
       catch (e) { log("sync subir: " + ((e && e.message) || e)); }
       return { state: { favTk: Date.now() },
-
         toast: added ? "Añadido a favoritos" : "Quitado de favoritos" };
     }
     // v0.4.55 — «Para ti»: arma (o reusa) las sugerencias y abre la
@@ -8780,7 +8774,6 @@ function paraTiRail() {
 function descubreTree(p) {
   const items = (p && Array.isArray(p.items)) ? p.items : [];
   const base = (p && p.base) || 0;
-
   if (!p || typeof p !== "object" || !p.ts) {
     return { type: "Column", padding: 32, gap: 12, crossAxisAlignment: "center", children: [
       { type: "CircularProgressIndicator" },
@@ -10041,7 +10034,6 @@ async function cargarSerie(url, conRuta) {
           log("anitrack progress: " + ((eP && (eP.message || eP.code)) || eP));
         }
         visto = { ts: ahora, n: (r && r.found && typeof r.progress === "number")
-
           ? Math.max(0, Math.floor(r.progress)) : 0,
           where: (r && r.where) || "" };
         try { setJson(clave, visto); } catch (eS) { /* almacén lleno */ }
