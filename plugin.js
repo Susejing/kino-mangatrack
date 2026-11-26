@@ -62,6 +62,26 @@
 //     LectorXd solo cuando ya visitó su catálogo (su lista vive en la
 //     página, no en casa).
 
+// MangaTrack v0.4.80 «SIN HUECOS» — la cura de la 0.4.79 solo vistió
+// a la posterCard y la captura del teléfono (26 nov) lo mostró: la
+// tira «Para ti» (paraCard) sigue con portadas angostas y a su lado
+// el prado vacío. El barrido completo encontró siete portadas más sin
+// la cura: paraCard (Para ti y el Descubrir), relCard (el riel de
+// relacionados), el encabezado del detalle de la serie, favCard
+// (favoritos), los resultados de AniList, las tarjetas de Mi AniList
+// y las de la pantalla de vinculación. Todas las portadas de TODAS
+// las tarjetas quedan a sangre: fit "cover" + focus "top" (Kino
+// 0.9.81, aditivo; un Kino viejo las lee igual que hoy), recorte que
+// llena la caja de 2:3 mirando al tope, donde vive el arte. Las
+// PÁGINAS del lector siguen intocadas (su fit "width" es sagrado: se
+// leen completas, jamás recortadas). La franja de estrellas que
+// todavía se ve arriba del todo en pantalla completa es el FONDO DEL
+// TEMA de Kino (la app lo pinta detrás del lienzo, también en la zona
+// de la muesca de la cámara): ninguna operación del lienzo la alcanza,
+// así que esa sí no sale con el plugin; de cambiarla, se cambia de
+// tema en Kino, no de versión aquí. Sin hosts nuevos, sin settings,
+// sin cambios en los parsers.
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -884,7 +904,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.79";
+const VERSION = "0.4.80";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5501,7 +5521,8 @@ function detailTree(state) {
   }
   const cover = meta.poster
     ? { type: "Image", url: imgLocalDe(meta.poster) || meta.poster, width: { compact: 120, expanded: 160 },
-        aspect: "2:3", alt: meta.title, fallback: { type: "Icon", name: "list" } }
+        aspect: "2:3", fit: "cover", focus: "top",
+        alt: meta.title, fallback: { type: "Icon", name: "list" } }
     : { type: "Icon", name: "list" };
   // v0.4.35 — la portada del detalle de una serie con muro, con su
   // presentación para el pintor nuevo (la copia local convertida sigue
@@ -7831,7 +7852,7 @@ function favCard(it) {
   return {
     type: "Card", key: serieKey("f-", it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
-    children: [{ type: "Image", url: it.poster || "", aspect: "2:3", alt: titulo, altEn: titulo,
+    children: [{ type: "Image", url: it.poster || "", aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } }]
       .concat(twoLines(titulo).map(function (ln) {
@@ -8169,7 +8190,7 @@ function alCard(m) {
   return { type: "Card", key: "al-" + m.id, flush: true,
     onTap: { event: "alAbrir", arg: String(m.id) },
     children: [
-      { type: "Image", url: m.cover, aspect: "2:3", alt: titulo, altEn: titulo,
+      { type: "Image", url: m.cover, aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } },
     ].concat(twoLines(titulo).map((ln) => (
@@ -8560,8 +8581,11 @@ function paraTiItem(r, porque) {
 function paraCard(it, rail) {
   const titulo = alTitulo(it);
   const img = { type: "Image",
+    // v0.4.80 — a sangre, como TODAS las portadas de tarjeta: recorta
+    // y llena su caja de 2:3 (la captura del teléfono mostró «Para ti»
+    // con el prado vacío que la 0.4.79 no alcanzó aquí).
     url: (rail ? (it.cover || "") : (it.coverG || it.cover || "")),
-    aspect: "2:3", alt: titulo, altEn: titulo,
+    aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
   if (rail) img.width = 120;
@@ -8971,6 +8995,7 @@ async function autorDe(url, alId) {
 function relCard(it, i) {
   const titulo = alTitulo(it) || it.romaji || it.english || "";
   const img = { type: "Image", url: it.cover || "", aspect: "2:3",
+    fit: "cover", focus: "top",
     alt: titulo, altEn: titulo, width: 120,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
@@ -9176,7 +9201,7 @@ function miAniCard(it, rev) {
   return { type: "Card", key: "ma-" + it.id, flush: true,
     onTap: { event: "miAniAbrir", arg: String(it.id) },
     children: [
-      { type: "Image", url: it.cover || "", aspect: "2:3", alt: titulo, altEn: titulo,
+      { type: "Image", url: it.cover || "", aspect: "2:3", fit: "cover", focus: "top", alt: titulo, altEn: titulo,
         fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
           children: [{ type: "Icon", name: "list", color: "muted" }] } },
     ].concat(twoLines(titulo).map(function (ln) {
@@ -9323,6 +9348,7 @@ function miAniTree(dato) {
 function vinCard(it, i) {
   const img = {
     type: "Image", url: it.poster || "", aspect: "2:3",
+    fit: "cover", focus: "top",
     alt: it.title, altEn: it.title,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] },
