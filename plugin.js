@@ -31,6 +31,37 @@
 // hosts nuevos, sin settings, sin cambios en los parsers; manifest en
 // 0.4.78 para obligar la actualización.
 
+// MangaTrack v0.4.79 «LA PANTALLA ENTERA» — el pedido del teléfono (26 nov,
+// con la captura del Inicio): hacer a la pantalla lo que la 0.4.78 le hizo
+// al lector, y vestir mejor las tarjetas. Cinco curas juntas:
+// (1) PORTADAS A SANGRE: las tarjetas del Inicio, del catálogo y de las
+//     cuadrículas pintan su imagen con fit "cover" y focus "top" (Kino
+//     0.9.81, aditivo): la portada recorta y llena su caja de 2:3 mirando
+//     al tope, donde vive el arte; adiós los huecos a la derecha de las
+//     portadas angostas. El lector no se toca: sus páginas se leen
+//     completas, jamás recortadas.
+// (2) PANTALLA ENTERA: la respuesta de apertura de la pantalla viaja con
+//     la op fullscreen: true (Kino 0.9.84, sin apiVersion nueva), así que
+//     el Inicio y todo el lienzo quedan a borde a borde (sin barra de
+//     Kino ni del teléfono). El Atrás del teléfono siempre cierra la
+//     pantalla (docs), y al salir del lector YA no se devuelven las
+//     barras: la casa entera vive en pantalla completa. Un Kino anterior
+//     a 0.9.84 ignora la op y queda como estaba.
+// (3) NUEVO: la fila fresca del Inicio (la lista de recién actualizados
+//     que cada fuente trae) luce la insignia NUEVO en sus tres primeros
+//     títulos (copia ligera SOLO para el dibujo; el almacén sigue
+//     guardando las originales intactas, y «Ver más» no hereda la
+//     marca).
+// (4) CONTADORES: cada riel llevan «· n» en su título: las series que el
+//     riel trajo, con datos, no a ojo.
+// (5) GÉNEROS AL TOQUE: los catálogos que la casa ya conoce por su
+//     desplegable (LeerCapitulo, LectorXd, MangaDex, ManhwaWeb) estrenan
+//     una tira de chips de género arriba de sus rieles: tocar un chip
+//     abre el catálogo filtrado con el motor de siempre. InManga,
+//     MangaOni y Mangas.in no exponen géneros por fuera: sin tira, y
+//     LectorXd solo cuando ya visitó su catálogo (su lista vive en la
+//     página, no en casa).
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -853,7 +884,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.78";
+const VERSION = "0.4.79";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4761,9 +4792,48 @@ function twoLines(t) {
   return s.length > 42 ? [s.slice(0, 40) + "…", s.slice(40, 80)] : [s];
 }
 
+// v0.4.79 — el contador honesto de riel: «título · n» (sin número no
+// muestra nada: un título sin series no existe; un título también con
+// «· 0» mentiría).
+function contado(titulo, n) {
+  const t = String(titulo || "");
+  if (!t || !n) return t;
+  return t + " · " + n;
+}
+
+// v0.4.79 — los géneros que la casa ya conoce por fuente (los mismos
+// valores y etiquetas del desplegable del catálogo, para que el chip y el
+// desplegable cuenten lo mismo). InManga/MangaOni/Mangas.in: sin lista
+// propia por fuera, se devuelve vacío y la tira no se dibuja.
+function listaGenerosDe(f) {
+  if (f.id === "leercapitulo") return GENEROS;
+  if (f.id === "lectorxd") return lxGeneros();
+  if (f.id === "mangadex") return GENEROS_MD;
+  if (f.id === "manhwaweb") return MW_GENEROS;
+  return [];
+}
+
+// La tira de chips del Inicio: «Todos» primero (vuelve al catálogo
+// entero), luego los géneros de la fuente, tope 17 (el Chips de Kino
+// digiere esa tira bien y las 27 de ManhwaWeb no caben sin dolor).
+function chipsGenero(f) {
+  const lista = listaGenerosDe(f);
+  const propias = lista.filter(function (g) { return g && g[0]; });
+  if (!propias.length) return [];
+  const opciones = [["", "Todos"]].concat(propias).slice(0, 18);
+  return [{ type: "Chips", key: "chipsGenero", value: "",
+    onChanged: "generoChip",
+    options: opciones.map(function (g) { return { value: g[0], label: g[1] }; }) }];
+}
+
 function posterCard(it, prefix, rail) {
+  // v0.4.79 — PORTADA A SANGRE: fit "cover" recorta y llena la caja
+  // de 2:3 (adiós el prado vacío de las portadas angostas); focus "top"
+  // mira al tope, donde vive el arte de las portadas manga/webtoon. El
+  // lector de páginas NO pasa por aquí: sus imágenes siguen íntegras.
   const img = {
     type: "Image", url: it.poster || "", aspect: "2:3",
+    fit: "cover", focus: "top",
     alt: it.title, altEn: it.title,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] },
@@ -4775,10 +4845,15 @@ function posterCard(it, prefix, rail) {
   // local convertida sigue ganando cuando existe).
   const hdrs = imgHeadersDeUrl(it.url);
   if (hdrs) img.headers = hdrs;
+  // v0.4.79 — la insignia NUEVO: encabezadito del propio lienzo de Kino
+  // (Badge), arriba de la portada; solo la traen las tarjetas que la
+  // fila fresca marcó al dibujar (copia ligera: el almacén queda limpio).
+  const hijos = it.nuevo ? [{ type: "Badge", text: "NUEVO", textEn: "NEW" }] : [];
+  hijos.push(img);
   return {
     type: "Card", key: serieKey(prefix, it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
-    children: [img].concat(twoLines(it.title).map((ln) => (
+    children: hijos.concat(twoLines(it.title).map((ln) => (
       { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
       // v0.4.26 — etiqueta opcional bajo el título (capítulo y edad de
       // los «Recién actualizados»); las demás tarjetas no la traen.
@@ -4821,8 +4896,10 @@ function verMasCard(key) {
 
 function railOf(titulo, tituloEn, items, key, prefix) {
   if (!items || !items.length) return [];
+  // v0.4.79 — el título del riel lleva su contador («· n»): las series
+  // que el riel trajo, no las 20 que muestra la tira.
   return [
-    { type: "Text", text: titulo, textEn: tituloEn, style: "h3", padding: 16 },
+    { type: "Text", text: contado(titulo, items.length), textEn: contado(tituloEn, items.length), style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
         children: items.slice(0, 20).map((it) => posterCard(it, prefix, true))
@@ -5329,6 +5406,19 @@ async function homeTree() {
   // pintor no la admite en un banner, el hero se dibuja igual con su
   // título, su línea y sus botones (la imagen se descarta, no la
   // pantalla). El segundo botón abre las populares en cuadrícula.
+  // v0.4.79 — NUEVO en la cabeza de la fila fresca del Inicio (la lista
+  // de «Recién actualizados»/«Últimas actualizaciones» de cada fuente,
+  // llámese como la llame su riel): copias ligeras SOLO para el dibujo
+  // de hoy; el almacén guardó el riel con las originales, así «Ver más»
+  // y «Cargar más» no heredan la insignia. Tope 3: la fila dice
+  // «novedad reciente», no catálogo completo. La tira «Series añadidas»
+  // de LeerCapitulo queda FUERA (añadida no es actualizada).
+  const conNuevo = function (lista) {
+    return lista.map(function (it, i) {
+      return i < 3 ? Object.assign({}, it, { nuevo: true }) : it;
+    });
+  };
+  const recVista = conNuevo(recientes);
   let hero = [];
   if (populares.length) {
     const dia = Math.floor(Date.now() / 86400000);
@@ -5360,8 +5450,11 @@ async function homeTree() {
     .concat(paraRail)
     .concat(avisoFuente)
     .concat(msAviso)
+    // v0.4.79 — los chips de género arriba del contenido de la fuente
+    // (solo donde la fuente tiene lista propia; honesto, sin tira vacía).
+    .concat(chipsGenero(f))
     .concat(railOf(titPop, titPopEn, populares, "railPop", "p-"))
-    .concat(railOf(titRec, titRecEn, recientes, "railRec", "r-"))
+    .concat(railOf(titRec, titRecEn, recVista, "railRec", "r-"))
     .concat(railOf(titUpd, titUpdEn, actualizados, "railUpd", "u-"))
     .concat(seccionScans)
     .concat(gridSeries)
@@ -6485,7 +6578,14 @@ export async function screenEvent(ev) {
         const c = getJson("cat", null);
         if (!c || typeof c !== "object") return await cargarCatalogo({ genre: "", type: "", status: "", order: "", demo: "" }, 1, false);
       }
-      return null;
+      // v0.4.79 — PANTALLA ENTERA: la op fullscreen (Kino 0.9.84) viste
+      // TODO el lienzo de MangaTrack, no solo el lector: Inicio, fichas,
+      // catálogo y buscador a borde a borde, sin barra de Kino ni del
+      // teléfono. El Atrás del teléfono siempre cierra la pantalla
+      // (docs), y no hace falta botón propio: envolver la salida era la
+      // trampa que las docs prohíben. Un Kino anterior a 0.9.84 ignora
+      // la op y queda como estaba (la 0.4.78 demostró el baile vivo).
+      return { ui: [{ fullscreen: true }] };
     }
     if (name === "goSearch") return { route: { push: "search" } };
     if (name === "favsOpen") return { route: { push: "favs" } };
@@ -6948,6 +7048,15 @@ export async function screenEvent(ev) {
       else nuevo.order = v;
       return await cargarCatalogo(nuevo, 1, false);
     }
+    if (name === "generoChip") {
+      // v0.4.79 — los chips de género del Inicio: el motor del catálogo
+      // de siempre (cargarCatalogo) con el género tocado; «Todos» abre
+      // el catálogo entero. La respuesta manda el push a la pantalla
+      // del catálogo (conRuta), donde el desplegable queda Relendo la
+      // elección del chip.
+      const v = String(ev.value || "");
+      return await cargarCatalogo({ genre: v, type: "", status: "", order: "", demo: "" }, 1, true);
+    }
     if (name === "catMore") {
       const c = getJson("cat", null);
       if (!c || !Array.isArray(c.items) || !c.items.length) {
@@ -6995,13 +7104,14 @@ export async function screenEvent(ev) {
       setJsonCache("riel:" + rkey, Object.assign({}, r, { start: ns }));
       return { state: { rielTk: Date.now() } };
     }
-    if (name === "popBack") return { route: { pop: true }, ui: [{ fullscreen: false }] };
+    if (name === "popBack") return { route: { pop: true } };
     if (name === "salirLector") {
-      // v0.4.78 — el Atrás del lector (el Scaffold del capítulo declara
-      // onBack): se devuelven las barras de Kino y del teléfono, y se
-      // sale del capítulo. Si la llamada falla o tarda, Kino cierra la
-      // pantalla él mismo: nunca una trampa.
-      return { ui: [{ fullscreen: false }], route: { pop: true } };
+      // v0.4.79 — se sale del capítulo SIN devolver las barras: desde
+      // esta versión toda la pantalla de MangaTrack vive en pantalla
+      // completa, y bajarlas aquí apagaría el Inicio que vuelve a
+      // verse. El Atrás del teléfono sigue cerrando la pantalla entera
+      // (docs).
+      return { route: { pop: true } };
     }
     if (name === "openSeries") {
       const url = String(ev.arg || "");
