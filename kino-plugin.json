@@ -111,7 +111,7 @@
       "labelEn": "New chapter notices",
       "type": "toggle",
       "default": true,
-      "hint": "Revisa tus favoritas de vez en cuando y avisa en la campana de Inicio cuando una tenga capítulo nuevo. Cada cuánto se cambia en Ajustes ▸ Trabajo en segundo plano."
+      "hint": "Avisa en la campana de Inicio cuando tus favoritas tengan capítulo nuevo."
     }
   ]
 }
