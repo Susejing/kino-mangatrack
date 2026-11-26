@@ -107,6 +107,19 @@
 // Las PÁGINAS del lector siguen intocadas. Sin hosts nuevos, sin
 // settings, sin cambios en los parsers de capítulos.
 
+// MangaTrack v0.4.82 «A SU MEDIDA» — la captura del teléfono (26 nov,
+// 01:57) cantó el FINAL del misterio de la franja azul: la portada YA
+// llena su caja (la 0.4.80 funciona), pero el ancho de la tarjeta lo
+// manda su TEXTO: el título largo (dos líneas de 25+ letras) estira
+// la tarjeta y la portada se queda de su 120 en la esquina, con el
+// prado azul a la derecha. ES lo que veía la persona desde la 0.4.76,
+// y lo de AniJing no lo tiene porque allá la tarjeta no crece más
+// allá de la imagen. Cura: en los RIELES la tarjeta queda A LA MEDIDA
+// de la portada (maxWidth 124 en la Card del riel: posterCard,
+// paraCard y relCard); el título se parte en las líneas que haga
+// falta y no estira nunca más. En las CUADRÍGULAS no se toca nada:
+// la celda ya las acota. Sin hosts nuevos, sin settings, sin parsers.
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -929,7 +942,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.81";
+const VERSION = "0.4.82";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4969,7 +4982,7 @@ function posterCard(it, prefix, rail) {
   // fila fresca marcó al dibujar (copia ligera: el almacén queda limpio).
   const hijos = it.nuevo ? [{ type: "Badge", text: "NUEVO", textEn: "NEW" }] : [];
   hijos.push(img);
-  return {
+  const card = {
     type: "Card", key: serieKey(prefix, it.url), flush: true,
     onTap: { event: "openSeries", arg: it.url },
     children: hijos.concat(twoLines(it.title).map((ln) => (
@@ -4979,6 +4992,12 @@ function posterCard(it, prefix, rail) {
       .concat(it.label ? [{ type: "Text", text: it.label, textEn: it.label,
         style: "caption", color: "muted", padding: 8 }] : []),
   };
+  // v0.4.82 — A SU MEDIDA: en los rieles la tarjeta NO crece más allá
+  // de la portada (124: la caja de 120 y un pelo de redondeo); el
+  // título largo se parte y muere la franja azul de la captura. En la
+  // cuadrícula la celda ya manda: sin maxWidth ahí.
+  if (rail) card.maxWidth = 124;
+  return card;
 }
 
 function gridOf(items, vacio) {
@@ -8692,13 +8711,18 @@ function paraCard(it, rail) {
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
   if (rail) img.width = 120;
-  return { type: "Card", key: "pt-" + it.id, flush: true,
+  // v0.4.82 — A SU MEDIDA: el riel de «Para ti» también se remata a la
+  // medida de la portada (la captura mostró el mismo prado que en los
+  // demás rieles: el título largo estirando la tarjeta).
+  const card = { type: "Card", key: "pt-" + it.id, flush: true,
     onTap: { event: "paraAbrir", arg: String(it.id) },
     children: [img].concat(twoLines(titulo).map((ln) => (
       { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
       .concat(it.porque ? [{ type: "Text", text: it.porque, textEn: it.porque,
         style: "caption", color: "muted", padding: 8 }] : []),
   };
+  if (rail) card.maxWidth = 124;
+  return card;
 }
 
 // El riel «Para ti» del Inicio: si ya hay sugerencias (caché de 12 h),
@@ -9102,7 +9126,7 @@ function relCard(it, i) {
     alt: titulo, altEn: titulo, width: 120,
     fallback: { type: "Column", padding: 16, crossAxisAlignment: "center",
       children: [{ type: "Icon", name: "list", color: "muted" }] } };
-  return { type: "Card", key: "rel-" + i, flush: true,
+  return { type: "Card", key: "rel-" + i, flush: true, maxWidth: 124,
     onTap: { event: "relAbrir", arg: String(it.id) },
     children: [img].concat(twoLines(titulo).map((ln) => (
       { type: "Text", text: ln, textEn: ln, style: "caption", padding: 8 })))
