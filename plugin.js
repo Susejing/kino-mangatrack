@@ -82,6 +82,31 @@
 // tema en Kino, no de versión aquí. Sin hosts nuevos, sin settings,
 // sin cambios en los parsers.
 
+// MangaTrack v0.4.81 «LAS ETIQUETAS» — el pedido del teléfono (26 nov,
+// con la captura del detalle): las etiquetas de género de la serie,
+// abajito de la sinopsis. Qué trae cada fuente, verificado contra las
+// páginas reales (una a una, lupa en mano):
+// (1) MangaDex: la MISMA respuesta de la API que ya se pide para la
+//     ficha trae attributes.tags con el nombre en español (o inglés):
+//     sin pedidos nuevos.
+// (2) ManhwaWeb: la ficha de la API trae _categoris ya TRADUCIDOS
+//     ([{ «1»: «Drama» }, …]): solo se leen.
+// (3) LeerCapitulo: la ficha trae los géneros como enlaces al catálogo
+//     filtrado (/manga/?genre=<slug>, verificado en vivo); el slug se
+//     viste con la tabla de siempre (action → Acción) y un género que
+//     no esté en la tabla queda con el texto del propio enlace.
+// (4) Mangas.in: igual, con sus enlaces a /manga-list/category/<slug>
+//     (verificado en vivo): label del propio enlace.
+// (5) LectorXd: detrás de Cloudflare para la lupa de fuera; el parser
+//     intenta sus enlaces al catálogo con tags=<n> y si no encuentra
+//     deja una huella en el Registro (géneros 0 + conteos de formas)
+//     para curar de nuevo con datos, no a ciegas.
+// (6) InManga y MangaOni: sus fichas NO traen géneros (verificado en
+//     vivo): sin fila, como con los chips del Inicio. Honesto.
+// La fila: Badges del lienzo (Row wrap), tope 10, sin repetidos.
+// Las PÁGINAS del lector siguen intocadas. Sin hosts nuevos, sin
+// settings, sin cambios en los parsers de capítulos.
+
 // MangaTrack v0.4.77 — LA PORTADA DE CASA. La lupa confesó (teléfono 20
 // nov, 21:02): el pulgar de Recientes trae la portada real en un atributo
 // propio del sitio Astro, data-home-cover-src, con el src siendo un SVG
@@ -904,7 +929,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.80";
+const VERSION = "0.4.81";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1549,6 +1574,14 @@ async function mwSerie(url) {
   catch (e) { log("MW serie falló (" + id + "): " + ((e && e.message) || e)); }
   const meta = { title: clean(String(j.name_esp || j.the_real_name || id)),
     poster: String(j._imagen || ""), overview: clean(String(j._sinopsis || "")) };
+  // v0.4.81 — la _categoris de la propia ficha ya viene TRADUCIDA
+  // ([{ «1»: «Drama» }, …]): se pasan los valores a la lista.
+  const catsMW = Array.isArray(j._categoris) ? j._categoris : [];
+  meta.generos = generosLimpia(catsMW.map(function (c) {
+    if (!c || typeof c !== "object") return "";
+    for (const k in c) return String(c[k] || "");
+    return "";
+  }));
   const idReal = String(j._id || id);
   const rows = Array.isArray(j.chapters) ? j.chapters : (Array.isArray(j._chapters) ? j._chapters : []);
   const porNum = {};
@@ -2360,6 +2393,38 @@ function posterDe(html, titulo) {
   return absoluta(porAlt || ultimoAntes || primeroDespues || primeroTodo || "");
 }
 
+// v0.4.81 — limpiador de la lista de géneros de una ficha: sin vacíos,
+// sin repetidos (sin distinguir mayúsculas) y con tope: la fila de
+// etiquetas bajo la sinopsis no es un catálogo.
+function generosLimpia(arr) {
+  const out = [];
+  const vistos = {};
+  for (let i = 0; i < (arr || []).length && out.length < 10; i++) {
+    const g = clean(String(arr[i] || "")).replace(/\s+/g, " ");
+    if (!g) continue;
+    const k = g.toLowerCase();
+    if (vistos[k]) continue;
+    vistos[k] = 1;
+    out.push(g);
+  }
+  return out;
+}
+
+// v0.4.81 — los géneros de una ficha como ANCLAS al propio catálogo
+// filtrado de la fuente (cada sitio los trae así: LC ?genre=, LX
+// tags=, MS /manga-list/category/): el nombre sale del texto del
+// propio enlace. «patron» es un trozo de regex contra el href.
+function generosDeAnclas(html, patron) {
+  const out = [];
+  const re = new RegExp("<a\\b[^>]*href=\"[^\"]*" + patron + "[^\"]*\"[^>]*>([\\s\\S]{1,80}?)<\\/a>", "gi");
+  let m;
+  while ((m = re.exec(html)) && out.length < 14) {
+    const g = clean(m[1].replace(/<[^>]*>/g, " "));
+    if (g) out.push(g);
+  }
+  return generosLimpia(out);
+}
+
 function seriesMeta(html) {
   const pick = (re) => { const m = html.match(re); return m ? clean(m[1]) : ""; };
   const titulo = pick(/<h1[^>]*>([\s\S]{1,200}?)<[/]h1>/) ||
@@ -2381,7 +2446,22 @@ function seriesMeta(html) {
     pick(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) ||
     pick(/content=["']([^"']+)["'][^>]*property=["']og:description["']/i) ||
     pick(/name=["']description["'][^>]*content=["']([^"']+)["']/i);
-  return { title: titulo, poster: poster, overview: overview };
+  // v0.4.81 — géneros de la ficha: enlaces al catálogo filtrado
+  // (/manga/?genre=<slug>, verificado en vivo); el slug se viste con la
+  // tabla de siempre (action → Acción) y el que falte, con el texto
+  // del propio enlace.
+  const reGLC = /<a\b[^>]*href="[^"]*[/]manga[/]\?genre=([^"'&]+)[^"]*"[^>]*>([\s\S]{1,80}?)<\/a>/gi;
+  const halladosLC = [];
+  let gM;
+  while ((gM = reGLC.exec(html)) && halladosLC.length < 14) halladosLC.push(gM);
+  const slugALabel = {};
+  GENEROS.forEach(function (p) { if (p[0]) slugALabel[p[0]] = p[1]; });
+  const generos = generosLimpia(halladosLC.map(function (x) {
+    let slug = "";
+    try { slug = decodeURIComponent(x[1]); } catch (eD) { slug = x[1]; }
+    return slugALabel[slug] || clean(x[2].replace(/<[^>]*>/g, " "));
+  }));
+  return { title: titulo, poster: poster, overview: overview, generos: generos };
 }
 
 // ------------------------------------------------ favoritos (kino.storage)
@@ -3133,10 +3213,19 @@ function metaLX(html) {
   if (!cov) cov = (html.match(/property=["']og:image["'][^>]*content=["']([^"']+)["']/i) || [])[1] || "";
   const sin = (html.match(/<p[^>]*class="[^"]*leading-relaxed[^"]*"[^>]*>([\s\S]{10,4000}?)<[/]p>/i) || [])[1];
   const ogd = (html.match(/property=["']og:description["'][^>]*content=["']([^"']+)["']/i) || [])[1] || "";
+  // v0.4.81 — géneros de la ficha LX: enlaces al catálogo con tags=<n>.
+  // El sitio mira de fuera con una cortina (Cloudflare), así que esta
+  // cura va con huella: si en el teléfono sale 0, el Registro dirá
+  // cuántas formas de etiqueta trae la página y se re-cura con datos.
+  const generos = generosDeAnclas(html, "tags=");
+  if (!generos.length) log("LX ficha: géneros 0 (formas " +
+    ((html.match(/data-category-name/g) || []).length) + "/" +
+    ((html.match(/genre/gi) || []).length) + ")");
   return {
     title: titulo ? clean(titulo.replace(/<[^>]*>/g, " ")) : "",
     poster: cov ? absLX(cov) : "",
     overview: sin ? clean(sin.replace(/<[^>]*>/g, " ")).slice(0, 600) : clean(ogd).slice(0, 600),
+    generos: generos,
   };
 }
 
@@ -3315,8 +3404,15 @@ async function mdMeta(id) {
     const mm = s.match(/(\d+)\D*$/);
     return mm && parseInt(mm[1], 10) > 0 ? parseInt(mm[1], 10) : 0;
   };
+  // v0.4.81 — los tags de la ficha viajan en la MISMA respuesta
+  // (attributes.tags) con nombre en español (o inglés): sin pedidos.
+  const tagsMd = ((m.attributes && m.attributes.tags) || []);
+  const generos = generosLimpia((Array.isArray(tagsMd) ? tagsMd : []).map(function (t) {
+    const nm = (t && t.attributes && t.attributes.name) || {};
+    return String(nm.es || nm.en || "");
+  }));
   return { title: mdTitulo(m), poster: mdPortada(m), overview: ov,
-    anilistId: idDe(L.al), malId: idDe(L.mal) };
+    anilistId: idDe(L.al), malId: idDe(L.mal), generos: generos };
 }
 
 async function mdCaps(id) {
@@ -4501,7 +4597,10 @@ function msMeta(html, slug) {
   if (well) overview = clean(well[1].replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, " ").replace(/<[^>]*>/g, " "));
   if (!overview) overview = pick(/<meta[^>]*name="description"[^>]*content="([^"]*)"/i) ||
     pick(/<meta[^>]*content="([^"]*)"[^>]*name="description"/i);
-  return { title: title || "Serie", poster: poster, overview: overview.slice(0, 600) };
+  // v0.4.81 — géneros: enlaces a /manga-list/category/<slug> en la
+  // ficha (verificado en vivo): label del propio enlace.
+  const generos = generosDeAnclas(h, "manga-list[/]category[/]");
+  return { title: title || "Serie", poster: poster, overview: overview.slice(0, 600), generos: generos };
 }
 
 // La serie completa: metadatos + capítulos (la lista cifrada). Si la
@@ -5546,6 +5645,10 @@ function detailTree(state) {
           labelText: "Llevas " + (hIdx + 1) + " de " + capsTotal + " capítulos",
           labelTextEn: (hIdx + 1) + " of " + capsTotal + " chapters" } : null,
         meta.overview ? { type: "Text", text: meta.overview.slice(0, 1500), style: "p", color: "muted" } : null,
+        // v0.4.81 — LAS ETIQUETAS: los géneros de la ficha, abajito de
+        // la sinopsis (Badges del lienzo, tope 10, sin repetidos).
+        (meta.generos && meta.generos.length) ? { type: "Row", gap: 8, wrap: true, key: "filaGeneros",
+          children: meta.generos.map(function (g) { return { type: "Badge", text: g }; }) } : null,
         // v0.4.49 — la reseña propia, a la vista bajo la sinopsis.
         resTxt ? { type: "Text", text: "Tu reseña: " + resTxt.slice(0, 600),
           textEn: "Your review: " + resTxt.slice(0, 600),
