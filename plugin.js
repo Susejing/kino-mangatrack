@@ -943,7 +943,6 @@
 // listas. Así que la ventanita abre ahora LA PÁGINA BLOQUEADA (el
 // catálogo), con dos redes: si allí el sitio pide su revisión, la galleta
 // llega; y venga o no, Kino entrega el HTML de la página cargada y las
-
 // tarjetas se leen de él. Además la portada del sitio trae su propia
 // sección de populares: se lee primero, sin ventanita, con caché de
 // media hora para no repetir intentos en vano.
@@ -2217,7 +2216,6 @@ function caraAtributoDe(tag) {
     || tag.match(/\bdata-home-cover-src="([^"]+)"/i)
     || tag.match(/\b(?:data-lazy|data-original)="([^"]+)"/i)
     || tag.match(/\bsrc="([^"]+)"/i)
-
     || tag.match(/\b(?:data-srcset|srcset)="([^"\s,]+\.(?:jpe?g|png|webp)[^"]*)"/i);
   if (m && m[1]) return m[1].split(/\s+/)[0];
   const bg = tag.match(/background-image:\s*url\((['\"]?)([^'\")]+)/i);
@@ -3654,7 +3652,6 @@ async function mdMeta(id) {
   };
   // v0.4.81 — los tags de la ficha viajan en la MISMA respuesta
   // (attributes.tags) con nombre en español (o inglés): sin pedidos.
-
   const tagsMd = ((m.attributes && m.attributes.tags) || []);
   const generos = generosLimpia((Array.isArray(tagsMd) ? tagsMd : []).map(function (t) {
     const nm = (t && t.attributes && t.attributes.name) || {};
@@ -5155,7 +5152,6 @@ async function medirImagenes(images, presupuesto) {
     pend.push(im);
   }
   const nuevas = [];
-
   let hechas = 0;
   for (let i = 0; i < pend.length && hechas < DIMS_BATCH; i += 12) {
     if (Date.now() - t0 > (presupuesto || 9000)) break;
@@ -6336,7 +6332,6 @@ function readerTree(state) {
     // retomado (r.desde), se dibuja desde esa página con un botoncito
     // arriba para volver al principio.
     desde = (r.desde | 0) > 0 && r.desde < r.images.length ? (r.desde | 0) : 0;
-
     const visibles = desde > 0 ? r.images.slice(desde) : r.images;
     const inicio = desde > 0 ? [{ type: "TextButton", key: "btnTiraInicio", icon: "refresh",
       labelText: "◀ Volver a la página 1", labelTextEn: "◀ Back to page 1", onPressed: "tiraReinicia" }] : [];
@@ -7496,7 +7491,6 @@ export async function screenEvent(ev) {
       return { route: { push: "fuentes" } };
     }
     if (name === "fuenteElegir") {
-
       const f2 = fuentePorId(String(ev.arg || ""));
       if (f2.id === fuenteActiva().id) return { toast: "Ya estás viendo " + f2.nombre + "." };
       setJson("fuente", f2.id);
@@ -8707,7 +8701,6 @@ function anilistTree(a) {
       ].filter(Boolean) }] },
   };
 }
-
 
 async function alBuscar(q, page, order, conRuta, anadir, genero) {
   const ord = order || "TRENDING_DESC";
@@ -9997,7 +9990,6 @@ function idsEspeciales(titulo, limpio) {
     }
   }
   if (!e) {
-
     for (let i = 0; i < PREFIJOS_ESPECIALES.length; i++) {
       const pref = PREFIJOS_ESPECIALES[i].p;
       if (t.slice(0, pref.length) === pref || l.slice(0, pref.length) === pref) { e = PREFIJOS_ESPECIALES[i].ids; break; }
