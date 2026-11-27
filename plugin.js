@@ -2953,7 +2953,7 @@ async function vigiaUnUrl(url) {
 // El propio trabajo. Headless y ciego: solo favs, red barata, el mapa
 // "vigia" del almacén y la campana. Nada de módulos ni pantallas: si el
 // turno lo corta Kino (20 s), el siguiente turno retoma la rotación.
-async function job(ctx) {
+export async function job(ctx) {
   await null;
   const manual = !!(ctx && ctx.reason === "manual");
   // La campana no existe en Kinos viejos: sin ella el turno solo siembra.
@@ -6788,7 +6788,7 @@ function routeUrl(r) {
   return String((r.params && r.params.url) || (r.args && r.args.url) || r.url || "");
 }
 
-async function screen(ev) {
+export async function screen(ev) {
   const state = (ev && ev.state) || {};
   const route = (ev && ev.route) || { name: "home" };
   try {
@@ -6879,7 +6879,7 @@ async function screen(ev) {
   };
 }
 
-async function screenEvent(ev) {
+export async function screenEvent(ev) {
   const name = ev.name;
   const state = ev.state || {};
   try {
