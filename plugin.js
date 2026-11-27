@@ -146,6 +146,18 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.88 «TODO LO QUE SIGO» — remate de la 0.4.87 (la persona
+// aclaró: la fila debe tomar TODO lo seguido, no solo la estantería): la
+// fila «Lo que sigo» y el vigía trabajan ahora sobre el POOL completo:
+// estantería (favs) + TODAS las colecciones (las manuales del corazón y
+// las cinco vivas de AniList), unidas sin repetidos (la estantería gana
+// en título/portada), tope 100. Así las series que viven en tus listas
+// salen en la fila y el vigía TAMBIÉN las vigila: chip «Cap. N», NUEVO
+// y aviso de campana para ellas igual que para las favoritas. El corazón
+// flotante del Inicio y la pantalla de colecciones NO se tocaron (nunca
+// se tocaron: la 0.4.87 solo añadió la fila; el «Ver más» de la fila
+// abre la estantería de favoritos y el corazón sigue abriendo las
+// listas). Purita la unión: sigoPoolDe(favs, cols), para el banco.
 // MangaTrack v0.4.87 «LO QUE SIGO» — la fila que la persona pidió para el
 // tope del Inicio: sus series seguidas de TODAS las fuentes en una sola
 // tira (la estantería guarda título y portada al marcar favorita, así que
@@ -160,7 +172,8 @@
 // y con la vida del vigía encima.
 // MangaTrack v0.4.84 «EL VIGÍA» — la petición de la persona tras la 0.4.83:
 // avisos de capítulos nuevos. Un trabajo de fondo (capability "schedule",
-// Kino 0.9.81+) recorre por turnos las series de la estantería (favs, tope
+// Kino 0.9.81+) recorre por turnos las series seguidas (estantería +
+// colecciones desde la 0.4.88, tope
 // 100) y guarda el último capítulo visto en cada una; cuando una sube, deja
 // un aviso en la campana de Inicio (capability "notifications", Kino
 // 0.9.87+) que abre la serie con un toque. Cotas del contrato del trabajo
@@ -1015,7 +1028,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.87";
+const VERSION = "0.4.88";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2976,7 +2989,8 @@ async function vigiaUnUrl(url) {
   return isFinite(mejor) ? String(mejor) : "";
 }
 
-// El propio trabajo. Headless y ciego: solo favs, red barata, el mapa
+// El propio trabajo. Headless y ciego: solo lo seguido (estantería +
+// colecciones desde la 0.4.88), red barata, el mapa
 // "vigia" del almacén y la campana. Nada de módulos ni pantallas: si el
 // turno lo corta Kino (20 s), el siguiente turno retoma la rotación.
 export async function job(ctx) {
@@ -2992,10 +3006,10 @@ export async function job(ctx) {
     log("vigía: apagado en Ajustes");
     return { omitido: true };
   }
-  const fs = favs();
+  const fs = sigoPool();
   if (!fs.length) return { revisadas: 0 };
   // El mapa del vigía: url → { num, ts, nom }. Podas: series que ya no
-  // están en la estantería y tope 100 (el de favs).
+  // están en lo seguido (estantería + colecciones) y tope 100.
   let v = getJson("vigia", {});
   if (!v || typeof v !== "object") v = {};
   const vivas = {};
@@ -3073,6 +3087,38 @@ function sigoItemsDe(fs, vMap, ahora) {
   }).filter((x) => x.title)
     .sort((a, b) => ((vMap[b.url] && vMap[b.url].ts) || 0) - ((vMap[a.url] && vMap[a.url].ts) || 0));
 }
+
+// v0.4.88 — TODO lo seguido: la estantería (favs) Y todas las
+// colecciones (manuales del corazón y las cinco vivas de AniList),
+// unidas sin repetidos (la estantería gana en título/portada), tope 100
+// (el mismo del vigía). La fila «Lo que sigo» Y el vigía trabajan sobre
+// este pool: así las series que viven en tus listas salen en la fila y
+// reciben chip, NUEVO y aviso igual que las favoritas. Purita, para el
+// banco.
+function sigoPoolDe(fs, cs) {
+  fs = Array.isArray(fs) ? fs : [];
+  cs = (cs && typeof cs === "object") ? cs : {};
+  const out = [];
+  const visto = {};
+  const mete = function (it) {
+    if (!it || typeof it.url !== "string" || !it.url || visto[it.url]) return;
+    out.push({ url: it.url, title: String(it.title || "").slice(0, 200),
+      poster: (typeof it.poster === "string") ? it.poster.slice(0, 500) : "" });
+    visto[it.url] = 1;
+  };
+  for (let i = 0; i < fs.length && out.length < 100; i++) mete(fs[i]);
+  for (const nom in cs) {
+    const c = cs[nom];
+    const items = (c && c.items && typeof c.items === "object") ? c.items : {};
+    for (const u in items) {
+      if (out.length >= 100) break;
+      mete(items[u]);
+    }
+    if (out.length >= 100) break;
+  }
+  return out;
+}
+function sigoPool() { return sigoPoolDe(favs(), cols()); }
 
 // ------------------------------------------------- v0.4.49 — mis reseñas
 // Comentarios propios por serie: lo que la persona opina de cada manga,
@@ -5761,7 +5807,7 @@ async function homeTree() {
   // sola, con chip «Cap. N» y NUEVO del vigía. Sin favoritas no hay
   // fila. El «Ver más» abre la estantería del corazón (evento
   // favsOpen, la pantalla que ya existe).
-  const sigoTodos = sigoItemsDe(favs(), getJson("vigia", {}), Date.now());
+  const sigoTodos = sigoItemsDe(sigoPool(), getJson("vigia", {}), Date.now());
   const sigoItems = sigoTodos.slice(0, 15);
   const railSigo = sigoItems.length ? [
     { type: "Row", gap: 8, padding: { h: 16 }, children: [
