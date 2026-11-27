@@ -146,6 +146,18 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.87 «LO QUE SIGO» — la fila que la persona pidió para el
+// tope del Inicio: sus series seguidas de TODAS las fuentes en una sola
+// tira (la estantería guarda título y portada al marcar favorita, así que
+// la fila no pide nada a la red). Cada tarjeta abre la serie, lleva el
+// chip «Cap. N» del mapa del vigía y la insignia NUEVO cuando el vigía
+// vio subir un capítulo en los últimos 3 días (el mapa ahora guarda nv,
+// la fecha de la subida; el resto de los turnos la conserva). Sin
+// favoritas la fila no existe (falla blanda). Los avisos de campana
+// siguen siendo trabajo del vigía de la 0.4.84, intacto. Historia
+// honesta: la 0.4.22 retiró el riel «Mis favoritos» del Inicio porque
+// entonces estorbaba; hoy vuelve POR PETICIÓN expresa, como primera fila
+// y con la vida del vigía encima.
 // MangaTrack v0.4.84 «EL VIGÍA» — la petición de la persona tras la 0.4.83:
 // avisos de capítulos nuevos. Un trabajo de fondo (capability "schedule",
 // Kino 0.9.81+) recorre por turnos las series de la estantería (favs, tope
@@ -931,6 +943,7 @@
 // listas. Así que la ventanita abre ahora LA PÁGINA BLOQUEADA (el
 // catálogo), con dos redes: si allí el sitio pide su revisión, la galleta
 // llega; y venga o no, Kino entrega el HTML de la página cargada y las
+
 // tarjetas se leen de él. Además la portada del sitio trae su propia
 // sección de populares: se lee primero, sin ventanita, con caché de
 // media hora para no repetir intentos en vano.
@@ -1003,7 +1016,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.86";
+const VERSION = "0.4.87";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2204,6 +2217,7 @@ function caraAtributoDe(tag) {
     || tag.match(/\bdata-home-cover-src="([^"]+)"/i)
     || tag.match(/\b(?:data-lazy|data-original)="([^"]+)"/i)
     || tag.match(/\bsrc="([^"]+)"/i)
+
     || tag.match(/\b(?:data-srcset|srcset)="([^"\s,]+\.(?:jpe?g|png|webp)[^"]*)"/i);
   if (m && m[1]) return m[1].split(/\s+/)[0];
   const bg = tag.match(/background-image:\s*url\((['\"]?)([^'\")]+)/i);
@@ -3011,7 +3025,13 @@ export async function job(ctx) {
     revisadas++;
     const prev = v[url];
     const subio = !!(prev && prev.num && parseFloat(ultimo) > parseFloat(prev.num) + 1e-9);
+    // v0.4.87 — la fecha de la subida (nv) viaja en el mapa: la fila
+    // «Lo que sigo» la usa para su insignia NUEVO (3 días de vida). En
+    // los turnos sin subida se conserva la nv previa para que la
+    // insignia no parpadee entre turnos.
     v[url] = { num: ultimo, ts: Date.now(), nom: String(f.title || (prev && prev.nom) || "").slice(0, 80) };
+    if (subio) v[url].nv = Date.now();
+    else if (prev && prev.nv) v[url].nv = prev.nv;
     if (subio && typeof kino.notifications === "object" && kino.notifications) {
       const fnt = fuenteDeUrl(url);
       try {
@@ -3034,6 +3054,26 @@ export async function job(ctx) {
   setJson("vigia", v);
   log("vigía: turno " + (manual ? "manual" : "programado") + ": " + revisadas + " revisadas, " + avisos + " avisos" + (fallos ? ", " + fallos + " fallos" : ""));
   return { revisadas: revisadas, avisos: avisos, fallos: fallos };
+}
+
+// ------------------------------------------------- v0.4.87 — lo que sigo
+// La primera fila del Inicio (petición de la persona): las series de la
+// estantería de TODAS las fuentes en una sola tira. La estantería aporta
+// título y portada; el mapa del vigía aporta el chip «Cap. N» (su num),
+// el orden (su ts: primero las que el vigía vio moverse más reciente) y
+// la insignia NUEVO (su nv, la fecha de la subida; 3 días de vida).
+// Purita: nada de kino, para el banco.
+function sigoItemsDe(fs, vMap, ahora) {
+  fs = Array.isArray(fs) ? fs : [];
+  vMap = (vMap && typeof vMap === "object") ? vMap : {};
+  const vida = 259200000; // 3 días de NUEVO
+  return fs.map(function (x) {
+    const vv = vMap[x.url] || {};
+    return { url: x.url, title: x.title || vv.nom || "", poster: x.poster || "",
+      label: vv.num ? "Cap. " + vv.num : "",
+      nuevo: !!(vv.nv && (ahora - vv.nv) < vida) };
+  }).filter((x) => x.title)
+    .sort((a, b) => ((vMap[b.url] && vMap[b.url].ts) || 0) - ((vMap[a.url] && vMap[a.url].ts) || 0));
 }
 
 // ------------------------------------------------- v0.4.49 — mis reseñas
@@ -3614,6 +3654,7 @@ async function mdMeta(id) {
   };
   // v0.4.81 — los tags de la ficha viajan en la MISMA respuesta
   // (attributes.tags) con nombre en español (o inglés): sin pedidos.
+
   const tagsMd = ((m.attributes && m.attributes.tags) || []);
   const generos = generosLimpia((Array.isArray(tagsMd) ? tagsMd : []).map(function (t) {
     const nm = (t && t.attributes && t.attributes.name) || {};
@@ -5114,6 +5155,7 @@ async function medirImagenes(images, presupuesto) {
     pend.push(im);
   }
   const nuevas = [];
+
   let hechas = 0;
   for (let i = 0; i < pend.length && hechas < DIMS_BATCH; i += 12) {
     if (Date.now() - t0 > (presupuesto || 9000)) break;
@@ -5718,6 +5760,29 @@ async function homeTree() {
   // v0.4.34 — el riel de fuentes se retira del Inicio: su lista
   // vive ahora en el selector de la barra (fuenteBtn → pantalla
   // «fuentes»), con la activa marcada y AniList al final.
+  // v0.4.87 — «Lo que sigo»: la primera fila del Inicio (petición de
+  // la persona), las series seguidas de TODAS las fuentes en una tira
+  // sola, con chip «Cap. N» y NUEVO del vigía. Sin favoritas no hay
+  // fila. El «Ver más» abre la estantería del corazón (evento
+  // favsOpen, la pantalla que ya existe).
+  const sigoTodos = sigoItemsDe(favs(), getJson("vigia", {}), Date.now());
+  const sigoItems = sigoTodos.slice(0, 15);
+  const railSigo = sigoItems.length ? [
+    { type: "Row", gap: 8, padding: { h: 16 }, children: [
+      { type: "Text", text: "Lo que sigo", textEn: "Following", style: "h3" },
+      { type: "Badge", text: String(sigoTodos.length) },
+    ] },
+    { type: "SingleChildScrollView", key: "railSigo", direction: "horizontal", padding: 16,
+      children: [{ type: "Row", gap: 8,
+        children: sigoItems.map((it) => posterCard(it, "s-", true))
+          .concat(sigoTodos.length >= 3 ? [{ type: "Card", key: "vermas-sigo", flush: true,
+            onTap: { event: "favsOpen" },
+            children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
+              children: [
+                { type: "Icon", name: "favorite", color: "muted" },
+                { type: "Text", text: "Ver más", textEn: "See more", style: "caption", color: "muted" },
+              ] }] }] : []) }] },
+  ] : [];
   const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
       style: "h3", padding: 16 },
@@ -5766,7 +5831,7 @@ async function homeTree() {
           style: "caption", color: "muted", padding: 16 },
       ] },
   ] : [];
-  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length && !paraRail.length && !avisoFuente.length) return VACIO_SERIES;
+  if (!populares.length && !recientes.length && !mixtas.length && !msAviso.length && !paraRail.length && !avisoFuente.length && !railSigo.length) return VACIO_SERIES;
   // v0.4.27 — cada riel deja su sección en el almacén para su «Ver
   // más»: la cuadrícula la lee de ahí (el patrón del catálogo), y el
   // botón «Cargar más del sitio» solo aparece donde mas dice que la
@@ -5843,8 +5908,11 @@ async function homeTree() {
   // v0.4.33 — orden de la portada: el hero, «Seguir leyendo» de
   // protagonista, el contenido de la fuente y al final el catálogo
   // (las fuentes viven en el selector de la barra desde la v0.4.34).
+  // v0.4.87 — «Lo que sigo» se mete como PRIMERA fila de series, entre
+  // el hero (el banner de «Destacado de hoy») y «Seguir leyendo».
   return { type: "SingleChildScrollView", key: "home", children: []
     .concat(hero)
+    .concat(railSigo)
     .concat(railHist)
     .concat(paraRail)
     .concat(avisoFuente)
@@ -6268,6 +6336,7 @@ function readerTree(state) {
     // retomado (r.desde), se dibuja desde esa página con un botoncito
     // arriba para volver al principio.
     desde = (r.desde | 0) > 0 && r.desde < r.images.length ? (r.desde | 0) : 0;
+
     const visibles = desde > 0 ? r.images.slice(desde) : r.images;
     const inicio = desde > 0 ? [{ type: "TextButton", key: "btnTiraInicio", icon: "refresh",
       labelText: "◀ Volver a la página 1", labelTextEn: "◀ Back to page 1", onPressed: "tiraReinicia" }] : [];
@@ -7427,6 +7496,7 @@ export async function screenEvent(ev) {
       return { route: { push: "fuentes" } };
     }
     if (name === "fuenteElegir") {
+
       const f2 = fuentePorId(String(ev.arg || ""));
       if (f2.id === fuenteActiva().id) return { toast: "Ya estás viendo " + f2.nombre + "." };
       setJson("fuente", f2.id);
@@ -8637,6 +8707,7 @@ function anilistTree(a) {
       ].filter(Boolean) }] },
   };
 }
+
 
 async function alBuscar(q, page, order, conRuta, anadir, genero) {
   const ord = order || "TRENDING_DESC";
@@ -9926,6 +9997,7 @@ function idsEspeciales(titulo, limpio) {
     }
   }
   if (!e) {
+
     for (let i = 0; i < PREFIJOS_ESPECIALES.length; i++) {
       const pref = PREFIJOS_ESPECIALES[i].p;
       if (t.slice(0, pref.length) === pref || l.slice(0, pref.length) === pref) { e = PREFIJOS_ESPECIALES[i].ids; break; }
