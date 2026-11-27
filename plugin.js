@@ -146,6 +146,20 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.89 «LA DIETA DEL INICIO» — el corazón flotante VOLVIÓ
+// (cazó la persona con capturas: vieja versión con corazón, nueva sin
+// él). Causa hallada en el contrato (AGENTS.md, apiVersion 14): el árbol
+// de una pantalla tiene TOPE DE 600 NODOS y Kino SUELTA nodos cuando se
+// pasa (los últimos del JSON van primero; «even when nodes are
+// dropped»). El floatingActionButton es el ÚLTIMO nodo del Inicio: las
+// filas nuevas (railUpd de la 0.4.86, railSigo de la 0.4.87) inflaron el
+// árbol por encima del tope y Kino se comió el corazón. Sin tocar NINGÚN
+// parser ni almacenamiento, la dieta: los rieles dibujan 12 tarjetas
+// (antes 20; el «Ver más» y «Cargar más» siguen teniendo la lista
+// entera), «Seguir leyendo» y «Lo que sigo» enseñan 12 (antes 15), la
+// cuadrícula de series de la fuente dibuja 18 (antes 40; el catálogo
+// completo sigue en su tarjeta). El Inicio vuelve a caber con aire y el
+// corazón regresa. Manifiesto 0.4.89: SOLO version.
 // MangaTrack v0.4.88 «TODO LO QUE SIGO» — remate de la 0.4.87 (la persona
 // aclaró: la fila debe tomar TODO lo seguido, no solo la estantería): la
 // fila «Lo que sigo» y el vigía trabajan ahora sobre el POOL completo:
@@ -1028,7 +1042,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.88";
+const VERSION = "0.4.89";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -5368,12 +5382,13 @@ function verMasCard(key) {
 function railOf(titulo, tituloEn, items, key, prefix) {
   if (!items || !items.length) return [];
   // v0.4.79 — el título del riel lleva su contador («· n»): las series
-  // que el riel trajo, no las 20 que muestra la tira.
+  // que el riel trajo, no las 12 que muestra la tira (dieta 0.4.89:
+  // el tope de 600 nodos del contrato se comía el corazón flotante).
   return [
     { type: "Text", text: contado(titulo, items.length), textEn: contado(tituloEn, items.length), style: "h3", padding: 16 },
     { type: "SingleChildScrollView", key: key, direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
-        children: items.slice(0, 20).map((it) => posterCard(it, prefix, true))
+        children: items.slice(0, 12).map((it) => posterCard(it, prefix, true))
           // v0.4.29 — con 3 series o más ya sale la tarjetita que abre
           // la sección entera (antes pedía 10 y las secciones chicas
           // de LeerCapitulo/LectorXd se quedaban sin su «Ver más»).
@@ -5783,7 +5798,7 @@ async function homeTree() {
       // de cada serie, a la vista en el riel y en su «Ver más».
       label: (hh[k].num || "") !== "" ? "Cap. " + hh[k].num : "" }))
     .filter((x) => x.title).sort((a, b) => b.ts - a.ts);
-  const hItems = hTodos.slice(0, 15);
+  const hItems = hTodos.slice(0, 12);
   const railHist = hItems.length ? [
     // v0.4.33 — la insignia con el número de series en lectura da el
     // toque de las apps de manga al encabezado del riel protagonista.
@@ -5794,7 +5809,8 @@ async function homeTree() {
     { type: "SingleChildScrollView", key: "railHist", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
         children: hItems.map((it) => posterCard(it, "h-", true))
-          // v0.4.27 — el riel enseña 15; «Ver más» abre el historial
+          // v0.4.27 — el riel enseña 12 (15 antes de la dieta 0.4.89);
+          // «Ver más» abre el historial
           // entero (hasta 100 series) en cuadrícula.
           // v0.4.29 — mismo umbral bajo que los demás rieles.
           .concat(hTodos.length >= 3 ? [verMasCard("railHist")] : []) }] },
@@ -5808,7 +5824,7 @@ async function homeTree() {
   // fila. El «Ver más» abre la estantería del corazón (evento
   // favsOpen, la pantalla que ya existe).
   const sigoTodos = sigoItemsDe(sigoPool(), getJson("vigia", {}), Date.now());
-  const sigoItems = sigoTodos.slice(0, 15);
+  const sigoItems = sigoTodos.slice(0, 12);
   const railSigo = sigoItems.length ? [
     { type: "Row", gap: 8, padding: { h: 16 }, children: [
       { type: "Text", text: "Lo que sigo", textEn: "Following", style: "h3" },
@@ -5828,7 +5844,7 @@ async function homeTree() {
   const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
       style: "h3", padding: 16 },
-    gridOf(mixtas, VACIO_SERIES),
+    gridOf(mixtas.slice(0, 18), VACIO_SERIES),
   ] : [];
   const catalogo = [
     { type: "Card", key: "catEntry", flush: true, onTap: { event: "openCatalog" },
