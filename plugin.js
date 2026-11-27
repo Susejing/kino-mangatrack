@@ -146,6 +146,19 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.90 «LA MEZCLA» — remate de la fila (la persona la vio
+// tomar solo los 19 de la estrella: el pool era completo (el contador
+// decía 100) pero la estantería iba PRIMERO y la tira dibuja 12: solo se
+// veían favoritas; y el «Ver más» abría la estantería de 19, no el lote).
+// Dos curas: (1) sigoMezcla: la tira de la fila REPARTE su ventanita en
+// torno (una de la estrella, una de las listas, una de la estrella…)
+// sobre la lista ya ordenada por el vigía: favoritas y series de las
+// listas se ven juntas desde el primer vistazo; (2) el «Ver más» de la
+// fila abre AHORA la cuadrícula del lote completo (riel «railSigo» en el
+// almacén, con ventanas de «Series siguientes» como las demás secciones;
+// la estantería de la estrella sigue en el corazón y en la fila de
+// siempre). El pool marca su origen (org: f estantería, c colección).
+// Manifiesto 0.4.90: SOLO version.
 // MangaTrack v0.4.89 «LA DIETA DEL INICIO» — el corazón flotante VOLVIÓ
 // (cazó la persona con capturas: vieja versión con corazón, nueva sin
 // él). Causa hallada en el contrato (AGENTS.md, apiVersion 14): el árbol
@@ -1042,7 +1055,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.89";
+const VERSION = "0.4.90";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3097,7 +3110,8 @@ function sigoItemsDe(fs, vMap, ahora) {
     const vv = vMap[x.url] || {};
     return { url: x.url, title: x.title || vv.nom || "", poster: x.poster || "",
       label: vv.num ? "Cap. " + vv.num : "",
-      nuevo: !!(vv.nv && (ahora - vv.nv) < vida) };
+      nuevo: !!(vv.nv && (ahora - vv.nv) < vida),
+      org: x.org };
   }).filter((x) => x.title)
     .sort((a, b) => ((vMap[b.url] && vMap[b.url].ts) || 0) - ((vMap[a.url] && vMap[a.url].ts) || 0));
 }
@@ -3114,25 +3128,49 @@ function sigoPoolDe(fs, cs) {
   cs = (cs && typeof cs === "object") ? cs : {};
   const out = [];
   const visto = {};
-  const mete = function (it) {
+  const mete = function (it, org) {
     if (!it || typeof it.url !== "string" || !it.url || visto[it.url]) return;
     out.push({ url: it.url, title: String(it.title || "").slice(0, 200),
-      poster: (typeof it.poster === "string") ? it.poster.slice(0, 500) : "" });
-    visto[it.url] = 1;
+      poster: (typeof it.poster === "string") ? it.poster.slice(0, 500) : "",
+      org: org });
   };
-  for (let i = 0; i < fs.length && out.length < 100; i++) mete(fs[i]);
+  for (let i = 0; i < fs.length && out.length < 100; i++) mete(fs[i], "f");
   for (const nom in cs) {
     const c = cs[nom];
     const items = (c && c.items && typeof c.items === "object") ? c.items : {};
     for (const u in items) {
       if (out.length >= 100) break;
-      mete(items[u]);
+      mete(items[u], "c");
     }
     if (out.length >= 100) break;
   }
   return out;
 }
 function sigoPool() { return sigoPoolDe(favs(), cols()); }
+
+// v0.4.90 — la ventanita de la fila REPARTE: en torno entre lo que viene
+// de la estantería (org f) y lo que viene de las listas (org c), sobre la
+// lista ya ordenada por el vigía (recientes primero dentro de cada grupo).
+// Así favoritas y series de las listas se ven juntas desde el primer
+// vistazo (antes la estantería iba toda primera y las listas no se veían
+// en las 12 de la tira). Purita, para el banco.
+function sigoMezcla(items, tope) {
+  items = Array.isArray(items) ? items : [];
+  const f = [], c = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it) continue;
+    (it.org === "c" ? c : f).push(it);
+  }
+  const out = [];
+  let gi = 0;
+  while (out.length < tope && (f.length || c.length)) {
+    const q = (gi % 2 === 0) ? f : c;
+    if (q.length) out.push(q.shift());
+    gi++;
+  }
+  return out;
+}
 
 // ------------------------------------------------- v0.4.49 — mis reseñas
 // Comentarios propios por serie: lo que la persona opina de cada manga,
@@ -5824,7 +5862,9 @@ async function homeTree() {
   // fila. El «Ver más» abre la estantería del corazón (evento
   // favsOpen, la pantalla que ya existe).
   const sigoTodos = sigoItemsDe(sigoPool(), getJson("vigia", {}), Date.now());
-  const sigoItems = sigoTodos.slice(0, 12);
+  // v0.4.90 — la ventanita de la fila se REPARTE (estrella / listas en
+  // torno); el lote completo va al riel «railSigo» para su «Ver más».
+  const sigoItems = sigoMezcla(sigoTodos, 12);
   const railSigo = sigoItems.length ? [
     { type: "Row", gap: 8, padding: { h: 16 }, children: [
       { type: "Text", text: "Lo que sigo", textEn: "Following", style: "h3" },
@@ -5833,13 +5873,7 @@ async function homeTree() {
     { type: "SingleChildScrollView", key: "railSigo", direction: "horizontal", padding: 16,
       children: [{ type: "Row", gap: 8,
         children: sigoItems.map((it) => posterCard(it, "s-", true))
-          .concat(sigoTodos.length >= 3 ? [{ type: "Card", key: "vermas-sigo", flush: true,
-            onTap: { event: "favsOpen" },
-            children: [{ type: "Column", padding: 16, gap: 4, crossAxisAlignment: "center",
-              children: [
-                { type: "Icon", name: "favorite", color: "muted" },
-                { type: "Text", text: "Ver más", textEn: "See more", style: "caption", color: "muted" },
-              ] }] }] : []) }] },
+          .concat(sigoTodos.length >= 3 ? [verMasCard("railSigo")] : []) }] },
   ] : [];
   const gridSeries = mixtas.length ? [
     { type: "Text", text: "Series de " + f.nombre, textEn: f.nombre + " series",
@@ -5907,6 +5941,10 @@ async function homeTree() {
     via: "", items: actualizados, page: 1, mas: f.id === "mangaoni", start: 0 });
   if (hTodos.length) guardarRiel("railHist", { f: "hist", tit: "Seguir leyendo",
     titEn: "Keep reading", items: hTodos, page: 1, mas: false, start: 0 });
+  // v0.4.90 — el lote completo de «Lo que sigo» también deja su riel:
+  // su «Ver más» abre la cuadrícula con TODO (estrella + listas).
+  if (sigoTodos.length) guardarRiel("railSigo", { f: "sigo", tit: "Lo que sigo",
+    titEn: "Following", items: sigoTodos, page: 1, mas: false, start: 0 });
   // v0.4.29 — ya están los rieles guardados con sus URLs cortas; para
   // ESTE dibujado las portadas de las casas con muro (ManhwaWeb y,
   // desde la v0.4.30, Mangas.in) se cambian por sus copias locales
@@ -6842,7 +6880,7 @@ function rielTree(key) {
   // convertidas (copias locales del almacén, sin red).
   const items = decoraNueva(todos.slice(start, start + RIEL_TOPE));
   const cuantos = todos.length + (todos.length === 1 ? " serie" : " series") +
-    (r.f === "hist" ? "" : " · " + f.nombre);
+    (r.f === "hist" || r.f === "sigo" ? "" : " · " + f.nombre);
   return {
     type: "Scaffold",
     appBar: { type: "AppBar", key: "barRiel", title: String(r.tit || "Sección").slice(0, 40),
