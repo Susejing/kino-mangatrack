@@ -120,6 +120,18 @@
 // falta y no estira nunca más. En las CUADRÍGULAS no se toca nada:
 // la celda ya las acota. Sin hosts nuevos, sin settings, sin parsers.
 
+// MangaTrack v0.4.85 «LAS DOS PUERTAS» — revisión en vivo de ManhwaWeb y
+// Mangas.in a cuenta de la persona: (1) algunos +18 de ManhwaWeb no abrían:
+// dos motivos — series OFICIALES (toptoon, lezhin…) cuyas páginas viven en
+// CDNs que el manifiesto no declaraba (smurfs.toptoon.com y *.akamaized.net,
+// ya declarados) y series cuyo contenido no está servido por la API (oficial
+// con muro de inicio de sesión y edad, o recién creada): ahora la ficha lo
+// DICE con un aviso honesto en vez de abrirse muda con 0 capítulos, y el
+// aviso también cubre el fallo de la API (antes: ficha vacía y silencio).
+// (2) Mangas.in verificada en vivo: mangas.in redirige a m440.in (ya
+// declarado en hosts) y sus dos secciones del Inicio responden igual que la
+// página: Populares es su catálogo por visitas y Novedades su feed lasted.
+// El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
 // MangaTrack v0.4.84 «EL VIGÍA» — la petición de la persona tras la 0.4.83:
 // avisos de capítulos nuevos. Un trabajo de fondo (capability "schedule",
 // Kino 0.9.81+) recorre por turnos las series de la estantería (favs, tope
@@ -977,7 +989,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.84";
+const VERSION = "0.4.85";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1616,10 +1628,11 @@ async function mwSerie(url) {
     chapters: [], aviso: "Esa serie de ManhwaWeb no tiene una dirección válida." };
   // v0.4.47 — a veces la API falla con una serie puntual (respondió
   // «error» con una de id con espacio): mejor el detalle honesto con 0
-  // capítulos que un toque que no abre nada.
-  let j = {};
+  // capítulos que un toque que no abre nada. v0.4.85 — y AHORA SE DICE:
+  // la ficha muda con 0 capítulos parecía un error del plugin.
+  let j = {}, falloMw = false;
   try { j = await mwGet("/manhwa/see/" + encodeURIComponent(id)); }
-  catch (e) { log("MW serie falló (" + id + "): " + ((e && e.message) || e)); }
+  catch (e) { falloMw = true; log("MW serie falló (" + id + "): " + ((e && e.message) || e)); }
   const meta = { title: clean(String(j.name_esp || j.the_real_name || id)),
     poster: String(j._imagen || ""), overview: clean(String(j._sinopsis || "")) };
   // v0.4.81 — la _categoris de la propia ficha ya viene TRADUCIDA
@@ -1664,6 +1677,18 @@ async function mwSerie(url) {
     .map((num) => ({ num: num, title: "Capítulo " + num,
       url: "/mw/leer/" + porNum[num].cid + "/" }));
   log("MW serie: " + caps.length + " capítulos");
+  // v0.4.85 — ficha sin capítulos: aviso honesto con el motivo real
+  // (verificado en vivo con «¡Gracias por la estadía, Jefe!», recién
+  // creada sin capítulos, y con «Clases Secretas», oficial de toptoon
+  // cuyo lector pide inicio de sesión y mayor de edad).
+  if (!caps.length) {
+    const plat = clean(String(j._plataforma || ""));
+    return { meta: meta, chapters: [], aviso: falloMw
+      ? "ManhwaWeb no entregó la ficha de esta serie: inténtalo de nuevo en un rato."
+      : (plat && plat !== "manual"
+        ? "Serie oficial de " + plat + ": sus capítulos viven en la web oficial de ManhwaWeb, que pide iniciar sesión y ser mayor de edad, así que el plugin no puede leerlos."
+        : "ManhwaWeb todavía no tiene capítulos de esta serie (la acaban de crear o no los ha subido).") };
+  }
   return { meta: meta, chapters: caps.slice(0, TOPE_CAPS_SERIE) };
 }
 
@@ -2928,7 +2953,7 @@ async function vigiaUnUrl(url) {
 // El propio trabajo. Headless y ciego: solo favs, red barata, el mapa
 // "vigia" del almacén y la campana. Nada de módulos ni pantallas: si el
 // turno lo corta Kino (20 s), el siguiente turno retoma la rotación.
-export async function job(ctx) {
+async function job(ctx) {
   await null;
   const manual = !!(ctx && ctx.reason === "manual");
   // La campana no existe en Kinos viejos: sin ella el turno solo siembra.
@@ -6763,7 +6788,7 @@ function routeUrl(r) {
   return String((r.params && r.params.url) || (r.args && r.args.url) || r.url || "");
 }
 
-export async function screen(ev) {
+async function screen(ev) {
   const state = (ev && ev.state) || {};
   const route = (ev && ev.route) || { name: "home" };
   try {
@@ -6854,7 +6879,7 @@ export async function screen(ev) {
   };
 }
 
-export async function screenEvent(ev) {
+async function screenEvent(ev) {
   const name = ev.name;
   const state = ev.state || {};
   try {
