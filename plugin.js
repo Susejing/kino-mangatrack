@@ -146,6 +146,17 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.91 «LOS OTROS NOMBRES» — el registro AniList se topa
+// con el muro de los títulos en español: la fuente bautiza la serie a su
+// manera («Dolor De Corazon») y ese nombre NO existe en AniList, que la
+// guarda como «Heart Aching» / «Please Don't Die!» / 죽지 말아 줘!
+// (verificado en vivo: ni AniList, ni MAL, ni MangaDex la hallan así).
+// Ahora el aviso a AniTrack viaja con los OTROS nombres de la ficha de
+// MangaDex (inglés, original, romaji; meta.alts) y con los que el puente
+// de idsPorTitulo rescate aunque la ficha no traiga enlaces: AniTrack
+// (su 0.14.1) los prueba en AniList cuando el título principal no dio.
+// Lo que ninguna base conozca sigue necesitando el vínculo a mano, que
+// el mapa aprendido recuerda para siempre.
 // MangaTrack v0.4.90 «LA MEZCLA» — remate de la fila (la persona la vio
 // tomar solo los 19 de la estrella: el pool era completo (el contador
 // decía 100) pero la estantería iba PRIMERO y la tira dibuja 12: solo se
@@ -1055,7 +1066,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.90";
+const VERSION = "0.4.91";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -3755,8 +3766,32 @@ async function mdMeta(id) {
     const nm = (t && t.attributes && t.attributes.name) || {};
     return String(nm.es || nm.en || "");
   }));
+  // v0.4.91 — LOS OTROS NOMBRES: MangaDex guarda cada serie en todos sus
+  // idiomas (inglés, original, romaji…). Viajan en el meta (cap 4, sin
+  // repetidos y sin el título elegido) para que AniTrack los pruebe en
+  // AniList cuando el título en español no da con nadie.
+  const titRaw = mdTitulo(m);
+  const titElegido = normTituloMD(titRaw);
+  const altsMd = [];
+  const empujaAlt = (v) => {
+    const s = String(v || "").trim().slice(0, 120);
+    // El alfabeto original (coreano, japonés…) no deja huella en
+    // normTituloMD: se admite con dos letras de cualquier escritura y
+    // se compara crudo con el título elegido.
+    if (!s || s.length < 2 || s === titRaw) return;
+    const nq = normTituloMD(s);
+    if (nq && titElegido && nq === titElegido) return;
+    for (let i = 0; i < altsMd.length; i++) {
+      if (altsMd[i] === s) return;
+      const nc = normTituloMD(altsMd[i]);
+      if (nq && nc && nq === nc) return;
+    }
+    if (altsMd.length < 4) altsMd.push(s);
+  };
+  Object.keys((m.attributes && m.attributes.title) || {}).forEach((k) => empujaAlt(m.attributes.title[k]));
+  ((m.attributes && m.attributes.altTitles) || []).forEach((o) => { if (o && Object.keys(o).length) empujaAlt(o[Object.keys(o)[0]]); });
   return { title: mdTitulo(m), poster: mdPortada(m), overview: ov,
-    anilistId: idDe(L.al), malId: idDe(L.mal), generos: generos };
+    anilistId: idDe(L.al), malId: idDe(L.mal), generos: generos, alts: altsMd };
 }
 
 async function mdCaps(id) {
@@ -10048,7 +10083,28 @@ async function idsPorTitulo(titulo) {
         log("ids de MangaDex para «" + titulo.slice(0, 40) + "»: al " + ids.al + ", mal " + ids.mal);
         return ids;
       }
-
+      // v0.4.91 — hallazgo SIN enlaces: la serie calzó por nombre pero
+      // su ficha no trae al/mal. Sus OTROS nombres (inglés, original,
+      // romaji) viajan al aviso de AniTrack, que los probará en AniList.
+      // Sin ids no hay cache que valga: solo pasa en caminos de fracaso.
+      const aM = mejor.attributes || {};
+      const q2 = normTituloMD(titulo);
+      const nombres = [];
+      const empujaN = (v) => {
+        const s = String(v || "").trim().slice(0, 120);
+        if (!s || s.length < 2 || s === titulo) return;
+        const nq = normTituloMD(s);
+        if (nq && nq === q2) return;
+        for (let c = 0; c < nombres.length; c++) {
+          if (nombres[c] === s) return;
+          const nc = normTituloMD(nombres[c]);
+          if (nq && nc && nq === nc) return;
+        }
+        if (nombres.length < 4) nombres.push(s);
+      };
+      Object.keys(aM.title || {}).forEach((k) => empujaN(aM.title[k]));
+      (aM.altTitles || []).forEach((o) => { if (o && Object.keys(o).length) empujaN(o[Object.keys(o)[0]]); });
+      if (nombres.length) return { al: 0, mal: 0, nombres: nombres };
     }
     setJson(clave, { fallo: Date.now() });
   } catch (e) {
@@ -10115,6 +10171,26 @@ function avisarAnitrack(d, ch, fSer) {
     const arg = { title: titulo.slice(0, 200), chapter: num, source: (fSer && fSer.id) || "" };
     if (d.meta.anilistId) arg.anilistId = d.meta.anilistId;
     if (d.meta.malId) arg.malId = d.meta.malId;
+    // v0.4.91 — LOS OTROS NOMBRES: la ficha de MangaDex trae la serie en
+    // todos sus idiomas (inglés, original, romaji). Viajan a AniTrack
+    // (su 0.14.1) para que los pruebe en AniList cuando el título en
+    // español no dé con nadie. Se deduplican aquí mismo; el puente de
+    // idsPorTitulo puede sumar más abajo.
+    const altsBrutas = (Array.isArray(d.meta.alts) ? d.meta.alts : [])
+      .map((s) => String(s || "").trim().slice(0, 120));
+    const altsMeta = [];
+    for (let i = 0; i < altsBrutas.length && altsMeta.length < 4; i++) {
+      const s = altsBrutas[i];
+      if (!s || s.length < 2) continue;
+      const ns = normTituloMD(s);
+      let ya = false;
+      for (let j = 0; j < altsMeta.length; j++) {
+        if (altsMeta[j] === s) { ya = true; break; }
+        const nj = normTituloMD(altsMeta[j]);
+        if (ns && nj && nj === ns) { ya = true; break; }
+      }
+      if (!ya) altsMeta.push(s);
+    }
     // v0.4.3 — vínculo AniList: si esta serie se vinculó desde la
     // sección de AniList, sus ids son exactos y no hace falta buscar
     // por título (prioridad: ids de la serie > vínculo > búsqueda).
@@ -10148,6 +10224,22 @@ function avisarAnitrack(d, ch, fSer) {
       .then(function (ids) {
         if (ids && ids.al) arg.anilistId = ids.al;
         if (ids && ids.mal) arg.malId = ids.mal;
+        // v0.4.91 — el puente halló la serie pero sin ids: sus otros
+        // nombres se suman a los de la ficha (sin repetidos).
+        const otros = (Array.isArray(ids && ids.nombres) ? ids.nombres : []);
+        for (let i = 0; i < otros.length && altsMeta.length < 4; i++) {
+          const s = String(otros[i] || "").trim().slice(0, 120);
+          if (!s || s.length < 2) continue;
+          let ya = false;
+          for (let j = 0; j < altsMeta.length; j++) {
+            if (altsMeta[j] === s) { ya = true; break; }
+            const nj = normTituloMD(altsMeta[j]);
+            const ns = normTituloMD(s);
+            if (nj && ns && nj === ns) { ya = true; break; }
+          }
+          if (!ya) altsMeta.push(s);
+        }
+        if (altsMeta.length) arg.alts = altsMeta.slice(0, 3);
         return kino.plugins.call("anitrack", "markChapter", arg);
       })
       .then(function (r) {
