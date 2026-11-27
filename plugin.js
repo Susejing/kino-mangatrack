@@ -120,6 +120,20 @@
 // falta y no estira nunca más. En las CUADRÍGULAS no se toca nada:
 // la celda ya las acota. Sin hosts nuevos, sin settings, sin parsers.
 
+// MangaTrack v0.4.86 «LA SECCIÓN QUE FALTABA» — pedido del teléfono (26 nov,
+// con las capturas de Mangas.in y de la portada de m440.in en el navegador):
+// el Inicio de Mangas.in no traía la sección «Últimas actualizaciones» de la
+// portada (la de «Hoy» que la web y la app de Manga muestran). Nueva fila
+// «Actualizados de Mangas.in»: la portada se pide UNA vez más (con su pausa
+// de cortesía) y un parser PROPIO la lee: series recién actualizadas con su
+// portada (la miniatura /uploads/manga/<slug>/cover/… del propio bloque) y
+// el número del capítulo recién subido (el enlace /manga/<slug>/<num>-…, el
+// primero de cada grupo es el más nuevo). msCards NO sirve aquí tal cual:
+// los enlaces de capítulo caen en su misma captura y sus textos («#325.
+// Capítulo 325») pisarían los títulos; el parser nuevo solo acepta enlaces
+// de serie (href terminado en el slug) y deduplica. Falla blanda: si la
+// portada no carga, la fila no sale y nada más se toca. Sin parsers viejos
+// tocados, sin hosts nuevos, sin settings.
 // MangaTrack v0.4.85 «LAS DOS PUERTAS» — revisión en vivo de ManhwaWeb y
 // Mangas.in a cuenta de la persona: (1) algunos +18 de ManhwaWeb no abrían:
 // dos motivos — series OFICIALES (toptoon, lezhin…) cuyas páginas viven en
@@ -989,7 +1003,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.85";
+const VERSION = "0.4.86";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -4618,6 +4632,56 @@ function msPopularesHome(h, max) {
   return out;
 }
 
+// v0.4.86 — «Últimas actualizaciones» de la portada de Mangas.in (la casa
+// hoy vive en m440.in): las series recién actualizadas, cada una con su
+// portada (la miniatura /uploads/manga/<slug>/cover/… del propio bloque)
+// y el número del capítulo recién subido (el enlace /manga/<slug>/<num>-…;
+// el primero de cada grupo es el más nuevo). Parser PROPIO: msCards
+// también captura los enlaces de capítulo (su href arranca igual) y sus
+// textos («#325. Capítulo 325») pisarían los títulos; aquí solo entran
+// enlaces de SERIE (el href termina en el slug) y se deduplica por slug.
+function msActualizadosHome(h, max) {
+  h = String(h || "");
+  const pos = h.search(/últimas actualizaciones/i);
+  const zona = pos >= 0 ? h.slice(pos, pos + 150000) : h;
+  const out = [], visto = {};
+  const re = /<a\b[^>]*href=(?:"([^"]*[/]manga[/][a-z0-9-]+(?:[/])?)"|'([^']*[/]manga[/][a-z0-9-]+(?:[/])?)')[^>]*>([\s\S]{0,300}?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(zona)) !== null && out.length < (max || 24)) {
+    const href = m[1] !== undefined ? m[1] : m[2];
+    const mm = href.match(/[/]manga[/]([a-z0-9-]+)/i);
+    if (!mm || visto[mm[1]]) continue;
+    const title = clean((m[3] || "").replace(/<[^>]*>/g, " "));
+    if (!title || title.length > 120) continue;
+    // La portada: la miniatura de cover más cercana ANTES del enlace
+    // (el bloque del widget la trae encima); si no, la adivina msCover,
+    // que sabe dónde guarda el tema la portada de cada slug.
+    const antes = zona.slice(Math.max(0, m.index - 1200), m.index);
+    const ims = antes.match(/<img\b[^>]*>/gi) || [];
+    let poster = "";
+    for (let k = ims.length - 1; k >= 0 && !poster; k--) {
+      const p = msAttrDe(ims[k], ["src", "data-src", "data-lazy-src", "data-cfsrc", "data-background-image"]);
+      if (p && /uploads[/]manga[/][a-z0-9-]+[/]cover/i.test(p)) poster = msAbs(p);
+    }
+    // El capítulo recién subido: el primer enlace de capítulo DESPUÉS.
+    const luego = zona.slice(m.index + m[0].length, m.index + m[0].length + 3000);
+    const mc = luego.match(new RegExp("[/]manga[/]" + mm[1] + "[/](\\d+(?:[.]\\d+)?)-[a-z0-9-]+", "i"));
+    visto[mm[1]] = 1;
+    out.push({ url: "/ms/manga/" + mm[1] + "/", title: title,
+      poster: poster || msCover(mm[1]), label: mc ? "Cap. " + mc[1] : "" });
+  }
+  if (!out.length) {
+    // Respaldo honesto: si el parser propio no pescó nada (el tema
+    // cambió su HTML), msCards sobre la página entera igual trae las
+    // series de la portada; el log deja la huella para afinar con datos.
+    const alt = msCards(h, max || 24);
+    log("MS actualizados: respaldo msCards: " + alt.length);
+    return alt;
+  }
+  log("MS actualizados de portada: " + out.length);
+  return out;
+}
+
 // El buscador de Mangas.in es un servicio JSON (/search?q=…):
 // devuelve sugerencias {value: título, data: slug}. El sitio exige
 // al menos 3 caracteres: con menos no responde nada.
@@ -5440,6 +5504,18 @@ async function homeTree() {
       // puede pedir la siguiente.
       masRec = recientes.length > 0;
     } catch (e) { log("MS home rec: " + e); }
+    // v0.4.86 — «Actualizados de Mangas.in»: la sección «Últimas
+    // actualizaciones» de la portada (la de «Hoy» de m440.in), con
+    // portadas y el capítulo recién subido. Sin paginación (la portada
+    // no la tiene). Falla blanda: si la portada no carga, la fila no
+    // sale y nada más se toca.
+    titUpd = "Actualizados de Mangas.in"; titUpdEn = "Updated on Mangas.in";
+    try {
+      await kino.sleep(900);
+      actualizados = msActualizadosHome(await getHtmlDe(f, "/"), 24);
+      // Sus portadas al almacén, como las de las otras dos secciones.
+      try { await msPrecarga(actualizados, 8); } catch (e5) { log("MS portadas act: " + ((e5 && e5.message) || e5)); }
+    } catch (e4) { log("MS home act: " + ((e4 && e4.message) || e4)); }
     // v0.4.30 — las portadas de Mangas.in al almacén con la misma
     // receta de ManhwaWeb (bajar con presentación, convertir); el
     // dibujado las toma de ahí sin red.
