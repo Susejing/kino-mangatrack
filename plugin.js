@@ -146,6 +146,16 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.93 «EL MURO DE MANGABALL» — dos curas del teléfono:
+// (1) las páginas de MangaBall dan 403 sin Referer (el CDN de la
+// familia *.red-and-blue.net lo exige): ahora MangaBall entra en el
+// muro (muroHeadersMB con Referer https://mangaball.com) y sus páginas
+// se bajan, convierten y miden como las de Mangas.in y ManhwaWeb.
+// (2) «anitrack bad_input» en TODA lectura con otros nombres: la 0.14.1
+// añadió «alts» al código de AniTrack pero no al esquema del
+// manifiesto, y Kino valida estricto (campo extra = bad_input, contrato
+// del protocolo). AniTrack 0.14.3 declara «alts»: "string[]?" en
+// markChapter. Hasta actualizar AniTrack, los avisos con alts fallan.
 // MangaTrack v0.4.92 «MANGABALL» — OCTAVA FUENTE: mangaball.com con su
 // API JSON oficial /api/v1/ (mapeada de la extensión de keiyoushi y
 // verificada en vivo: búsqueda, ficha, capítulos y páginas). Series
@@ -1075,7 +1085,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.92";
+const VERSION = "0.4.93";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1900,6 +1910,15 @@ function muroHeadersMS() {
   return h;
 }
 
+// v0.4.93 — la de MangaBall: su CDN de páginas (*.red-and-blue.net)
+// responde 403 sin el Referer de la casa (verificado en el teléfono:
+// TODAS las páginas de One Piece en 403 sin él; la receta de keiyoushi
+// y haruneko manda Referer https://mangaball.com).
+function muroHeadersMB() {
+  return { Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
+    "User-Agent": UA_ESCRITORIO, Referer: MB_BASE + "/" };
+}
+
 async function mwImgData(url) {
   const u = String(url || "");
   if (!u || u.indexOf("data:") === 0) return u || null;
@@ -2232,8 +2251,8 @@ function muroSetDe(lista) {
 // (aparte de out.negIdx: las grandes no se reintentan solas).
 async function muroConvierte(images, desde, cuantas, pref, grandes) {
   const arr = Array.isArray(images) ? images : [];
-  const hdrs = pref === "MS" ? muroHeadersMS() : muroHeadersMW();
-  const et = pref === "MS" ? "MS" : "MW";
+  const hdrs = pref === "MS" ? muroHeadersMS() : (pref === "MB" ? muroHeadersMB() : muroHeadersMW());
+  const et = pref === "MS" ? "MS" : (pref === "MB" ? "MB" : "MW");
   const fin = Math.min(arr.length, Math.max(0, desde | 0) + (cuantas || MURO_PAG_BATCH));
   const out = { conv: 0, nuevas: 0, neg: 0, med: 0, negIdx: [], grande: [] };
   const gset = grandes || {};
@@ -2290,7 +2309,7 @@ async function muroAutoLote(state, desde, cuantas) {
   if (!r || !Array.isArray(r.images) || !r.images.length) return null;
   const d = state.detail;
   const fSer = d ? fuenteDeUrl(d.url) : null;
-  const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "manhwaweb" ? "MW" : null);
+  const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "mangaball" ? "MB" : (fSer && fSer.id === "manhwaweb" ? "MW" : null));
   if (!pref) return null;
   const desdeOk = Math.max(0, desde | 0);
   if (desdeOk >= r.images.length) return null;
@@ -8099,7 +8118,7 @@ export async function screenEvent(ev) {
       if (!r || !Array.isArray(r.images) || !r.images.length) return null;
       const d = state.detail;
       const fSer = d ? fuenteDeUrl(d.url) : null;
-      const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "manhwaweb" ? "MW" : null);
+      const pref = fSer && fSer.id === "mangasin" ? "MS" : (fSer && fSer.id === "mangaball" ? "MB" : (fSer && fSer.id === "manhwaweb" ? "MW" : null));
       if (!pref) return null;
       const mal = Array.isArray(r.mal) ? r.mal : [];
       const grandes = Array.isArray(r.grande) ? r.grande : [];
@@ -10539,7 +10558,7 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
   // acercarse la persona al final (o con «Bajar más páginas»). Solo
   // si el muro niega hasta la primera tanda se cae a la medición de
   // siempre, para que la nota honrada sepa decir cuál fue el motivo.
-  const muro = fSer.id === "mangasin" ? "MS" : (fSer.id === "manhwaweb" ? "MW" : null);
+  const muro = fSer.id === "mangasin" ? "MS" : (fSer.id === "manhwaweb" ? "MW" : (fSer.id === "mangaball" ? "MB" : null));
   let pend = 0;
   let muroSt = null;
   if (muro) {
