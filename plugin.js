@@ -1096,7 +1096,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.94";
+const VERSION = "0.4.95";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1125,6 +1125,11 @@ const FUENTES = [
   { id: "manhwaweb", nombre: "ManhwaWeb", base: "https://manhwaweb.com" },
   // v0.4.92 — la octava fuente: MangaBall, API JSON oficial /api/v1/.
   { id: "mangaball", nombre: "MangaBall", base: "https://mangaball.com" },
+  // v0.4.95 — la novena fuente: ShadeManga, API JSON propia
+  // /api/series-locales/ (mapeada de la extensión de keiyoushi y
+  // verificada en vivo). La web tiene front de login con verificación
+  // anti-bot, PERO su API responde abierta: ni muro ni ventanita.
+  { id: "shademanga", nombre: "ShadeManga", base: "https://shademanga.com" },
 ];
 
 function fuentePorId(id) {
@@ -1167,6 +1172,11 @@ function fuenteDeUrl(url) {
   // interno de la casa; el prefijo /mb/ es exclusivo, así que el id no
   // necesita forma estricta).
   if (/^[/]mb[/]t[/][^/]+$/.test(u)) return fuentePorId("mangaball");
+  // ShadeManga: series en /sm/t/<id numérico> y capítulos en
+  // /sm/c/<serieId>/<capId> (la API de capítulos pide los DOS ids:
+  // /api/series-locales/<serie>/capitulos/<cap>/paginas). Prefijo /sm/
+  // exclusivo, sin choque con /ms/ de Mangas.in.
+  if (/^[/]sm[/]t[/][^/]+$/.test(u)) return fuentePorId("shademanga");
   return null;
 }
 
@@ -2147,6 +2157,150 @@ async function mbImages(url) {
   return out;
 }
 
+// ---------------------------------------------------------------- ShadeManga
+// v0.4.95 — NOVENA FUENTE: ShadeManga (shademanga.com). La web tiene
+// front de login con verificación anti-bot, pero su API JSON propia
+// (/api/series-locales/…) responde ABIERTA (verificado en vivo el
+// 28 nov: popular, recientes, búsqueda, ficha con capítulos y
+// páginas). Mapeada de la extensión de keiyoushi (src/es/shadowmanga).
+// Series guardadas como /sm/t/<id numérico> y capítulos como
+// /sm/c/<serieId>/<capId> (la API de páginas pide los dos). Sus
+// imágenes viven en cdn.shademanga.com y media.shademanga.com; la
+// extensión de referencia lleva un interceptor que, si el CDN niega
+// una página, la repite por shademanga.com/api/media/<ruta>: en Kino
+// el pintor dibuja directo con la presentación (imgHeadersDeUrl) y la
+// ruta de respaldo queda documentada por si el teléfono la pide.
+const SM_BASE = "https://shademanga.com";
+const ORDEN_SM = [["vistos", "Populares"], ["recientes", "Recientes"]];
+
+async function smGet(ruta) {
+  const r = await kino.fetch(SM_BASE + ruta, {
+    headers: {
+      Accept: "application/json",
+      Referer: SM_BASE + "/",
+      "User-Agent": UA_ESCRITORIO,
+    },
+  });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con ShadeManga (HTTP " + r.status + "). Inténtalo de nuevo.",
+  });
+  return JSON.parse(await r.text());
+}
+
+// Tarjetas de cualquier lista de series (popular, recientes,
+// search-candidates comparten la forma {id, titulo, portadaUrl}).
+function smCards(arr, max) {
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    const id = String(m.id || "");
+    const t = clean(String(m.titulo || ""));
+    if (!id || !t || seen[id]) continue;
+    seen[id] = 1;
+    out.push({ url: "/sm/t/" + id, title: t, poster: String(m.portadaUrl || "") });
+  }
+  log("SM tarjetas: " + out.length);
+  return out;
+}
+
+// Búsqueda: search-candidates (q es EL parámetro; take hasta 120). Se
+// piden también las +18 (includeAdult=true): en la vinculación con
+// AniList las series de Mi AniList tienen derecho a encontrarse, y en
+// el buscador general la casa las muestra igual.
+async function smBuscar(q) {
+  const qq = String(q || "").trim();
+  if (qq.length < 2) return [];
+  const j = await smGet("/api/series-locales/search-candidates?q=" + encodeURIComponent(qq)
+    + "&includeAdult=true&showSinPortada=false&take=30");
+  const arr = Array.isArray(j) ? j : ((j && j.items) || []);
+  return smCards(arr, 30);
+}
+
+// Catálogo: «Populares» es la lista fija por géneros (una sola página,
+// sin paginación en la API) y «Recientes» trae páginas de verdad
+// (page/pageSize/totalPages).
+async function smCatalog(cat, page1) {
+  if ((cat && cat.order) === "recientes") {
+    const j = await smGet("/api/series-locales/capitulos/recientes?page=" + page1 + "&pageSize=30");
+    const arr = ((j && j.items) || []).map((it) => (it && it.serie) || {}).filter(Boolean);
+    const items = smCards(arr, 30);
+    return { items: items, mas: !!(j && j.page < j.totalPages) };
+  }
+  const j = await smGet("/api/series-locales/popular");
+  const arr = (Array.isArray(j) ? j : []).flatMap((g) => (g && g.series) || []);
+  const items = smCards(arr, 30);
+  return { items: items, mas: false };
+}
+
+// La ficha completa: título, portada, sinopsis, autor, géneros (llegan
+// como «A, B, C») y LOS OTROS NOMBRES (titulosAlternativos, también
+// csv): viajan en meta.alts para AniTrack (la cuarta tanda).
+async function smSerie(url) {
+  const id = String(url || "").replace(/^[/]sm[/]t[/]/, "").replace(/[/]$/, "");
+  if (!id) return { meta: { title: "Serie", poster: "", overview: "" },
+    chapters: [], aviso: "Esa serie de ShadeManga no tiene una dirección válida." };
+  let d = {};
+  try { d = await smGet("/api/series-locales/" + encodeURIComponent(id)); }
+  catch (e) {
+    log("SM serie falló (" + id + "): " + ((e && e.message) || e));
+    return { meta: { title: "Serie", poster: "", overview: "" }, chapters: [],
+      aviso: "ShadeManga no entregó la ficha de esta serie: inténtalo de nuevo en un rato." };
+  }
+  const meta = { title: clean(String(d.titulo || id)), poster: String(d.portadaUrl || ""),
+    overview: clean(String(d.descripcion || "")) };
+  const gens = String(d.generos || "").split(",").map((g) => g.trim()).filter(Boolean);
+  meta.generos = generosLimpia(gens);
+  if (d.autor) meta.autor = clean(String(d.autor));
+  const alts = [];
+  const an = String(d.titulosAlternativos || "").split(",");
+  for (let i = 0; i < an.length && alts.length < 4; i++) {
+    const v = clean(an[i].trim());
+    if (v && v !== meta.title && alts.indexOf(v) < 0) alts.push(v);
+  }
+  if (alts.length) meta.alts = alts;
+  // Capítulos: {id, numeroCapitulo, titulo, fechaSubida}. Dedup POR
+  // NÚMERO y orden ascendente (la API los trae del 1 para arriba).
+  const caps = [];
+  const porNum = {};
+  const arr = Array.isArray(d.capitulos) ? d.capitulos : [];
+  for (let i = 0; i < arr.length; i++) {
+    const c = arr[i] || {};
+    const cid = String(c.id || "");
+    const num = String(c.numeroCapitulo === undefined || c.numeroCapitulo === null ? "" : c.numeroCapitulo).trim();
+    if (!cid || !num) continue;
+    if (porNum[num] === undefined) {
+      porNum[num] = 1;
+      caps.push({ num: num, title: "Capítulo " + String(num).replace(/[.]0$/, ""),
+        url: "/sm/c/" + id + "/" + cid, fecha: String(c.fechaSubida || "") });
+    }
+  }
+  caps.sort((a, b) => (parseFloat(a.num) || 0) - (parseFloat(b.num) || 0));
+  log("SM caps: " + caps.length);
+  if (!caps.length) {
+    return { meta: meta, chapters: [],
+      aviso: "ShadeManga todavía no tiene capítulos de esta serie." };
+  }
+  return { meta: meta, chapters: caps.slice(0, TOPE_CAPS_SERIE) };
+}
+
+// Las páginas: /capitulos/<capId>/paginas → {paginas:[URLs del CDN]}.
+async function smImages(url) {
+  const m = String(url || "").match(/^[/]sm[/]c[/]([^/]+)[/]([^/]+)/);
+  if (!m) return [];
+  const j = await smGet("/api/series-locales/" + encodeURIComponent(m[1])
+    + "/capitulos/" + encodeURIComponent(m[2]) + "/paginas");
+  const pages = Array.isArray(j && j.paginas) ? j.paginas : [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < pages.length; i++) {
+    const u = String(pages[i] || "");
+    if (u.indexOf("https://") === 0 && !seen[u]) { seen[u] = 1; out.push(u); }
+  }
+  log("SM lector: " + out.length + " páginas");
+  return out;
+}
+
 // La copia local de una imagen si ya está en el almacén (lectura sin
 // red para el dibujado); si no hay, null. Vale para cualquier casa:
 // la clave es la propia dirección de la imagen.
@@ -2181,6 +2335,13 @@ function imgHeadersDeUrl(u) {
   if (s.indexOf("/mb/") === 0 || /(^|[.])red-and-blue[.]net([/:]|$)/i.test(s)
     || /(^|[.])poke-black-and-white[.]net([/:]|$)/i.test(s))
     return { Referer: MB_BASE + "/", "User-Agent": UA_ESCRITORIO };
+  // v0.4.95 — ShadeManga: sus páginas y portadas viven en
+  // cdn.shademanga.com y media.shademanga.com. La extensión de
+  // referencia lleva interceptor de respaldo porque el CDN a veces
+  // niega un archivo suelto; aquí la presentación de la casa viaja
+  // siempre (y shademanga.com/api/media/<ruta> queda como plan B).
+  if (s.indexOf("/sm/") === 0 || /(^|[.])shademanga[.]com([/:]|$)/i.test(s))
+    return { Referer: SM_BASE + "/", "User-Agent": UA_ESCRITORIO };
   return null;
 }
 
@@ -3256,6 +3417,10 @@ async function vigiaUnUrl(url) {
     caps = s.chapters;
   } else if (f.id === "mangaball") {
     const s = await mbSerie(url);
+    if (s.aviso) return "";
+    caps = s.chapters;
+  } else if (f.id === "shademanga") {
+    const s = await smSerie(url);
     if (s.aviso) return "";
     caps = s.chapters;
   } else {
@@ -5983,6 +6148,20 @@ async function homeTree() {
       recientes = mbCards(jr, 20);
     } catch (e) { log("MB home: " + ((e && e.message) || e)); }
     masPop = populares.length > 0; masRec = recientes.length > 0;
+  } else if (f.id === "shademanga") {
+    // v0.4.95 — el Inicio de ShadeManga con su API: populares (lista
+    // fija por géneros) y recientes (por capítulo subido).
+    titPop = "Populares de ShadeManga"; titPopEn = "Popular on ShadeManga";
+    titRec = "Recientes de ShadeManga"; titRecEn = "Recent on ShadeManga";
+    try {
+      const jp = await smGet("/api/series-locales/popular");
+      populares = smCards((Array.isArray(jp) ? jp : []).flatMap((g) => (g && g.series) || []), 20);
+    } catch (e) { log("SM home pop: " + ((e && e.message) || e)); }
+    try {
+      const jr = await smGet("/api/series-locales/capitulos/recientes?page=1&pageSize=20");
+      recientes = smCards(((jr && jr.items) || []).map((it) => (it && it.serie) || {}).filter(Boolean), 20);
+    } catch (e) { log("SM home rec: " + ((e && e.message) || e)); }
+    masPop = populares.length > 0; masRec = recientes.length > 0;
   } else {
     // v0.4.72 — armadura de la portada: LeerCapitulo y LectorXd pedían
     // su página SIN red de seguridad (esta línea es la que tumbar la
@@ -7008,6 +7187,8 @@ function catalogTree(c) {
     drops = [catDrop("Orden", "catOrder", ORDEN_MS, c.order, "catOrder")];
   } else if (f.id === "mangaball") {
     drops = [catDrop("Orden", "catOrder", ORDEN_MB, c.order, "catOrder")];
+  } else if (f.id === "shademanga") {
+    drops = [catDrop("Orden", "catOrder", ORDEN_SM, c.order, "catOrder")];
   } else if (f.id === "manhwaweb") {
     // v0.4.42 — el catálogo de ManhwaWeb como la página: género (27 de
     // su API), demografía aparte y el orden «Nuevas obras» por defecto.
@@ -7091,6 +7272,9 @@ async function cargarCatalogo(cat, page, conRuta) {
     try { await mwPrecarga(nuevos, 12); } catch (e) { log("MW portadas catálogo: " + ((e && e.message) || e)); }
   } else if (f.id === "mangaball") {
     const r2 = await mbCatalog(cat, page1);
+    nuevos = r2.items; mas = r2.mas;
+  } else if (f.id === "shademanga") {
+    const r2 = await smCatalog(cat, page1);
     nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
@@ -8975,6 +9159,7 @@ async function buscarEnFuente(f, q) {
   if (f.id === "mangasin") return await msBuscar(q);
   if (f.id === "manhwaweb") return await mwBuscar(q);
   if (f.id === "mangaball") return await mbBuscar(q);
+  if (f.id === "shademanga") return await smBuscar(q);
   // v0.4.25 — LeerCapitulo ya no responde a "/?s=" (devuelve su portada):
   // su buscador vive ahora en la página del catálogo, "/manga/?q=…".
   const ruta = f.id === "lectorxd"
@@ -9002,6 +9187,8 @@ async function buscarVincular(f, q) {
   if (f.id === "mangadex") return await mdSearchLax(q);
   // MangaBall: la vinculación SÍ pide los +18 (adult_mode=all).
   if (f.id === "mangaball") return await mbBuscar(q, true);
+  // ShadeManga: su búsqueda ya trae los +18 (includeAdult=true).
+  if (f.id === "shademanga") return await smBuscar(q);
   return await buscarEnFuente(f, q);
 }
 
@@ -10561,6 +10748,8 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     images = await mwImages(ch.url);
   } else if (fSer.id === "mangaball") {
     images = await mbImages(ch.url);
+  } else if (fSer.id === "shademanga") {
+    images = await smImages(ch.url);
   } else {
     const html = await getHtmlDe(fSer, ch.url);
     images = readerImagesDe(fSer, html);
@@ -10736,6 +10925,13 @@ async function cargarSerie(url, conRuta) {
     full = s.chapters.slice(0, TOPE_CAPS_SERIE);
   } else if (f.id === "mangaball") {
     const s = await mbSerie(url);
+    if (s.aviso) return { toast: s.aviso };
+    meta = s.meta;
+    // Los otros nombres de la ficha viajan a AniTrack con el aviso.
+    meta.totalCaps = s.chapters.length;
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
+  } else if (f.id === "shademanga") {
+    const s = await smSerie(url);
     if (s.aviso) return { toast: s.aviso };
     meta = s.meta;
     // Los otros nombres de la ficha viajan a AniTrack con el aviso.

@@ -1,7 +1,7 @@
 {
   "id": "mangatrack",
   "name": "MangaTrack",
-  "version": "0.4.94",
+  "version": "0.4.95",
   "creator": "Susejing",
   "description": "Lee mangas en español en tu TV o teléfono (LeerCapitulo, LectorXd, MangaDex, InManga, MangaOni, Mangas.in y ManhwaWeb) con el panel de capítulos al final de la lectura, la vinculación con AniList que busca en todas las fuentes a la vez (y en lote desde Mi AniList) y el riel de mangas relacionados en cada serie.",
   "apiVersion": 19,
@@ -50,7 +50,11 @@
     "www.mangaball.com",
     "mangaball.net",
     "*.poke-black-and-white.net",
-    "*.red-and-blue.net"
+    "*.red-and-blue.net",
+    "shademanga.com",
+    "www.shademanga.com",
+    "cdn.shademanga.com",
+    "media.shademanga.com"
   ],
   "capabilities": [
     "screen",
