@@ -146,7 +146,18 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
-// MangaTrack v0.4.93 «EL MURO DE MANGABALL» — dos curas del teléfono:
+// MangaTrack v0.4.94 «EL PINTOR DE MANGABALL» — la prueba del teléfono
+// (solo 3 series leían; el resto, páginas en blanco) destapó la cura
+// a medias de la 0.4.93: el muro bajaba y convertía, pero el LECTOR
+// dibujaba las páginas sin presentación y el CDN las negaba. Dos
+// llaves que faltaban: (1) imgHeadersDeUrl ahora conoce a MangaBall
+// (/mb/… y los CDN *.red-and-blue.net / *.poke-black-and-white.net →
+// Referer https://mangaball.com): portadas y páginas viajan con su
+// presentación y Kino las pide él mismo, sin tope de tamaño (las
+// webtoon a color, de 200 a 500 KB, jamás cabían en la conversión de
+// 149 KB); (2) el lector ahora cuenta a MangaBall como casa con muro
+// (esMuro): copia local cuando existe, dibujo directo con headers
+// cuando no. MangaTrack v0.4.93 «EL MURO DE MANGABALL» — dos curas del teléfono:
 // (1) las páginas de MangaBall dan 403 sin Referer (el CDN de la
 // familia *.red-and-blue.net lo exige): ahora MangaBall entra en el
 // muro (muroHeadersMB con Referer https://mangaball.com) y sus páginas
@@ -1085,7 +1096,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.93";
+const VERSION = "0.4.94";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -2161,6 +2172,15 @@ function imgHeadersDeUrl(u) {
     return { Referer: MS_BASE + "/", "User-Agent": getJson("msUA", "") || UA_MOVIL };
   if (s.indexOf("/mw/") === 0 || /img[12]mw[.]xyz|(^|[.])manhwaweb[.]com([/:]|$)/i.test(s))
     return { Referer: MW_BASE + "/", "User-Agent": UA_MOVIL };
+  // v0.4.94 — MangaBall: sus series viajan como /mb/… y sus páginas y
+  // portadas viven en los CDN rotativos (*.red-and-blue.net y
+  // *.poke-black-and-white.net). El Referer de la casa es la cura del
+  // 403 (el teléfono lo confirmó: solo se dibujaban las páginas ya
+  // convertidas; las webtoon a color superan el tope de conversión y
+  // sin presentación quedaban en blanco).
+  if (s.indexOf("/mb/") === 0 || /(^|[.])red-and-blue[.]net([/:]|$)/i.test(s)
+    || /(^|[.])poke-black-and-white[.]net([/:]|$)/i.test(s))
+    return { Referer: MB_BASE + "/", "User-Agent": UA_ESCRITORIO };
   return null;
 }
 
@@ -6590,7 +6610,11 @@ function readerTree(state) {
   // servidor de pruebas; el diagnóstico por hora dirá si desde el
   // teléfono es distinto).
   const esMw = d && d.url && d.url.indexOf("/mw/") === 0;
-  const esMuro = esMs || esMw;
+  // v0.4.94 — MangaBall entra al lector con muro: sus páginas sin
+  // copia local se dibujan EN DIRECTO con la presentación (el 403 del
+  // teléfono lo exigió: solo leían las páginas ya convertidas).
+  const esMb = d && d.url && d.url.indexOf("/mb/") === 0;
+  const esMuro = esMs || esMw || esMb;
   // v0.4.30 — el lector con muro dibuja las páginas CONVERTIDAS (las
   // copias locales «pgd:»: la receta de las portadas aplicada a las
   // páginas). v0.4.40 — la que aún no está guardada ya no es un hueco:
