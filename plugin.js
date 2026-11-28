@@ -146,6 +146,15 @@
 // declarado en hosts) y sus dos secciones del Inicio responden igual que la
 // página: Populares es su catálogo por visitas y Novedades su feed lasted.
 // El vigía hereda el aviso: esas series devuelven sin capítulo y no avisan.
+// MangaTrack v0.4.92 «MANGABALL» — OCTAVA FUENTE: mangaball.com con su
+// API JSON oficial /api/v1/ (mapeada de la extensión de keiyoushi y
+// verificada en vivo: búsqueda, ficha, capítulos y páginas). Series
+// /mb/t/<id>, capítulos /mb/c/<id>. Gotchas curados: el parámetro de
+// búsqueda es «keyword» (los demás se ignoran), pide cabeceras de
+// navegador (403 sin ellas), el listing quiere lang=es y los capítulos
+// «enlace» de grupos externos NO se filtran: su detalle sirve las
+// páginas rehospedadas igual (verificado con One Piece). La ficha trae
+// alternateName: viajan como meta.alts al registro de AniTrack.
 // MangaTrack v0.4.91 «LOS OTROS NOMBRES» — el registro AniList se topa
 // con el muro de los títulos en español: la fuente bautiza la serie a su
 // manera («Dolor De Corazon») y ese nombre NO existe en AniList, que la
@@ -1066,7 +1075,7 @@
 // Las dos son aditivas: un Kino más antiguo lo ignora y sigue con la
 // tira vertical de siempre, sin queja ni rechazo.
 
-const VERSION = "0.4.91";
+const VERSION = "0.4.92";
 const BASE = "https://www.leercapitulo.co";   // base de los helpers de LeerCapitulo
 // Capítulos que se muestran a la vez en el detalle de una serie (una
 // "ventana"): el estado de una pantalla de Kino admite 64 KB y una
@@ -1093,6 +1102,8 @@ const FUENTES = [
   { id: "mangaoni", nombre: "MangaOni", base: "https://manga-oni.com" },
   { id: "mangasin", nombre: "Mangas.in", base: "https://m440.in" },
   { id: "manhwaweb", nombre: "ManhwaWeb", base: "https://manhwaweb.com" },
+  // v0.4.92 — la octava fuente: MangaBall, API JSON oficial /api/v1/.
+  { id: "mangaball", nombre: "MangaBall", base: "https://mangaball.com" },
 ];
 
 function fuentePorId(id) {
@@ -1131,6 +1142,10 @@ function fuenteDeUrl(url) {
   // acepta cualquier id sin barra. Series en /mw/manhwa/ y capítulos en
   // /mw/leer/ (el prefijo /mw evita chocar con las demás fuentes).
   if (/^[/]mw[/](?:manhwa|leer)[/][^/]+_[0-9]{10,}/.test(u)) return fuentePorId("manhwaweb");
+  // MangaBall: series en /mb/t/<id> y capítulos en /mb/c/<id> (el id
+  // interno de la casa; el prefijo /mb/ es exclusivo, así que el id no
+  // necesita forma estricta).
+  if (/^[/]mb[/]t[/][^/]+$/.test(u)) return fuentePorId("mangaball");
   return null;
 }
 
@@ -1915,6 +1930,191 @@ async function msPrecarga(items, n) {
   await Promise.all(arr.slice(0, n || 8).map(function (it) {
     return msImgData(it && it.poster).catch(function () { return null; });
   }));
+}
+
+// ---------------------------------------------------------------- MangaBall
+// v0.4.92 — OCTAVA FUENTE: MangaBall (mangaball.com), API JSON oficial
+// /api/v1/ (mapeada de la extensión de keiyoushi y verificada en vivo:
+// búsqueda, ficha, capítulos y páginas). Series guardadas como
+// /mb/t/<id> y capítulos como /mb/c/<id> (el id interno de la casa,
+// 24 hex: no choca con ninguna otra fuente). Gotchas de la casa: pide
+// cabeceras de navegador (sin ellas hay 403, issue #246 de keiyoushi),
+// el parámetro de búsqueda es «keyword» (name/query/search/title se
+// IGNORAN, verificado) y portadas/páginas viven en CDN rotativos de la
+// familia *.poke-black-and-white.net / *.red-and-blue.net (declarados
+// con comodín en el manifiesto).
+const MB_BASE = "https://mangaball.com";
+const MB_LANGS = "es,es-ar,es-mx,es-es,es-la,es-419";
+const ORDEN_MB = [["views", "Populares"], ["lastupdate", "Recientes"]];
+
+async function mbGet(ruta) {
+  const r = await kino.fetch(MB_BASE + ruta, {
+    headers: {
+      Accept: "application/json",
+      Referer: MB_BASE + "/",
+      "User-Agent": UA_ESCRITORIO,
+    },
+  });
+  if (!r.ok) throw kino.error("network", "HTTP " + r.status, {
+    userMessage: "No se pudo conectar con MangaBall (HTTP " + r.status + "). Inténtalo de nuevo.",
+  });
+  const t = await r.text();
+  try { return JSON.parse(t); } catch (e) {
+    return JSON.parse(t.replace(/(\d)[\u0000-\u001F]+(\d)/g, "$1$2")
+      .replace(/[\u0000-\u001F]/g, " "));
+  }
+}
+
+// La portada de una ficha: cover.path llega con barras invertidas que
+// se enderezan; el CDN de covers es fijo (bulbasaur…). Si el path ya
+// trae su «covers/» no se duplica.
+function mbCover(img) {
+  const p = String((img && img.cover && img.cover.path) || "").replace(/\\/g, "/").replace(/^[/]+/, "");
+  if (!p) return "";
+  if (p.indexOf("https://") === 0) return p;
+  if (p.indexOf("covers/") === 0) return "https://bulbasaur.poke-black-and-white.net/" + p;
+  return "https://bulbasaur.poke-black-and-white.net/covers/" + p;
+}
+
+// Tarjetas del buscador avanzado: {data:[{id, slug, name, image}]}.
+function mbCards(j, max) {
+  const arr = (j && j.data) || [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < arr.length && out.length < max; i++) {
+    const m = arr[i] || {};
+    const id = String(m.id || "");
+    const t = clean(String(m.name || ""));
+    if (!id || !t || seen[id]) continue;
+    seen[id] = 1;
+    out.push({ url: "/mb/t/" + id, title: t, poster: mbCover(m.image) });
+  }
+  log("MB tarjetas: " + out.length);
+  return out;
+}
+
+// La ruta del buscador avanzado: keyword (verificado en vivo: los
+// parámetros name/query/search/title se ignoran), orden views |
+// lastupdate, español de todas las variantes. lax=true pide también
+// los +18 (es la búsqueda de la vinculación con AniList).
+function mbRuta(q, page, sortBy, lax) {
+  return "/api/v1/title/search-advanced?page=" + (Math.max(1, parseInt(page, 10) || 1))
+    + "&limit=30&keyword=" + encodeURIComponent(q || "")
+    + "&sort_by=" + (sortBy || "lastupdate") + "&sort_order=desc"
+    + "&adult_mode=" + (lax ? "all" : "no_18")
+    + "&chapterLanguage=" + encodeURIComponent(MB_LANGS)
+    + "&tag_mode=AND&included_tags=&excluded_tags=";
+}
+
+async function mbBuscar(q, lax) {
+  const qq = String(q || "").trim();
+  if (qq.length < 2) return [];
+  const j = await mbGet(mbRuta(qq, 1, "lastupdate", !!lax));
+  return mbCards(j, 30);
+}
+
+// Catálogo con paginación de verdad (page= en la API) y el orden
+// Popularidad (views) / Recientes (lastupdate).
+async function mbCatalog(cat, page1) {
+  const j = await mbGet(mbRuta("", page1, (cat && cat.order) || "views", false));
+  const items = mbCards(j, 30);
+  return { items: items, mas: items.length > 0 };
+}
+
+// Los capítulos de una serie: listing por title_id (desc, páginas de
+// 500) volteado a ascendente. Los capítulos que traen url/site de un
+// grupo externo NO se filtran: verificado en vivo que el detalle del
+// capítulo sirve sus páginas rehospedadas igual (One Piece).
+async function mbCaps(id) {
+  const out = [];
+  const porNum = {};
+  for (let page = 1; page <= 4; page++) {
+    const j = await mbGet("/api/v1/title/chapter-listing?title_id=" + encodeURIComponent(id)
+      + "&page=" + page + "&limit=500&sort_order=desc&lang=es");
+    const arr = (j && j.data) || [];
+    if (!arr.length) break;
+    for (let i = 0; i < arr.length; i++) {
+      const c = arr[i] || {};
+      const cid = String(c.id || "");
+      const num = String(c.number === undefined || c.number === null ? "" : c.number).trim();
+      if (!cid || !num) continue;
+      // Dedup POR NÚMERO (la casa repite filas del mismo capítulo): se
+      // queda la primera, pero si la nueva es propia (sin url/site de
+      // grupo externo) y la guardada era enlace, gana la propia.
+      const fila = { num: num, title: "Capítulo " + num, url: "/mb/c/" + cid,
+        ext: (c.url || c.site) ? 1 : 0 };
+      const prev = porNum[num];
+      if (prev === undefined) { porNum[num] = out.length; out.push(fila); }
+      else if (!fila.ext && out[prev].ext) out[prev] = fila;
+    }
+    const t = parseInt((j && j.total) || "0", 10) || 0;
+    if (t && out.length >= t) break;
+  }
+  out.sort((a, b) => (parseFloat(a.num) || 0) - (parseFloat(b.num) || 0));
+  log("MB caps: " + out.length);
+  return out;
+}
+
+// La ficha completa: título, portada, sinopsis (description puede venir
+// como array de párrafos), géneros (tags), autor y LOS OTROS NOMBRES
+// (alternateName): viajan en meta.alts para que AniTrack los pruebe en
+// AniList cuando el título en español no calza (la cuarta tanda).
+async function mbSerie(url) {
+  const id = String(url || "").replace(/^[/]mb[/]t[/]/, "").replace(/[/]$/, "");
+  if (!id) return { meta: { title: "Serie", poster: "", overview: "" },
+    chapters: [], aviso: "Esa serie de MangaBall no tiene una dirección válida." };
+  let j = {};
+  try { j = await mbGet("/api/v1/title/detail/" + encodeURIComponent(id)); }
+  catch (e) {
+    log("MB serie falló (" + id + "): " + ((e && e.message) || e));
+    return { meta: { title: "Serie", poster: "", overview: "" }, chapters: [],
+      aviso: "MangaBall no entregó la ficha de esta serie: inténtalo de nuevo en un rato." };
+  }
+  const d = (j && j.data) || {};
+  let sinop = "";
+  if (Array.isArray(d.description)) sinop = d.description.map((x) => String(x || "")).join("\n\n");
+  else sinop = String(d.description || "");
+  const meta = { title: clean(String(d.name || id)), poster: mbCover(d.image),
+    overview: clean(sinop) };
+  const tags = Array.isArray(d.tags) ? d.tags : [];
+  meta.generos = generosLimpia(tags.map((t) => String((t && t.name) || "")));
+  const autor = Array.isArray(d.author)
+    ? d.author.map((a) => String((a && a.name) || "")).filter(Boolean).join(", ") : "";
+  if (autor) meta.autor = autor;
+  // Los otros nombres (sin repetir el título ni entre sí, tope 4).
+  const alts = [];
+  const an = Array.isArray(d.alternateName) ? d.alternateName : [];
+  for (let i = 0; i < an.length && alts.length < 4; i++) {
+    const v = clean(String(typeof an[i] === "string" ? an[i] : ((an[i] && an[i].name) || "")));
+    if (v && v !== meta.title && alts.indexOf(v) < 0) alts.push(v);
+  }
+  if (alts.length) meta.alts = alts;
+  const caps = await mbCaps(id);
+  log("MB serie: " + caps.length + " capítulos, " + alts.length + " otros nombres");
+  if (!caps.length) {
+    return { meta: meta, chapters: [],
+      aviso: "MangaBall todavía no tiene capítulos en español de esta serie." };
+  }
+  return { meta: meta, chapters: caps.slice(0, TOPE_CAPS_SERIE) };
+}
+
+// Las páginas: chapter-detail sirve las páginas REHOSPEDADAS aunque el
+// capítulo venga de un grupo externo (verificado en vivo con One
+// Piece: 12 páginas en su CDN). CDN visto: chikorita.red-and-blue.net.
+async function mbImages(url) {
+  const id = String(url || "").replace(/^[/]mb[/]c[/]/, "").replace(/[/]$/, "");
+  if (!id) return [];
+  const j = await mbGet("/api/v1/chapter-detail?chapter_id=" + encodeURIComponent(id));
+  const ch = (j && j.data && j.data.chapter) || {};
+  const pages = Array.isArray(ch.pages) ? ch.pages : [];
+  const out = [];
+  const seen = {};
+  for (let i = 0; i < pages.length; i++) {
+    const u = String(pages[i] || "");
+    if (u.indexOf("https://") === 0 && !seen[u]) { seen[u] = 1; out.push(u); }
+  }
+  log("MB lector: " + out.length + " páginas");
+  return out;
 }
 
 // La copia local de una imagen si ya está en el almacén (lectura sin
@@ -3013,6 +3213,10 @@ async function vigiaUnUrl(url) {
     caps = s.chapters;
   } else if (f.id === "manhwaweb") {
     const s = await mwSerie(url);
+    if (s.aviso) return "";
+    caps = s.chapters;
+  } else if (f.id === "mangaball") {
+    const s = await mbSerie(url);
     if (s.aviso) return "";
     caps = s.chapters;
   } else {
@@ -5728,6 +5932,18 @@ async function homeTree() {
     // niega: quedan con su URL normal y su salvapantallas).
     try { await mwPrecarga(populares, 8); await mwPrecarga(recientes, 8); }
     catch (e) { log("MW portadas home: " + ((e && e.message) || e)); }
+  } else if (f.id === "mangaball") {
+    // v0.4.92 — el Inicio de MangaBall con su API: populares (views) y
+    // recientes (lastupdate) del buscador avanzado, en español.
+    titPop = "Populares de MangaBall"; titPopEn = "Popular on MangaBall";
+    titRec = "Recientes de MangaBall"; titRecEn = "Recent on MangaBall";
+    try {
+      const jp = await mbGet(mbRuta("", 1, "views", false));
+      populares = mbCards(jp, 20);
+      const jr = await mbGet(mbRuta("", 1, "lastupdate", false));
+      recientes = mbCards(jr, 20);
+    } catch (e) { log("MB home: " + ((e && e.message) || e)); }
+    masPop = populares.length > 0; masRec = recientes.length > 0;
   } else {
     // v0.4.72 — armadura de la portada: LeerCapitulo y LectorXd pedían
     // su página SIN red de seguridad (esta línea es la que tumbar la
@@ -6747,6 +6963,8 @@ function catalogTree(c) {
     drops = [catDrop("Orden", "catOrder", ORDEN_MO, c.order, "catOrder")];
   } else if (f.id === "mangasin") {
     drops = [catDrop("Orden", "catOrder", ORDEN_MS, c.order, "catOrder")];
+  } else if (f.id === "mangaball") {
+    drops = [catDrop("Orden", "catOrder", ORDEN_MB, c.order, "catOrder")];
   } else if (f.id === "manhwaweb") {
     // v0.4.42 — el catálogo de ManhwaWeb como la página: género (27 de
     // su API), demografía aparte y el orden «Nuevas obras» por defecto.
@@ -6828,6 +7046,9 @@ async function cargarCatalogo(cat, page, conRuta) {
     nuevos = r2.items; mas = r2.mas;
     // v0.4.29 — portadas de la página nueva al almacén.
     try { await mwPrecarga(nuevos, 12); } catch (e) { log("MW portadas catálogo: " + ((e && e.message) || e)); }
+  } else if (f.id === "mangaball") {
+    const r2 = await mbCatalog(cat, page1);
+    nuevos = r2.items; mas = r2.mas;
   } else {
     const html = await getHtmlDe(f, catalogoUrlDe(f, cat, page1));
     // v0.4.42 — LectorXd trae la lista de sus géneros en la misma
@@ -8710,6 +8931,7 @@ async function buscarEnFuente(f, q) {
   if (f.id === "mangaoni") return await moBuscar(q);
   if (f.id === "mangasin") return await msBuscar(q);
   if (f.id === "manhwaweb") return await mwBuscar(q);
+  if (f.id === "mangaball") return await mbBuscar(q);
   // v0.4.25 — LeerCapitulo ya no responde a "/?s=" (devuelve su portada):
   // su buscador vive ahora en la página del catálogo, "/manga/?q=…".
   const ruta = f.id === "lectorxd"
@@ -8735,6 +8957,8 @@ async function mdSearchLax(q) {
 async function buscarVincular(f, q) {
   await null;
   if (f.id === "mangadex") return await mdSearchLax(q);
+  // MangaBall: la vinculación SÍ pide los +18 (adult_mode=all).
+  if (f.id === "mangaball") return await mbBuscar(q, true);
   return await buscarEnFuente(f, q);
 }
 
@@ -10292,6 +10516,8 @@ async function abrirCapitulo(d, idx, conRuta, retomar) {
     images = await imImages(ch.url);
   } else if (fSer.id === "manhwaweb") {
     images = await mwImages(ch.url);
+  } else if (fSer.id === "mangaball") {
+    images = await mbImages(ch.url);
   } else {
     const html = await getHtmlDe(fSer, ch.url);
     images = readerImagesDe(fSer, html);
@@ -10464,6 +10690,13 @@ async function cargarSerie(url, conRuta) {
     try { await mwImgData(meta.poster); } catch (e) { log("MW portada serie: " + ((e && e.message) || e)); }
     meta.totalCaps = s.chapters.length;
     // mwSerie ya entrega los capítulos del 1 al más nuevo.
+    full = s.chapters.slice(0, TOPE_CAPS_SERIE);
+  } else if (f.id === "mangaball") {
+    const s = await mbSerie(url);
+    if (s.aviso) return { toast: s.aviso };
+    meta = s.meta;
+    // Los otros nombres de la ficha viajan a AniTrack con el aviso.
+    meta.totalCaps = s.chapters.length;
     full = s.chapters.slice(0, TOPE_CAPS_SERIE);
   } else {
     const html = await getHtmlDe(f, url);
