@@ -2272,7 +2272,7 @@ async function smSerie(url) {
     if (porNum[num] === undefined) {
       porNum[num] = 1;
       caps.push({ num: num, title: "Capítulo " + String(num).replace(/[.]0$/, ""),
-        url: "/sm/c/" + id + "/" + cid, fecha: String(c.fechaSubida || "") });
+        url: "/sm/c/" + id + "/" + cid });
     }
   }
   caps.sort((a, b) => (parseFloat(a.num) || 0) - (parseFloat(b.num) || 0));
